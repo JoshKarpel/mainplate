@@ -90,6 +90,14 @@ Three things about that connection are decided rather than incidental:
   console wrote: a page nobody can see costs the console no polling, and coming back to the tab
   reconnects, where the first message is the whole current state, so the page is current at once.
   It is also what makes the seen mark below honest.
+- **A whole transcript is rendered on a worker thread**, by the stream, the session page, the fork
+  page and the fragment a message is answered with. Building the tree of a long session is a
+  fraction of a second of pure Python, and on the event loop every other page and stream the console
+  serves waits behind it. One hop per response, taken after every read and covering the whole build
+  and serialization, since the renders are pure once their inputs are in hand. It moves the work
+  rather than removing it: the GIL means a render still competes with the loop for the interpreter,
+  and decoding the checkpoint, which the store does on the loop, is not moved at all. The Markdown
+  converters are per thread for the same reason; see `markup.Converters`.
 
 **The page acknowledges what it has shown, and that is what marks a session as looked at while it is
 open.** The stream deliberately marks nothing. The server learns that a tab has gone dark only when a
@@ -168,8 +176,7 @@ the panel's own hands over what the panel says. Five things there are decided:
   records anything, which is exactly when somebody is lifting a result out of it, so `copied` names
   the button rather than marking it: the panel it is on and where in the panel it sits.
 - **A block that scrolls has no still corner to pin to.** An absolutely positioned child of a scroll
-  container travels with the content, so `.text pre` no longer scrolls and its `code` does, and the
-  raw record on a rule, a bounded box that genuinely scrolls, gets no button at all.
+  container travels with the content, so `.text pre` no longer scrolls and its `code` does.
 
 The panel's own stands in the row of facts just left of the permalink, and the code's is inset
 inward from its block's corner on both axes, which is where a reader looks for each. **The panel
@@ -182,27 +189,49 @@ take it over, so a page rendered with the script absent still has it flush right
 
 ## Renaming a session
 
-The session card in the rail, and the settings step before there is a rail, hold a plain form to
-rename the session. A press redirects to the session page, so its tab title and list row are read
-again from the index. The title belongs only to that index; changing it neither edits the
-checkpoint nor changes what the model has heard. The list's token includes a title revision so a
-rename also redraws the rows on other open pages. The cost is a small index write and one page
-reload for the reader who pressed it.
+**A session's name is a typed row, the same control a plugin's number is**, at the head of the
+session card in the rail and under the settings step before there is a rail. The key is at the left
+in the facts' chrome, the box holding the name is at the right, and `✓` against the box is drawn only
+while it holds something unrecorded. A name is half-written for as long as somebody is writing it,
+so it takes effect on the press and not on a keystroke, which is exactly a number's case; a
+`Rename` button drawn at rest was tried and spent a line of the card on a press nobody had to make.
+
+**The row swaps itself, and everything else that draws the name follows without its help.** The
+answer is the row as it now stands plus a `<title>`, which htmx lifts out of any answer and sets the
+tab from, so the page is never reloaded to show a box that already says the new name. The list's row
+follows on its own connection, since the list's token counts every write to a title; that is also
+what redraws the name on every other open page.
+
+The title belongs only to the index, so a rename changes what the list and the tab say and not a
+word of what the model heard; [the
+philosophy](../philosophy.md#the-session-index-is-one-row-and-it-reaches-rather-than-copies) says why
+that is not a second copy. A fork takes its parent's name as it stands and is renamed on its own from
+then on. **The cost, stated:** the tab follows only because htmx lifts the `<title>`, so with htmx
+itself absent the press lands on the bare row rather than on the page, which is the bargain a plugin's
+card already takes.
 
 ## The session list
 
-**Active sessions precede archived sessions; each group is ordered by when a session was last
+**Active sessions precede archived sessions, and each group is ordered by when a session was last
 written to, not by when it was started**, because the conversation somebody is in is the one they
 are looking for, and a creation date puts a session worked in all week under everything started
-since. The moment is read rather than recorded: the store stamps every checkpoint row as it files
-it, so the newest stamp on a session's inbox is the last thing said to it, and a session nobody has
-written to yet is dated from its making. The row prints that moment, with both moments in its title.
-The cost is that the order is the tree's within each group: a branch worked in this morning sits
-under what it branched from rather than at the top. A branch whose parent has a different archive
-status becomes a root in its own group, and still names its parent on the row. The clock is the
-store's and not the console's, which is why the two are compared and never subtracted, and why a
-test about the order writes the stamps rather than racing them. An answer arriving moves no row,
-since nobody said anything; what says an answer arrived is the word below.
+since. Archived below active because nothing more can be said in an archived session, so however
+recently it was written to it is not the conversation somebody is in. The moment is read rather than
+recorded: the database stamps every checkpoint row as it files it, so the newest stamp on a
+session's inbox is the last thing said to it, and a session nobody has written to yet is dated from
+its making. The row prints the moment it is ordered by, with both moments in its title, since a list
+sorted by one date and labelled with another reads as unsorted. The clock is the database's and not
+the console's, which is why the two are compared and never subtracted, and why a test about the
+order writes the stamps rather than racing them. An answer arriving moves no row, since nobody said
+anything; what says an answer arrived is the word below.
+
+**The index makes the split and the tree keeps it.** `read_sessions` is the one place that puts
+archived below active, and `arrange` nests each branch under its parent over that order without
+sorting again. The cost is that the order is the tree's within each group: a branch worked in this
+morning sits under what it branched from rather than at the top, and siblings are what the moment
+orders. A branch whose parent is in the other group is drawn as a root of its own group, which is
+what forking from the end of an archived session always produces. **The cost, stated:** nothing on
+the list then says which session it came from, since the row names only the turn it left at.
 
 **A row says `unread` when its session has recorded something since anybody looked at it.** "Recorded
 something" is the newest row in the session's checkpoint that is not in its inbox - an answer, a
@@ -415,15 +444,15 @@ on the dashboard answered it. It rides back on the form as a hidden field, so th
 choice and is parsed as it always was, and `change` goes back to the dashboard. On a repository,
 **where to start in it comes first**, above everything else, since it is the question most likely to
 differ from one session to the next; its branches are asked for once the page has arrived, with the
-same fragment a workspace card asks for on the fork page, so the page never waits on the forge.
+`/fragments/branches` swap, so the page never waits on the forge.
 
-**The fork page still asks the workspace as a question**, where a session with no repository may
-attach one. There it is the first group, which is where the rest of this ordering starts.
+**The fork page does not ask the workspace at all**, since a fork works in its parent's files; on a
+repository it leads with the branch the fork carries on instead.
 
 **Ordered widest-first: workspace, network, repository code, endpoint, model, thinking, output
 override**, and then the name. What files a session has is the broadest thing about it and is one
-question rather than two, so it leads; the network follows because it is the other thing deciding
-what the agent can do at all; whether the repository's own code runs is the third question about
+question rather than two, so it leads, answered before the picker on both pages; the network follows
+because it is the other thing deciding what the agent can do at all; whether the repository's own code runs is the third question about
 that same subject, so it sits with them and is drawn only where a repository is picked; the endpoint
 and the model are adjacent because they are a pair, the list being whatever the endpoint above it
 offers; the thinking level and the output override are settings *on* the model, so they sit under
@@ -431,7 +460,7 @@ it, the override last because it is the one almost nobody touches. The name come
 because it is the one question here that decides nothing about how the session runs.
 
 **There is no message box on this page, and its button says `Create session`.** A repository's
-plugins cannot even be named until its worktree is planted, which a pass does, and none of them may
+plugins cannot even be named until its checkout is planted, which a pass does, and none of them may
 be run until somebody has seen the list. So this page decides what a session *is*, the settings step
 decides what it loads, and the box is on the session's own page once there is a conversation to type
 into. See [the settings step](plugins.md#starting-a-session-takes-four-steps).
@@ -634,6 +663,14 @@ touched. The fork page is the one box that takes the focus on any screen, since 
 there to edit a message. Returning the cursor after a send, below, is the same split: a pointer gets
 it back, a phone does not.
 
+What the script asks is `(hover: none)`, which is the browser saying its primary pointer cannot
+hover, so no width is kept in step with the stylesheet's. The cost, stated: focus on arrival is the
+script's, so with the file absent no screen gets one, and the question is about the pointer rather
+than the keyboard. A tablet with a keyboard attached still reports its touch screen as the primary
+pointer, so it is treated as a phone and its reader touches the box once before typing. A laptop
+with a touch screen reports its trackpad, so it is treated as a pointer and gets the focus. Both are
+what the media query is specified to answer rather than anything measured on either device.
+
 **And the cursor goes back into the box once the message has gone**, whichever way it was sent: the
 button takes the focus on a click, and `hx-disable` blurs the box itself while the post is in
 flight, so without this the cursor is on nothing at all by the time the answer swaps in. Not on a
@@ -681,11 +718,10 @@ any other class), and the script draws it as the picture: an image where the cod
 it was written or what the mermaid library rendered from the diagram in the reader's theme, with a
 button to the left of `copy` that puts the text back and takes it away again. The copy button stays
 in its corner, where it is on every other block, and the other one is what makes room. **An image,
-and never inline
-markup**, because the text is a model's: SVG loaded through `<img>` runs no script, follows no link
-and fetches nothing, which is the browser's own rule rather than a sanitiser's, and it holds for the
-library's output as much as for the hand-written kind, so the library's `strict` level is a second
-guard rather than the one this rests on. The cost, stated: nothing in a drawing can be selected or
+and never inline markup**, because the text is a model's: SVG loaded through `<img>` runs no script,
+follows no link and fetches nothing, which is the browser's own rule rather than a sanitiser's, and
+it holds for the library's output as much as for the hand-written kind, so the library's `strict`
+level is a second guard rather than the one this rests on. The cost, stated: nothing in a drawing can be selected or
 found by the search, and it is set in the browser's faces rather than the page's. Which blocks are
 shown as text is a value the script holds and reapplies after every swap, like the folds, since a
 morph would otherwise put a diagram back in front of the code somebody had just asked for. The
@@ -744,7 +780,7 @@ than migrated, because it is one press and the alternative is code that reads a 
 console no longer has.
 
 **A panel says what is in it; a rule says what is true of the request or the turn around it.** Which
-turn it is, where the session may be forked from, the worktree a request was made against, and what
+turn it is, where the session may be forked from, the checkout a request was made against, and what
 it spent all belong to the exchange rather than to any one run of blocks, and hung on a panel they
 had to be hung on a chosen one. Usage settles it: it belongs to a `ModelResponse`, and one response
 becomes as many panels as it has kinds of part, so there is no attribution rule from a response to a
@@ -755,19 +791,13 @@ change within one, so nothing keeps a second list of where a turn or a request b
 under the last panel of the turn before it, so a bare row of figures there reads as a footer
 summarising what is *above* it, which is the opposite of what it says. The `#1` against the `#1.0`
 on the panels below settles the direction, and doubles as the permalink to the boundary the fork
-acts on. A rule inside a turn names its request the same way, as `r1.1`, which is also what opens
-the record: the whole address rather than the index within the turn, for `Panel.address`'s reason one
+acts on. A rule inside a turn names its request the same way, as `r1.1`: the whole address rather
+than the index within the turn, for `Panel.address`'s reason one
 level along, since a rule inside a turn draws no `#N` and a bare `r1` said which request without
 saying of what. The `r` is what keeps it from being read as a panel, which numbers a different axis:
 `#3.1` is turn 3's second *panel* and `r3.1` is its second *request*.
 
-### The record hangs off a request, not a panel
-
-`Source`, `sourced_at` and the per-panel `recorded` disclosure are gone. A panel is a run of blocks
-of one kind and a request is a round trip, so a panel's record was a *slice* of a stored value
-reached by indices one walk had to hand another. A request has a key of its own, so `requested_at`
-is a lookup, and it answers while the turn is still running: a step is written once and never
-rewritten, where `turn:{n}:messages` does not exist until the turn ends.
+### A rule stands at every request
 
 **A rule per request, with the turn rule being the first one.** That adds no concept: every rule the
 transcript has ever drawn already stood at a request boundary, because a turn opens with its first
@@ -781,12 +811,15 @@ and are now two. That is the point rather than a regression, because a merged pa
 between requests for a rule to stand in, and it is also the more accurate reading.
 
 A turn's first rule carries the turn's own facts as well, which turn it is, where it may be forked
-from, the tree it started on, and what the **whole turn** spent, and the later ones carry only their
-own request's. The tree there comes off the turn's first panel rather than out of request 0, which
-is the same key read a request earlier: `turn:{n}:tree:0` is written *before* the model is asked, so
-a turn whose first answer has not landed yet still says what it started on. Where the figures on one
-rule are a turn's and on the next a request's, the title says which; only `rule--turn` is what the
-dock's turn arrows step, or a turn with four round trips in it would give that column four stops.
+from, and what the **whole turn** spent, and the later ones carry only their own request's. Where
+the figures on one rule are a turn's and on the next a request's, the title says which; only
+`rule--turn` is what the dock's turn arrows step, or a turn with four round trips in it would give
+that column four stops.
+
+**No rule prints a snapshot hash**, although `turn:{n}:tree:{i}` is recorded at exactly the boundary
+each rule stands on. A snapshot is how this console puts a session's files back for a fork and
+nothing a reader handles: the checkout's own git names none of them, so the hash was a detail of the
+mechanism drawn as a fact about the work, and the line is narrower without it.
 
 ## Every panel folds, from its own row
 
@@ -836,8 +869,7 @@ but the original beside the current.
 **`mainplate.js` records every toggle as the reader's decision, and what makes that true is that
 the server never changes its mind about a fold.** Where a fold starts is decided per kind and never
 per render: a call is shut whether or not it has come back, a command is open, a system prompt is
-away. So a morph delivering a result adds no `open` and removes none the
-reader did not set, and the
+away. So a morph delivering a result adds no `open` and removes none the reader did not set, and the
 only toggles left to record are presses. The script cannot tell a morph's toggle from a reader's,
 and does not try; a render whose answer moved between two states of the same fold would be recorded
 as a decision nobody made. That is exactly what drawing a call *open while it was out* did: the morph
@@ -859,6 +891,9 @@ to the repository, and that is [the batch's diff](#the-batchs-diff) below the pa
 own diff or new file, are the fine print a reader opens a call to check. The same for every tool and
 every state, for the reason above: a call drawn shut while it was out and open once it landed would
 be a default that moved, and the morph delivering it would be recorded as the reader opening it.
+The cost, stated: a session with no checkout has no snapshots and so no batch's diff, and there an
+`edit` or a `create` is drawn shut with nothing standing in for it, so what the model changed is a
+press per call away rather than on the page.
 
 **A turn out on a tool call draws no waiting panel at all.** A call with no result is already drawn
 working, on its own panel, and it is the model's call, so a second panel of dots under it says the
@@ -939,16 +974,16 @@ quotes escaped. What a reader opening a call wants is what it did, in the shape 
 - **`bash` is its command, coloured as shell, and its output as it came back.** The command stands
   under `called with` with no name in front of it, since a coloured shell line says what it is by
   its shape and the fold's own summary is already that line; `seconds` keeps its name, as a bare
-  number says nothing about which argument it was. The output still
-  opens with the command echoed, because that is what the model was sent and the return is shown as
-  the model saw it; the coloured line above it is the reader's, the echo below is the model's.
+  number says nothing about which argument it was. The output still opens with the command echoed,
+  because that is what the model was sent and the return is shown as the model saw it; the coloured
+  line above it is the reader's, the echo below is the model's.
 - **`edit` is the diff.** The tool records a unified diff of the change beside its reply, as
   [metadata the model is never sent](tools.md#every-tool-that-writes-hands-back-anchors), and the
   body is that alone: the operations are the diff said in anchors and the reply is its right-hand
   side said in anchors again, so either beside it would be the same change a third time. **The cost,
   stated:** the anchors an edit was addressed by, and the ones its reply handed back, are not on the
-  panel, and a reader working out why the model's *next* edit was refused wants exactly those. They
-  are in the raw record on the request. An edit with no diff recorded - one that was refused, or one
+  page, and a reader working out why the model's *next* edit was refused wants exactly those. They
+  are in the checkpoint and nowhere the console draws. An edit with no diff recorded - one that was refused, or one
   recorded before the diff existed - shows its operations and its reply as every other call does.
 - **`read`, `create` and `grep` are lines of a file, with the anchors left out**, and a read or a
   create is coloured by the grammar its path names, through the same Pygments tokens a fence gets
@@ -967,9 +1002,8 @@ to in an `edit`, and it says nothing to a person reading the file. Drawn faint t
 column of four letters a reader learned to look past, so they are left out, and what is left to
 tell the file's lines from the tool's own - the header saying which file and which lines, the note
 that an anchor moved - is the tone a `data-said` line is set in. **The cost, stated:** a reader
-working out which line the model meant by `qwrt`, or why the model's next edit was refused, has to
-open the raw record on the request, and the page's own search finds no anchor because none is on
-the page.
+working out which line the model meant by `qwrt`, or why the model's next edit was refused, has
+nothing on the page to work from, and the page's own search finds no anchor because none is there.
 
 **A diff's line numbers are painted by the stylesheet from an attribute, and are not in the text.**
 `data-gutter` carries them and `::before` draws them, which is what makes the copy button on the
@@ -1000,7 +1034,7 @@ than derived](tools.md#the-batchs-diff). It is drawn only where the diff has som
 batch that merely read spends no row, and it is where an edit's own diff moved *to*: the per-edit
 diff is still a press away inside the collapsed call, where the anchors and the fine-grained hunks
 live, but what a reader watching a turn sees by default is the whole change, every tool and every
-file at once.
+file at once, unless it runs past `LONGEST_OPEN_DIFF` lines, below.
 
 **Each file in the diff is a header line naming its path, then its hunks**, the same numbered lines
 an edit's diff draws, one gutter width across the whole block so the columns line up. The path is a
@@ -1017,18 +1051,20 @@ opening it.
 
 **The calls above it are one box, a row each**, because they are one thing: the calls the model made
 in one response, run at once, rather than separate cards that happen to be stacked. The stylesheet
-draws each run of calls that way from the blocks as they stand, so a call still opens in its own row. **It is drawn open unless it runs past `LONGEST_OPEN_DIFF` lines**, because a batch that
-merged a branch or ran a formatter over the tree changes thousands of lines nobody asked to read, and
-drawn open that is the whole transcript spent on them. That is not a default that moves: the diff is
+draws each run of calls that way from the blocks as they stand, so a call still opens in its own row.
+
+**The batch's diff is drawn open unless it runs past `LONGEST_OPEN_DIFF` lines**, because a batch
+that merged a branch or ran a formatter over the tree changes thousands of lines nobody asked to
+read, and drawn open that is the whole transcript spent on them. That is not a default that moves: the diff is
 recorded once, whole, so it arrives at the size it will always be. **The cost, stated:** a long diff
 that *is* the point of the turn is one press further away than a short one, and where the line falls
 is a judgement, which is why it is one named number.
 
 ### A line that does not fit
 
-**A block of lines scrolls sideways and never wraps.** A file, a diff and a shell command are text where a
-line is a line: wrapped, a diff's row breaks in two under its own gutter and an indented block loses
-the shape a reader reads it by. So `pre.lines` scrolls, one level in on its `code` for the reason
+**A block of lines scrolls sideways and never wraps.** A file, a diff and a shell command are text
+where a line is a line: wrapped, a diff's row breaks in two under its own gutter and an indented
+block loses the shape a reader reads it by. So `pre.lines` scrolls, one level in on its `code` for the reason
 [a fence does](#the-copy-button), and the `code` is a one-column grid whose column is the longest
 line's width, stretched to the block's where every line is shorter. That is what lets a changed
 line's wash run to the end of the longest line: a column of `minmax(100%, max-content)` reads as the
@@ -1036,22 +1072,13 @@ same thing and never grows, since a grid of definite width has no free space to 
 What a tool said in prose, and a command's output, still wrap, since a log line cut off at the
 block's edge hides the half of it that says what went wrong.
 
-**A block whose lines do not fit takes a `focus` button that opens it on its own, as wide as the
-window.** The
-reading measure is 46rem, and a diff's gutter plus a line of real code outgrows it. The room beside
-the measure would be the obvious place to widen into, and at the widths a laptop has there is none:
-the transcript fills its column between the list and the rail up to about 1400px, and it is the
-scroll container, so a block let wider than it is clipped. So the press opens a modal `<dialog>`
-over everything, holding a copy of the block as it was when pressed, and Escape, a press on the
-backdrop, or its own `close` put it away. A copy rather than the block moved, because the block is
-the server's markup and a morph would go looking for it; the copy is sound because a file, a diff or
-a fence does not change under a later render. **The cost, stated:** the dialog is modal, so the
-conversation cannot be scrolled beside it, and it carries no copy button of its own.
-
-The button is seated where the block overflows *now*, which is a measurement rather than anything
-the markup says, so it is taken again after every swap, when a fold toggles, when the column
-changes width, and once the face has loaded. A phone is offered none, since the window there is barely
-wider than the block already is.
+**A reader who wants a wide block wider widens the conversation**, by
+[dragging its edge](assets.md#putting-a-column-away-and-how-wide-the-conversation-is-read), rather
+than opening the block on its own. A per-block control is the tempting alternative, and what it
+costs is a measurement: whether a block overflows is layout, not markup, so it has to be taken after
+every swap, and most blocks sit inside a shut call whose contents the browser never lays out. Asking
+each one its `scrollWidth` lays every folded call out anyway, which on a long session was a second
+of layout on load and again on every message a running turn sent.
 
 ## The line a shut panel stands for
 
@@ -1216,43 +1243,3 @@ transcript rather than the first panel in it: a turn rule carries that turn's ow
 link, and where the stretch has instructions there is a system prompt panel between the rule and the
 message, so landing on the panel put the reader below both with nothing saying so. The leap to the
 end is still the last panel, since nothing is drawn under one.
-
-## Opening the raw record
-
-The raw record hangs off a **model request** rather than a panel, on the rule at that request's own
-boundary. Two things about how it is fetched are decided rather than incidental:
-
-- **On demand and `hx-preserve`d.** A running turn re-renders the transcript repeatedly, so the raw
-  record of every request is not something to carry in it; and because the server renders the
-  disclosure closed, a morph takes the `open` attribute back off unless the element is preserved.
-  htmx reads `hx-preserve` off the *incoming* markup, so taking it off the live node proves nothing.
-- **`once` is safe here in a way it never was under a panel.** A step's key is written once and
-  never rewritten, so a request's record is settled the moment it exists, where a panel's record
-  came out of `turn:{n}:messages`, which does not exist until the turn ends. So a tag can be opened
-  mid-turn and the panel disclosure could not.
-
-**Opened, it grows the rule downward rather than lying over the conversation.** A record read
-against the reply it came from is worth more than a page that holds still, and an overlay is the one
-shape where the two cannot be looked at together. It takes a line of the rule to itself, since the
-rule wraps and the record asks for the whole of one, which is what a phone decides: sharing the line
-leaves the record a column six characters wide, and pinning the figures so it does not is a row that
-runs off the side of the screen.
-
-**[A control that toggles may not move.](../philosophy.md#controls)** The record tag is where that
-was learned: what wrapped onto the second line was the whole `<details>`, so `r0` set off across the
-rule on the way to opening it.
-
-The shape that gets this right is the general one, so reach for it before inventing another. What
-wraps must be the *content* and never the summary above it, which means the summary and the content
-have to be separate items of the row that wraps. `display: contents` on the `<details>` is what does
-that: the tag makes no box of its own, so the summary stays an item in its own place and the content
-becomes the item that takes a line. Both candidates for that item are told the same thing, because
-`::details-content` is the box a browser wraps a disclosure's content in and the content itself is
-the item where there is no such box, and the closed state has to hide *both* or an empty item leaves
-every shut rule a row gap taller.
-
-`TestOpeningTheRecordBehindARequest` is what fails when this breaks, and it has to be a browser:
-both states are correct markup and each screenshot is right on its own, so what is measured is one
-element's box across the press. Within its rule rather than within the window, because the page
-follows the end and a record opening at the bottom scrolls the transcript under it, which is the
-console doing what it is asked, and would otherwise report as the marker having moved.

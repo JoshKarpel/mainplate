@@ -12,7 +12,7 @@ stop a pass.
 
 That makes durability ordinary control flow rather than a capability wrapped around somebody
 else's loop. `Agent.before_request` spends the allowance before recording the inbox cursor and
-plugin injections, `Stepping.request` snapshots the worktree and records the model response, and
+plugin injections, `Stepping.request` snapshots the checkout and records the model response, and
 `Stepping.call` records each tool return under the call's own id. All three receive the `Stepping`
 value explicitly from `conversing`; no ambient checkpoint or capability ordering is involved.
 
@@ -347,7 +347,7 @@ turn of *n* requests replays O(n²) steps across its passes. No provider or tool
 what is repeated is the loop's own work between steps, which is this console's own.
 
 **`just replay` is what measures it**, and it is the answer to any argument about this section: it
-drives one turn twice over a stand-in provider and a real worktree, unbounded and then a pass per
+drives one turn twice over a stand-in provider and a real checkout, unbounded and then a pass per
 request, and prints the difference, the per-pass series and a profile. It reaches no provider, so
 running it before and after a change to `loop.py` or `durability.py` costs nothing.
 

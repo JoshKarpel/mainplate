@@ -172,11 +172,11 @@ def places(workspaces: Workspaces, tmp_path: Path) -> Places:
 
 
 async def working(service: Service, workspaces: Workspaces, places: Places) -> tuple[Service, str]:
-    """A session on the fixture repository with its worktree planted and something in every directory."""
+    """A session on the fixture repository with its checkout planted and something in every directory."""
     planting = replace(service, workspaces=workspaces)
     session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
     await workspaces.plant(session.id, FIXTURE)
-    (workspaces.at(session.id) / "src" / "made.txt").write_text("made in the worktree\n")
+    (workspaces.at(session.id) / "src" / "made.txt").write_text("made in the checkout\n")
     scratch = workspaces.scratch_at(session.id)
     scratch.mkdir(parents=True)
     (scratch / "fetched.bin").write_bytes(b"f" * 30_000)
@@ -195,10 +195,10 @@ class TestTakingAnArchivedSessionOffTheDisk:
         await reconciled(planting, places, holder, now=lambda: WHEN)
 
         assert not any(place.exists() for place in places.of(session, FIXTURE))
-        assert not workspaces.worktrees(FIXTURE).planted(session)
+        assert not workspaces.checkouts(FIXTURE).planted(session)
         assert holder.current[session] == Footprint(allocated=0, measured_at=WHEN)
 
-    async def test_the_files_it_ended_with_are_captured_before_the_worktree_goes(
+    async def test_the_files_it_ended_with_are_captured_before_the_checkout_goes(
         self, service: Service, workspaces: Workspaces, places: Places
     ) -> None:
         """What a fork from the end of an archived session plants at, and the reason the tree is kept."""

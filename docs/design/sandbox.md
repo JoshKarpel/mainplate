@@ -7,7 +7,7 @@ isolation axes a session picks once and is bound to for life.
 
 `sandbox.py` is the boundary `bash` runs behind, and it is a **mount namespace** rather than a list
 of commands that are allowed. A denylist over commands loses on contact with reality: `git stash`
-reads as safe and reverts every tracked edit in the worktree, `git config` can set `core.hooksPath`,
+reads as safe and reverts every tracked edit in the checkout, `git config` can set `core.hooksPath`,
 and a release next year adds something nobody has classified. A mount says what a process can
 *reach*, so it is already right about commands nobody has thought of, including whatever a
 repository's own build script runs, and it is why every git in here may do whatever git does:
@@ -22,7 +22,7 @@ only under crash-resume. A fresh namespace costs a couple of milliseconds agains
 hundreds, and leaves no process to supervise, reap, or reconstruct. The tool's own description says
 nothing persists, and `test_sandbox.py` asserts it.
 
-Five things about the policy are decided rather than incidental:
+Six things about the policy are decided rather than incidental:
 
 - **The checkout is bound read-write whole, `.git` included.** It is a repository of the session's
   own, so `add`, `commit`, `merge`, `rebase`, `stash` and `fetch` do what they say, against this
@@ -35,16 +35,21 @@ Five things about the policy are decided rather than incidental:
   `alternates`, and `origin` is the store, so without the bind there is no git in the sandbox at all,
   and with it `git fetch` brings the repository's refreshed branches with no network. Read-only is
   what keeps one session's git from reaching another's; what it costs is that every session on a
-  repository can read every tree any of them snapshotted. Nothing can push from in here, since the
-  one remote there is cannot be written.
+  repository can read every tree any of them snapshotted. Nothing can push to `origin` from in here,
+  since the store cannot be written, and with the network off nothing can push at all. With it on,
+  on exe.dev, a command can push to the repository itself, which [what runs, and as
+  whom](security.md#on-exedev-the-network-is-the-credential) is about.
+- **Both come from `checkout_places`**, which `Sandbox.around` and `Checkout.confined` both call, so
+  a session's commands and the git this console runs to snapshot them see one repository bound one
+  way. Two copies of two binds would agree until one of them changed.
 - **Both are bound at their own absolute paths**, never remapped to a tidy `/workspace`. That is
   forced by `alternates` naming the store by its absolute path. The alternative is a
   `GIT_ALTERNATE_OBJECT_DIRECTORIES` that every consumer has to carry and any subprocess is free to
   unset, bought for a shorter path.
 - **The session binds come after `--tmpfs /tmp`.** bwrap applies arguments in order, so a workspace
   root that happens to live under `/tmp` is covered by the tmpfs and disappears if the binds come
-  first, leaving a command that cannot change directory into its own worktree. That is not
-  hypothetical: it is where every test in the suite puts a worktree.
+  first, leaving a command that cannot change directory into its own checkout. That is not
+  hypothetical: it is where every test in the suite puts a checkout.
 - **`--unshare-pid` is teardown as much as isolation.** Killing the namespace's init reaps whatever
   the command left running, which is what makes the timeout and a cancelled turn leave no orphan
   build behind.
@@ -52,7 +57,7 @@ Five things about the policy are decided rather than incidental:
 ## The scratch directory
 
 **A session gets one, and nothing captures it on purpose.** `workspaces/scratch/<session>` is bound
-read-write beside the worktree, so a build cache, a downloaded artifact or a note to itself survives
+read-write beside the checkout, so a build cache, a downloaded artifact or a note to itself survives
 from one call to the next and from one turn to the next. That it is *not* snapshotted is the same
 decision as snapshots honouring a `.gitignore`, arrived at one level out: going back to before a
 call should not uninstall what was installed since. The cost is the one an ignored path already
@@ -60,21 +65,27 @@ carries, that what is in there goes stale while the source around it moves back.
 
 **A session with no repository gets one too, and it is the whole of what its commands reach.**
 `NOTHING` is nothing *of the machine*: the scratch is bound alone, a command starts in it, and a
-relative path to the file tools means it, since there is no worktree for one to mean instead. That
-is `InAScratch` beside `InAWorktree`, and the same one bind is what `Sandbox.within` makes. It is
+relative path to the file tools means it, since there is no checkout for one to mean instead. That
+is `InAScratch` beside `InACheckout`, and the same one bind is what `Sandbox.within` makes. It is
 what lets a conversation that is not about a repository run a script or keep a plan across turns
-without being handed the whole machine to do it, which was the only other answer.
+without being handed the whole machine to do it, which is the only other arm that has a shell.
+
+The cost, stated, is three things the arm that reaches nothing takes on by having one. It runs
+commands a model wrote, where a session with no shell would run none. Its network switch means
+something: with it on, that shell can dial out, and on exe.dev that is [this console's authority
+over the repositories](security.md#on-exedev-the-network-is-the-credential). And every session with
+no repository keeps a directory on the disk, counted on its row, until it is archived.
 
 **It is `$HOME` for a session's commands**, rather than the tmpfs, because that is where every tool
 that fetches keeps what it fetched: a toolchain [a repository's plugin
 installs](plugins.md#getting-the-repository-ready-is-a-plugin-too) lands under `$HOME`, and a shell
-whose `$HOME` is anywhere else cannot find its own tools. `home_in` is
-where that is decided, and it retires the earlier reading that what a shell leaves in a home
-directory is scratch by accident - it is scratch by intent now, and the cost is that a stray dotfile
-survives the call. A session over the whole machine has no scratch and keeps the tmpfs.
+whose `$HOME` is anywhere else cannot find its own tools. `home_in` is where that is decided, and it
+makes what a shell leaves in a home directory scratch by intent rather than by accident; the cost is
+that a stray dotfile survives the call. A session over the whole machine has no scratch and keeps
+the tmpfs.
 
-Outside the worktree rather than under it, and that is not tidiness. `list` passes `--others`, so a
-directory inside the worktree is in every listing and every `git status` until something excludes
+Outside the checkout rather than under it, and that is not tidiness. `list` passes `--others`, so a
+directory inside the checkout is in every listing and every `git status` until something excludes
 it, and the only place to write that exclusion is the checkout's own `.git/info/exclude`, which
 anything the session runs could take out again. `test_sandbox.py` pins this by asserting that
 nothing in the scratch reaches either.
@@ -82,7 +93,7 @@ nothing in the scratch reaches either.
 It is made on the first command rather than when the session is planted, because bwrap will not bind
 a source that does not exist and the tool is the one thing that knows a command is about to run. A
 fork gets its own, empty: copying it would be copying mutable state, and sharing it would be two
-sessions writing one directory. That matches the worktree, which a fork plants fresh at a recorded
+sessions writing one directory. That matches the checkout, which a fork plants fresh at a recorded
 tree and therefore without any ignored file either.
 
 **`read`, `edit` and `create` reach it; `list` and `grep` do not.** The point of extending them at all
@@ -91,7 +102,7 @@ a line editor; a build cache never does.
 
 It is also most of [what a session takes on disk](workspace.md#what-a-session-takes-on-disk), which
 is the figure on the session's row: a toolchain fetched in here is tens of thousands of files, where
-a worktree is a checkout.
+a checkout is one copy of the repository's files.
 
 **A plugin gets a different one, and `$HOME` points at it.** `workspaces/plugins/<session>/<tier>/
 <name>` is bound in place of the session's for a repository's plugin, because the session's is a
@@ -112,7 +123,7 @@ Where the file tools may reach. What they *are* is [how a model reaches a file](
 is what decides: a `GitTracked` is files a conversation is about and is the only kind git can be
 asked about, so it owns `entries` and answers `list` and `grep`; a `Scratch` answers no question git
 answers, which is why it exists, so it carries no way to enumerate itself and both tools refuse it
-before asking git. Adding a kind is one arm, and adding a *second worktree* is one more element, where
+before asking git. Adding a kind is one arm, and adding a *second checkout* is one more element, where
 a `root` plus an `also` would have hardcoded exactly one.
 
 `resolved` returns a `Located`, which is the resolved path **and** the root it landed in. Both
@@ -130,7 +141,7 @@ where a `Refused` tells the model to reach for `bash` instead.
 **Anywhere else is reached by naming the root, not by writing its path out.** `read`, `edit` and
 `create` take a `root`, which says which place a *relative* path joins and nothing else: an absolute
 path still lands where it points, so naming one cannot redirect a path that already says where it
-goes. A worktree sits under 32 hex characters of session id, and a model reproducing those from
+goes. A checkout sits under 32 hex characters of session id, and a model reproducing those from
 memory eventually reproduces them wrong, which is a refusal it then has to recover from at the cost
 of a round trip. Four things there are decided:
 
@@ -153,8 +164,7 @@ of a round trip. Four things there are decided:
 beside `name`. A `GitTracked` seals `.git` and everything under it, because that is git's own state
 and a line edit of a ref or a config line would bypass git's locking and its formats; a `Scratch` and
 a `System` seal nothing, having no git of their own. `Files.resolved` refuses a sealed path after
-it has established the path is in reach, so being inside a root is necessary and no longer
-sufficient.
+it has established the path is in reach, so being inside a root is necessary and not sufficient.
 
 It is about correctness rather than reach: `bash` runs git against the same directory, confined like
 every other command, so the same bytes are one `git config` away. It is a root's *top level* only: a
@@ -175,14 +185,16 @@ directory exist `read` would name a path nothing ever creates.
 so a command can start a server and curl it within one call, which covers integration tests. What it
 cannot do is make that port visible to a person, and that is deliberate: a dev server somebody
 watches is the harness's to run, outside the sandbox, not something an agent tool call should leave
-behind. `Venue.CONNECTED` is the arm for that and nothing uses it yet.
+behind. `Venue.CONNECTED`, the arm a session picks with the network on, is the whole network for a
+command, and a server one starts still ends with the call.
 
-Network is **off**, and off rather than allowlisted. An allowlist containing github.com contains
-gists, one containing a package registry contains a package anybody can publish, and a DNS query to
-`<secret>.attacker.example` leaves through any resolver that is allowed. It would buy a MITM proxy,
-a CA inside the sandbox, and every tool that pins certificates breaking, for a defence against the
-malicious-repository case and almost none against a determined injection. Landlock cannot help here
-either: its network rules key on a *port*, never an address, and do not cover UDP at all.
+Network is **off** unless a session picks it, and off or on rather than allowlisted. An allowlist
+containing github.com contains gists, one containing a package registry contains a package anybody
+can publish, and a DNS query to `<secret>.attacker.example` leaves through any resolver that is
+allowed. It would buy a MITM proxy, a CA inside the sandbox, and every tool that pins certificates
+breaking, for a defence against the malicious-repository case and almost none against a determined
+injection. Landlock cannot help here either: its network rules key on a *port*, never an address,
+and do not cover UDP at all.
 
 `--clearenv` is what keeps the parent's environment out, and the credential is out of the sandbox
 structurally rather than carefully: the agent loop that holds it stays in the parent and only the
@@ -209,25 +221,24 @@ threaded through four signatures.
 network switch is `--unshare-net` on the same namespace, the credential is kept out by `--clearenv`
 and teardown is `--unshare-pid`, so an arm that dropped the sandbox would silently take all three
 with it and make "the whole machine with no network" unrepresentable. `Sandbox.everywhere` binds `/`
-read-write instead of a worktree and changes nothing else, which is why there is one `argv` rather
+read-write instead of a checkout and changes nothing else, which is why there is one `argv` rather
 than two.
 
-**The repository and the filesystem level are one question, asked once.** On the dashboard it is
-the card you press **New session** on; on the fork page `workspace_cards` is the group: every
-repository a forge reaches, plus `only scratch` and `whole machine`. Picking one
-settles `Choice.repository` and `isolation.filesystem` together, so they cannot disagree at the
-source. `posted_workspace` is where one posted value becomes the two recorded ones, told apart
+**The repository and the filesystem level are one question, asked once.** It is the card you press
+**New session** on, on the dashboard: every repository a forge reaches, plus `only scratch` and
+`whole machine`. Picking one settles `Choice.repository` and `isolation.filesystem` together, so
+they cannot disagree at the source, and a fork inherits both. `posted_workspace` is where one posted value becomes the two recorded ones, told apart
 without a prefix because a repository's id is `forge:key` and so always holds a colon.
 
 That is a correction rather than the first design, and the reason is worth keeping. They were two
-groups, with the worktree level drawn greyed until a repository was picked. Keeping the two in step
+groups, with the checkout level drawn greyed until a repository was picked. Keeping the two in step
 then wanted a swap to refresh the greying, a fix so the narrowing box would not check a disabled
 card, and a card in the completion list that could not be chosen: three pieces of machinery for one
 answer stored in two places. It is the worked example behind [the rule about controls that need
 keeping in step](../philosophy.md#controls).
 
 **An enum whose members are recorded cannot be renamed freely, because the *value* is what is in the
-store.** `Filesystem.WORKTREE` was `WORKSPACE`, and renaming the member changed the recorded string
+database.** `Filesystem.CHECKOUT` was `WORKSPACE`, and renaming the member changed the recorded string
 too, so every session written until then became a page that answered 500. Nothing had been released,
 so those records were only ever in a development database and the rename stands as it is.
 
@@ -238,12 +249,12 @@ field is a different thing and stays: that is ordinary parsing of an optional, t
 read, and it is what lets every session written before `isolation` existed read back as what it
 already had.
 
-`Isolation.settled` survives the merge and is still applied by `Service.start` and `Service.fork`,
-because a fork's repository is *inherited* rather than posted and a form is not the only way in.
-What it no longer has to do is correct the new-session page, which can no longer express a contradiction.
+`Isolation.settled` is applied by `Service.start` and `Service.fork` all the same, because a fork's
+repository is *inherited* rather than posted and a form is not the only way in. What it does not
+have to do is correct the new-session page, which cannot express a contradiction.
 
 Whether the workspace can be chosen at all is the caller's answer, given to `picker` as `None`
-rather than as an empty `Reachable`. The difference is load-bearing now that the group holds more
+rather than as an empty `Reachable`. The difference is load-bearing because the group holds more
 than repositories: empty means no forge reaches anything, which still leaves two answers worth
 offering, where `None` means a fork already works somewhere and a control would be a lie about what
 the page does.
@@ -252,7 +263,7 @@ The network sits under the workspace and above the endpoint, following the picke
 breadth: what a session's files are decides what it can touch, whether it can dial out decides what
 it can do with them, and the endpoint and model only decide who answers.
 
-**A session on `EVERYTHING` can read `config.yaml` and the store**, which is to say the credentials
+**A session on `EVERYTHING` can read `config.yaml` and the database**, which is to say the credentials
 and every other conversation. That is what choosing it means rather than an oversight, and the card
 says so.
 
@@ -267,7 +278,7 @@ own](composer.md#push) rather than something typed.
 
 The binds above say what a *command* reaches. The parent also has git to run against a session's
 files, to snapshot them and to answer `list` and `grep`, and the checkout's configuration is the
-session's to write. So the parent runs none of it itself: `Worktree.git` runs every one of those
+session's to write. So the parent runs none of it itself: `Checkout.git` runs every one of those
 behind this same namespace, and what comes back to the parent is a listing or a bundle, read as
 data. The parent runs git only against the store, which nothing in here can write. [What runs, and
 as whom](security.md) is the whole of it, and it is the page to read before adding anything to the

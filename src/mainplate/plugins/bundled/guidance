@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
-# What a session is told, and the nested guidance handed over as the model reaches into a directory.
+# What a session is told, and the guidance handed over as the model reaches for the files it covers.
 #
 # Two scopes, and the difference between them is whose voice it is rather than where the file sits.
 # **Console guidance** is the operator's own, in `<config home>/mainplate/guidance/`, and it is true
 # of every session this console answers. **Repository guidance** is the project's own `AGENTS.md`,
-# read out of the worktree the session works in, and it is true of one repository.
+# read out of the checkout the session works in, and it is true of one repository.
+#
+# Each scope has a part that is always said and a part held back until it applies. The operator's
+# files with no `paths:` and the repository's root `AGENTS.md` are in the instructions from the
+# first request; an operator's file naming its globs, and an `AGENTS.md` further down the tree, are
+# listed there by name and handed over whole the first time a file tool names a file they cover.
+#
+# **Nothing read out of a checkout follows a link.** This plugin runs as the operator, outside every
+# sandbox, and everything in a checkout, its `.git` included, is the session's to write; see
+# `beneath`.
 #
 # **The repository wins where the two disagree**, so it is composed last. That is not a claim about
 # trust: it is that a repository is right about itself, which is the local-conventions rule said one
@@ -20,16 +29,20 @@
 #
 # Nothing here imports mainplate. A bundled plugin runs on exactly the path a third-party plugin runs
 # on, so what ships is a worked example rather than a privileged one - and the price is stated: the
-# frontmatter reader below is a `description:` line rather than a YAML parser, because a plugin with
-# no dependencies is worth more here than the general case of a field nothing else reads.
+# frontmatter readers below understand a `description:` line and the two shapes of a `paths:` list
+# rather than YAML, and the globs are a small translator rather than a library, because a plugin
+# with no dependencies is worth more here than the general case of fields nothing else reads.
 
 from __future__ import annotations
 
 import json
 import os
+import re
+import stat
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -48,8 +61,8 @@ GUIDANCE_DIRECTORY = "guidance"
 Where the console's own guidance lives under its config home, beside `config.yaml`.
 
 A directory of files rather than one file, because that is how doctrine is *authored*: one topic
-apiece, each a thing another can cite by name. It is not a scoping mechanism and nothing here reads
-one file without reading the rest.
+apiece, each a thing another can cite by name. Where a file is scoped is its own frontmatter's to
+say, with `paths:`, and not where it sits in the directory.
 """
 
 CONFIG_HOME = "MAINPLATE_CONFIG_HOME"
@@ -58,15 +71,71 @@ CONFIG_HOME = "MAINPLATE_CONFIG_HOME"
 
 def readable(path: Path) -> str | None:
     """
-    What a file says, or nothing where it cannot be read as text.
+    What one of the operator's own files says, or nothing where it cannot be read as text.
 
     Nothing rather than a raise, because every caller here is answering "what has this console been
     told", and a file that is unreadable this second is not a reason a session cannot be answered.
-    A repository is free to commit a symlink to nowhere.
+
+    **The operator's files only.** This follows links, which is right for a guidance directory that
+    is itself a link into somebody's dotfiles, and is exactly wrong for anything inside a checkout;
+    see `beneath` for those.
     """
     try:
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
+        return None
+
+
+def beneath(root: Path, relative: Path) -> bytes | None:
+    """
+    What a regular file inside a checkout holds, reached without following a single link.
+
+    **Everything in a checkout is the session's to write, and this plugin reads as the operator**,
+    outside every sandbox. So a path taken out of a checkout is walked one directory at a time with
+    `O_NOFOLLOW`, and the file at the end is opened the same way and read only if it is a regular
+    file. A link anywhere on the way is nothing rather than a file somewhere else: `docs/AGENTS.md`
+    committed as a link to one of the operator's own files would otherwise be read as the operator
+    and handed to the model as instructions, and so would one reached through a `docs` that is a link
+    to a directory. Walking descriptors rather than checking a path and then reading it leaves no
+    moment between the check and the read for the session to swap a link in.
+
+    `O_NONBLOCK` because a session can commit a FIFO as easily as a file, and opening one to read
+    waits for a writer that never comes; the check that follows refuses it before any read.
+
+    Nothing rather than a raise, for `readable`'s reason. `root` itself is trusted: it is the
+    directory this console planted, and a session cannot move a mount point.
+    """
+    parts = relative.parts
+    if not parts or relative.is_absolute() or any(part in ("", ".", "..") for part in parts):
+        return None
+    try:
+        at = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        return None
+    try:
+        for part in parts[:-1]:
+            inner = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=at)
+            os.close(at)
+            at = inner
+        opened = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=at)
+    except OSError:
+        return None
+    finally:
+        os.close(at)
+    with os.fdopen(opened, "rb") as held:
+        if not stat.S_ISREG(os.fstat(held.fileno()).st_mode):
+            return None
+        return held.read()
+
+
+def readable_beneath(root: Path, relative: Path) -> str | None:
+    """What a guidance file inside a checkout says, reached as `beneath` reaches it."""
+    held = beneath(root, relative)
+    if held is None:
+        return None
+    try:
+        return held.decode("utf-8")
+    except UnicodeDecodeError:
         return None
 
 
@@ -99,7 +168,8 @@ def without_frontmatter(text: str) -> str:
     A guidance file's prose, with a leading block taken off.
 
     Frontmatter is addressed to whatever loads the file rather than to the model, so passing it on
-    spends a context window on a `paths:` list nobody reads and invites the model to answer about it.
+    spends a context window on a `paths:` list this plugin has already acted on and invites the model
+    to answer about it.
     """
     return split_frontmatter(text)[1]
 
@@ -133,34 +203,45 @@ def described(text: str) -> str | None:
 
 def tracked_guidance(root: Path) -> frozenset[Path]:
     """
-    Every guidance path Git tracks, relative to the repository root.
+    Every guidance path the checkout's index lists, relative to the repository root.
 
-    The index is the boundary: ignored and other untracked files may belong to an environment rather
-    than the repository, so none of them may become instructions. `--cached` asks only what the index
-    knows and does not add files the session has created since.
+    Ignored and other untracked files may belong to an environment rather than the repository, so
+    none of them may become instructions merely because a tool reached into them: a guidance file
+    installed inside a `.venv` is not the repository's. `--cached` asks only what the index knows.
+
+    **The index is the session's to write, so it is a filter and not a boundary.** A session can
+    stage whatever it likes, including a path whose file on disk is a link out of the checkout; what
+    keeps that from reaching the operator's files is that every read of a listed path goes through
+    `beneath`. What the index still buys is the `.venv` case above, which is about what a repository
+    means rather than about what a session can reach.
 
     Nothing on a failed command, because a directory that is not a checkout has no repository-owned
     guidance to contribute.
 
     **The checkout's index is read through a repository this plugin made**, an empty bare one in a
-    temporary directory, and never through the checkout's own `.git`. This plugin runs as the
-    operator, outside every sandbox, and a session's checkout owns its `.git`: its configuration is
-    the model's to write, and several of its keys name a program git runs. Git reads the
-    configuration of whichever repository it is told is its own, so telling it this one means the
-    checkout's is never read at all, whatever keys it holds. The index is only data, and one that is
-    not an index is a failed command and so no guidance.
+    temporary directory, and never through the checkout's own `.git`. A session's checkout owns its
+    `.git`: its configuration is the model's to write, and several of its keys name a program git
+    runs. Git reads the configuration of whichever repository it is told is its own, so telling it
+    this one means the checkout's is never read at all, whatever keys it holds. The index itself is
+    copied out through `beneath` first, so an index that is a link to somebody else's is no index
+    rather than theirs; one that is not an index is a failed command and so no guidance.
     """
-    index = root / ".git" / "index"
+    index = beneath(root, Path(".git", "index"))
+    if index is None:
+        return frozenset()
     try:
-        with tempfile.TemporaryDirectory() as empty:
-            made = subprocess.run(("git", "init", "--quiet", "--bare", empty), check=False, capture_output=True)
+        with tempfile.TemporaryDirectory() as scratch:
+            empty = Path(scratch) / "empty"
+            copied = Path(scratch) / "index"
+            copied.write_bytes(index)
+            made = subprocess.run(("git", "init", "--quiet", "--bare", str(empty)), check=False, capture_output=True)
             if made.returncode != 0:
                 return frozenset()
             listed = subprocess.run(
-                ("git", "--git-dir", empty, "--work-tree", str(root), "ls-files", "--cached", "-z"),
+                ("git", "--git-dir", str(empty), "--work-tree", str(root), "ls-files", "--cached", "-z"),
                 check=False,
                 capture_output=True,
-                env={**os.environ, "GIT_INDEX_FILE": str(index)},
+                env={**os.environ, "GIT_INDEX_FILE": str(copied)},
             )
     except OSError:
         return frozenset()
@@ -174,30 +255,262 @@ def tracked_guidance(root: Path) -> frozenset[Path]:
 
 
 def guidance_at(root: Path, here: Path, tracked: frozenset[Path]) -> Path | None:
-    """The one tracked guidance file a directory holds, or nothing where it holds none."""
+    """
+    The one tracked guidance file a directory holds, relative to the root, or nothing where it holds
+    none it can be read from.
+
+    Asked through `beneath`, so a name that is tracked but is a link on disk is passed over as if it
+    were absent, and the next name gets its turn.
+    """
     try:
         relative = here.relative_to(root)
     except ValueError:
         return None
     for name in GUIDANCE_NAMES:
         found = relative / name
-        if found in tracked and (root / found).is_file():
-            return root / found
+        if found in tracked and beneath(root, found) is not None:
+            return found
     return None
 
 
-def console_guidance(config_home: Path) -> str:
+def paths_of(block: str) -> tuple[str, ...] | None:
     """
-    Everything the operator has written for every session, as one block of prose.
+    The globs a guidance file's frontmatter scopes it to, or nothing where it is not scoped.
+
+    Read as a line reader rather than a YAML parser, for `described`'s reason, and what it understands
+    is the two shapes a `paths:` list is written in: a flow list on the key's own line, and a block
+    list of `- ` items under it, each quoted or bare. Anything else under the key reads as no globs,
+    which is a scoped file that never applies rather than one that always does: a scoping mistake
+    should cost the operator a rule that is missing, which they can see, and not one that is present
+    everywhere, which is the thing scoping was for.
+    """
+    lines = block.splitlines()
+    for at, line in enumerate(lines):
+        if not line.startswith("paths:"):
+            continue
+        inline = line.removeprefix("paths:").strip()
+        if inline:
+            items = flow_items(inline) if inline.startswith("[") else [inline]
+        else:
+            items = []
+            for following in lines[at + 1 :]:
+                item = following.strip()
+                if not item.startswith("- "):
+                    break
+                items.append(item.removeprefix("- "))
+        return tuple(unquoted(item) for item in items if unquoted(item))
+    return None
+
+
+def flow_items(inline: str) -> list[str]:
+    """
+    The items of a flow list written on the key's own line, cut only at the commas between them.
+
+    Not a split on every comma, because a glob carries commas of its own: `["**/*.{py,rs}"]` is one
+    item, and cut at its brace it is two halves that each keep one stray quote and match nothing,
+    which is a scoped file silently never applying. So a comma inside quotes or inside braces is
+    part of the item. Only the list's own outer brackets are taken off, since a glob may end in a
+    `]` of its own.
+    """
+    body = inline.removeprefix("[").removesuffix("]")
+    items, start, depth, quote = [], 0, 0, ""
+    for at, character in enumerate(body):
+        if quote:
+            if character == quote:
+                quote = ""
+        elif character in "\"'":
+            quote = character
+        elif character == "{":
+            depth += 1
+        elif character == "}":
+            depth = max(depth - 1, 0)
+        elif character == "," and depth == 0:
+            items.append(body[start:at])
+            start = at + 1
+    items.append(body[start:])
+    return items
+
+
+def unquoted(item: str) -> str:
+    """One scalar as written, with the quotes a YAML author may have put round it taken off."""
+    said = item.strip()
+    if len(said) >= 2 and said[0] == said[-1] and said[0] in "\"'":
+        return said[1:-1]
+    return said
+
+
+def expanded(pattern: str) -> tuple[str, ...]:
+    """
+    A glob with its braces spelled out, so `**/*.{py,rs}` is the two globs it abbreviates.
+
+    Nested braces expand from the outside in, which is the order a shell expands them in. A brace
+    that never closes is a character, as it is to a shell.
+    """
+    opened = pattern.find("{")
+    if opened == -1:
+        return (pattern,)
+    depth = 0
+    for at in range(opened, len(pattern)):
+        if pattern[at] == "{":
+            depth += 1
+        elif pattern[at] == "}":
+            depth -= 1
+            if depth == 0:
+                break
+    else:
+        return (pattern,)
+    options, depth, start = [], 0, opened + 1
+    for inner in range(opened + 1, at):
+        if pattern[inner] == "{":
+            depth += 1
+        elif pattern[inner] == "}":
+            depth -= 1
+        elif pattern[inner] == "," and depth == 0:
+            options.append(pattern[start:inner])
+            start = inner + 1
+    options.append(pattern[start:at])
+    head, tail = pattern[:opened], pattern[at + 1 :]
+    return tuple(each for option in options for each in expanded(f"{head}{option}{tail}"))
+
+
+def compiled(pattern: str) -> re.Pattern[str]:
+    """
+    One brace-free glob as a regular expression over a path relative to the repository root.
+
+    **`.gitignore`'s reading**, because it is the one a person writing these already has: a glob with
+    no `/` in it names a file at any depth, so `*.py` is every Python file and `*` is every file,
+    and one with a `/` is anchored at the root, so `.github/dependabot.yml` is that file and no
+    other. `**/` is any number of directories including none, `**` at the end is everything under,
+    `*` is anything but a `/`, and `?` is one character that is not one. Everything else is itself.
+
+    **It parts from `.gitignore` over directories**: what is matched is always a file's path, so
+    `docs/` and `docs` cover a file called `docs` and nothing beneath a directory of that name, and
+    the glob for everything under one is `docs/**`. The cost is a glob that reads as covering a
+    directory and delivers nothing, which the index shows naming its globs but nothing flags.
+    """
+    anchored = "/" in pattern.rstrip("/")
+    body = pattern.strip("/")
+    out, at = [], 0
+    while at < len(body):
+        if body.startswith("**/", at):
+            out.append("(?:.*/)?")
+            at += 3
+        elif body.startswith("**", at):
+            out.append(".*")
+            at += 2
+        elif body[at] == "*":
+            out.append("[^/]*")
+            at += 1
+        elif body[at] == "?":
+            out.append("[^/]")
+            at += 1
+        else:
+            out.append(re.escape(body[at]))
+            at += 1
+    return re.compile(("" if anchored else "(?:.*/)?") + "".join(out))
+
+
+def covers(patterns: tuple[str, ...], path: str) -> bool:
+    """
+    Whether a scoped file's globs take in one path, where a `!` in front of a glob takes it back out.
+
+    A path is covered by matching any glob without a `!` and none with one, whatever order they were
+    written in: `**/*` with `!**/*.md` is every file but Markdown, which is the one thing a negation
+    is for, and an order-sensitive reading would make it mean something else when the two lines swap.
+    """
+    wanted = [each for each in patterns if not each.startswith("!")]
+    refused = [each.removeprefix("!") for each in patterns if each.startswith("!")]
+
+    def matched(globs: list[str]) -> bool:
+        return any(compiled(each).fullmatch(path) for glob in globs for each in expanded(glob))
+
+    return matched(wanted) and not matched(refused)
+
+
+@dataclass(frozen=True)
+class Scoped:
+    """
+    One of the operator's guidance files that applies only to some files, and what it says.
+
+    `name` is the file's path under the guidance directory, which is how the model is told which one
+    it is holding and how the history is asked whether it has been handed over already.
+    """
+
+    name: str
+    patterns: tuple[str, ...]
+    prose: str
+
+
+def console_files(config_home: Path) -> tuple[tuple[str, str], ...]:
+    """
+    Every file the operator has written for every session, by its name under the directory.
 
     Sorted by path so that two consoles reading one directory compose it identically, and recursive
-    so the directory can be organised without this having to be taught how. Files rather than one
-    file is an authoring convenience only: all of it loads, always, because doctrine that loads
-    conditionally is doctrine that is absent exactly when nothing said it was.
+    so the directory can be organised without this having to be taught how.
     """
-    found = sorted((config_home / "mainplate" / GUIDANCE_DIRECTORY).glob("**/*.md"))
-    said = (without_frontmatter(text).strip() for path in found if (text := readable(path)) is not None)
+    directory = config_home / "mainplate" / GUIDANCE_DIRECTORY
+    found = sorted(directory.glob("**/*.md"))
+    return tuple(
+        (path.relative_to(directory).as_posix(), text) for path in found if (text := readable(path)) is not None
+    )
+
+
+def console_guidance(files: tuple[tuple[str, str], ...]) -> str:
+    """
+    The operator's guidance that is not scoped, as one block of prose.
+
+    **Whatever carries no `paths:` loads, always**, and that is the whole of the operator's standing
+    doctrine: a rule that would change an answer before any file is touched cannot wait for one.
+    """
+    said = (without_frontmatter(text).strip() for _, text in files if paths_of(frontmatter(text) or "") is None)
     return "\n\n".join(block for block in said if block)
+
+
+def scoped_guidance(files: tuple[tuple[str, str], ...]) -> tuple[Scoped, ...]:
+    """
+    The operator's guidance that names the files it is for, each held back until one is reached.
+
+    **Scoped, rather than sent to every session whole**, because most of it is about kinds of file a
+    given session never touches: a rule for `Cargo.toml` and one for a Helm chart spend every
+    request's context in a Python repository, and a directory of them outweighs the repository's own
+    `AGENTS.md` by several times. The cost, stated: a scoped rule arrives on the request *after* the
+    call that reached a file it covers, so the model has read that one file without it; and a file
+    touched only through `bash` never brings one at all, since a command's paths are the model's
+    string and not this plugin's to parse. Both are the price nested `AGENTS.md` delivery already
+    pays, and the index is what tells the model these exist before either.
+    """
+    held = []
+    for name, text in files:
+        patterns = paths_of(frontmatter(text) or "")
+        if patterns is None:
+            continue
+        prose = without_frontmatter(text).strip()
+        if prose:
+            held.append(Scoped(name=name, patterns=patterns, prose=prose))
+    return tuple(held)
+
+
+def scoped_index(scoped: tuple[Scoped, ...]) -> str | None:
+    """
+    One line per scoped file of the operator's, naming the files it covers, and nothing where there
+    are none.
+
+    The same shape as the index of a repository's nested guidance, for the same reason: that a kind
+    of file has rules is one line, and what they are is a page delivered when it is wanted. The model
+    cannot open these itself, since they are the operator's and not in any checkout, so the line
+    says they arrive rather than inviting a read.
+    """
+    if not scoped:
+        return None
+    rows = [f"- `{each.name}`: {', '.join(f'`{glob}`' for glob in each.patterns)}" for each in scoped]
+    return "\n".join(
+        (
+            "The operator has guidance for particular kinds of file, handed to you the first time a "
+            "file tool names a file it covers:",
+            "",
+            *rows,
+        )
+    )
 
 
 def repository_guidance(root: Path, tracked: frozenset[Path]) -> str | None:
@@ -211,7 +524,7 @@ def repository_guidance(root: Path, tracked: frozenset[Path]) -> str | None:
     found = guidance_at(root, root, tracked)
     if found is None:
         return None
-    said = readable(found)
+    said = readable_beneath(root, found)
     if said is None:
         return None
     body = without_frontmatter(said).strip()
@@ -253,11 +566,17 @@ def indexing(root: Path, found: tuple[Path, ...]) -> str | None:
 
     Nothing where a repository has none, which is most of them: a heading over an empty list reports
     a feature rather than a fact.
+
+    A listed file that `beneath` cannot read is left off, a link most of all: `approaching` reads
+    through the same walk and would never hand it over, and a row promising guidance that never
+    arrives is worse than no row.
     """
     rows = []
     for each in found:
-        text = readable(root / each)
-        said = None if text is None else described(text)
+        text = readable_beneath(root, each)
+        if text is None:
+            continue
+        said = described(text)
         rows.append(f"- `{each}`{f': {said}' if said else ''}")
     if not rows:
         return None
@@ -283,13 +602,23 @@ def heading(found: Path) -> str:
     return f"`{found}`, guidance for this part of the repository:"
 
 
+def scoped_heading(scoped: Scoped) -> str:
+    """
+    The line a delivered scoped file of the operator's opens with, read back as `heading` is.
+
+    Its name alone and not its globs, so an operator widening what a file covers mid-conversation
+    does not make the history forget it was already handed over.
+    """
+    return f"`{scoped.name}`, the operator's guidance for the files it covers:"
+
+
 def touched_in(messages: list[Any]) -> tuple[str, ...]:
     """
     Every path the model has named to a file tool, in the order it named them.
 
     Read off the calls rather than off anything recorded beside them, which is what makes this free:
     a call is already in the history for its own sake. A call naming a `root` is passed over, since
-    the only root that is not the worktree is the scratch and nothing there is the repository's.
+    the only root that is not the checkout is the scratch and nothing there is the repository's.
 
     `bash` is not here and cannot be: its argv is the model's, so a path inside it is a string this
     plugin has no business parsing. That is the hole the index exists to cover.
@@ -368,7 +697,7 @@ def covering(settled: Path, here: Path, tracked: frozenset[Path]) -> tuple[Path,
 
     **Walked downward from the root rather than upward from the directory**, which is the only reading
     that stops at the root: a walk up the parents runs past it, and the directory holding the
-    repository is somebody else's - a checkout inside a checkout, or a worktree planted under the
+    repository is somebody else's - a checkout inside a checkout, or a checkout planted under the
     clone it came from, in which case the next `AGENTS.md` up is a file this session was never given
     and has no name relative to its root.
     """
@@ -380,13 +709,17 @@ def covering(settled: Path, here: Path, tracked: frozenset[Path]) -> tuple[Path,
         at = at / part
         guidance = guidance_at(settled, at, tracked)
         if guidance is not None:
-            found.append(guidance.relative_to(settled))
+            found.append(guidance)
     return tuple(found)
 
 
-def approaching(root: Path, messages: list[Any]) -> tuple[str, ...]:
+def approaching(root: Path, messages: list[Any], scoped: tuple[Scoped, ...] = ()) -> tuple[str, ...]:
     """
     What to hand the model, given where it has been reaching and what it has already been told.
+
+    Two kinds of block, in the order `instructing` composes their scopes: the operator's scoped files
+    covering a reached path first, then the repository's nested guidance above it, so where the two
+    disagree the repository has the last word here too.
 
     Delivered on the request *after* the calls that reached in, which is the same round trip the tool
     results themselves arrive on: there is no earlier moment, since a batch of calls and the reply to
@@ -403,20 +736,31 @@ def approaching(root: Path, messages: list[Any]) -> tuple[str, ...]:
     settled = root.resolve()
     prompts = system_prompts_in(messages)
     tracked = tracked_guidance(root)
-    covers: dict[Path, tuple[Path, ...]] = {}
+    nested: dict[Path, tuple[Path, ...]] = {}
     blocks: list[str] = []
     said: set[Path] = set()
+    handed: set[str] = set()
     for path in dict.fromkeys(touched_in(messages)):
-        here = (root / path).resolve().parent
-        if here not in covers:
-            covers[here] = covering(settled, here, tracked)
-        for found in covers[here]:
+        reached = (root / path).resolve()
+        if reached != settled and settled not in reached.parents:
+            continue
+        relative = reached.relative_to(settled).as_posix()
+        for each in scoped:
+            if each.name in handed or not covers(each.patterns, relative):
+                continue
+            handed.add(each.name)
+            if not delivered_in(prompts, scoped_heading(each)):
+                blocks.append(f"{scoped_heading(each)}\n\n{each.prose}")
+        here = reached.parent
+        if here not in nested:
+            nested[here] = covering(settled, here, tracked)
+        for found in nested[here]:
             if found in said:
                 continue
             said.add(found)
             if delivered_in(prompts, heading(found)):
                 continue
-            body = readable(root / found)
+            body = readable_beneath(settled, found)
             if body is None:
                 continue
             prose = without_frontmatter(body).strip()
@@ -449,17 +793,20 @@ def describing(payload: dict[str, Any]) -> dict[str, Any]:
     buys nothing against that, because the thing most likely to have edited the file is the model,
     which knows what it wrote.
     """
-    home = os.environ.get(CONFIG_HOME)
-    where = payload.get("worktree")
+    files = operators_files()
+    where = payload.get("checkout")
     root = Path(where) if isinstance(where, str) else None
     tracked = tracked_guidance(root) if root is not None else frozenset()
     said = instructing(
-        console_guidance(Path(home)) if home else None,
+        console_guidance(files),
+        # Only where there is a checkout, since a file tool naming a file in one is the only thing
+        # that hands a scoped file over: an index promising what never arrives is worse than none.
+        scoped_index(scoped_guidance(files)) if root is not None else None,
         repository_guidance(root, tracked) if root is not None else None,
         indexing(root, elsewhere_in(tracked)) if root is not None else None,
     )
     return {
-        # Only where there is a worktree to reach into. A session with no repository has no nested
+        # Only where there is a checkout to reach into. A session with no repository has no nested
         # guidance to hand over, so asking it at every request would be a process per request to be
         # told nothing.
         "events": ["before_request"] if root is not None else [],
@@ -473,13 +820,27 @@ def answer(payload: dict[str, Any]) -> dict[str, Any]:
     if event == "setup":
         return describing(payload)
     if event == "before_request":
-        where = payload.get("worktree")
+        where = payload.get("checkout")
         if not isinstance(where, str):
             return {}
         messages = payload.get("messages")
-        said = approaching(Path(where), messages if isinstance(messages, list) else [])
+        said = approaching(
+            Path(where), messages if isinstance(messages, list) else [], scoped_guidance(operators_files())
+        )
         return {"inject": list(said)} if said else {}
     return {}
+
+
+def operators_files() -> tuple[tuple[str, str], ...]:
+    """
+    The operator's guidance files, read afresh, or none where this console was told of no config home.
+
+    Read at every event that wants them rather than carried from `setup`, because a plugin keeps
+    nothing between events but what it asks to `set`, and a directory of prose is not worth a
+    session's state to save a few small reads per request.
+    """
+    home = os.environ.get(CONFIG_HOME)
+    return console_files(Path(home)) if home else ()
 
 
 def main() -> int:

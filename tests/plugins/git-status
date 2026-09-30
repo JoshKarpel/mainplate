@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# A repository plugin that tells a session where its worktree stands, once, before its first request.
+# A repository plugin that tells a session where its checkout stands, once, before its first request.
 #
 # It is here as a **test fixture**, and it is the one in this repository that is none of Python, none
 # of ours, and none of the console's tiers: it is declared by `.mainplate/mainplate.yaml` in a
@@ -13,14 +13,14 @@
 # starts editing and a session that re-read it every turn would be re-pricing its own cached prefix.
 #
 # **Confinement is what makes the shape of this readable.** `--clearenv` takes the environment away,
-# so there is nothing to read out of it; `--chdir` starts it in the worktree, so `git` here is the
+# so there is nothing to read out of it; `--chdir` starts it in the checkout, so `git` here is the
 # session's own repository and no path has to be parsed out of the payload. The clone is bound
 # read-only, so every read below works and nothing here could write history if it tried.
 
 set -euo pipefail
 
 # The payload is read and discarded. Nothing in it is needed: the working directory *is* the
-# worktree, which is the one fact this plugin wants, and reading stdin to the end is what keeps the
+# checkout, which is the one fact this plugin wants, and reading stdin to the end is what keeps the
 # console's write from failing on a closed pipe.
 cat >/dev/null
 

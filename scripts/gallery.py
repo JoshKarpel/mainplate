@@ -42,14 +42,20 @@ from without_durability.interfaces import inbox_key
 from mainplate import records
 from mainplate.agent import Choice
 from mainplate.agent import Listed
+from mainplate.agent import drawing_note
+from mainplate.agent import network_note
+from mainplate.agent import working_note
 from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Offering
 from mainplate.catalogue import retention_for
 from mainplate.console import LINKS
 from mainplate.conversation import ARCHIVED_KEY
 from mainplate.conversation import Result
+from mainplate.conversation import before
 from mainplate.conversation import commit_command
+from mainplate.conversation import fork_branch
 from mainplate.conversation import heard_key
+from mainplate.conversation import instructing
 from mainplate.conversation import instructions_key
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
@@ -58,6 +64,7 @@ from mainplate.conversation import recorded_command
 from mainplate.conversation import recorded_instructions
 from mainplate.conversation import recorded_messages
 from mainplate.conversation import recorded_prompt
+from mainplate.conversation import recorded_push
 from mainplate.conversation import recorded_result
 from mainplate.conversation import recorded_steer
 from mainplate.conversation import result_key
@@ -96,6 +103,7 @@ from mainplate.sessions import Idle
 from mainplate.sessions import Origin
 from mainplate.sessions import Queued
 from mainplate.sessions import Session
+from mainplate.settings import DEFAULT_INSTRUCTIONS
 from mainplate.snapshots import branch_named
 
 ASSETS = Path(__file__).resolve().parent.parent / "src" / "mainplate" / "assets"
@@ -189,7 +197,7 @@ CATALOGUE = Catalogue(
         # repository while recording that it reaches no files, or that it is on no branch, would draw
         # a page no real session can produce. Every session working in a repository is on a branch
         # named after it, so the card in the rail says one and a screenshot has to show it.
-        isolation=Isolation(filesystem=Filesystem.WORKTREE),
+        isolation=Isolation(filesystem=Filesystem.CHECKOUT),
         branch=branch_named(PARENT_ID),
         thinking="high",
     ),
@@ -280,6 +288,10 @@ PARENT = Session(
 #
 # Every unit the figure can be drawn in is on one row or another, and the two states that draw no
 # figure at all are too: a session measured at nothing, and one nothing has measured.
+#
+# The roots are in the order `read_sessions` hands them back, every active one above the archived
+# one and each group most recently written to first, because `arrange` keeps the order it is given
+# rather than sorting again: a table out of that order draws a list no console can.
 LISTED = (
     PARENT,
     Session(
@@ -313,6 +325,17 @@ LISTED = (
         # pass as well, so the two words are drawn side by side on this one.
         unseen=True,
         attention=Queued(),
+    ),
+    # Forked from the end of the archived session at the foot of the list, which is how an archived
+    # conversation is carried on: a root among the active rows, carrying its turn, with the session
+    # it came from below the lot, since a branch is only nested under a parent in its own group.
+    Session(
+        id="ab" * 16,
+        created_at=WHEN - timedelta(hours=1),
+        title="Rewrite the seeder around Choice.settled",
+        forked=Origin(session="ff" * 16, turn=2),
+        repository=WORKING_IN,
+        footprint=Footprint(allocated=38_200_000, measured_at=MEASURED),
     ),
     Session(id="ee" * 16, created_at=WHEN - timedelta(hours=3), title="Port the old notes", repository=DETACHED),
     # The session with the drawings in it, working in nothing, since a picture needs no files.
@@ -572,29 +595,7 @@ BLOCK_DIFF = "\n".join(
     ]
 )
 
-# What the requests in this fixture carried, so the panel that draws a session's system prompt has
-# something to draw. Three scopes in the order `instructing` composes them - the console's standing
-# directions, the working note the session's own isolation adds, and the repository's own
-# `AGENTS.md` last - because what that panel is for is showing a reader which of those they are
-# looking at.
-INSTRUCTIONS = """\
-You are a helpful assistant, working with a software engineer. Be concise and direct.
-
-You are working in a git worktree, which is called `worktree`. The file tools take paths relative to
-it and reach nothing outside it. Changes you make there are snapshotted automatically; you never
-need to commit, and you should not run git commands to record your work. You also have a scratch
-directory called `scratch`, outside the worktree and outside every snapshot. Reach it by passing
-`root: "scratch"` to `read`, `edit` or `create`; in a command it is `$MAINPLATE_SCRATCH`, and the
-worktree is `$MAINPLATE_WORKTREE`.
-
-Commands you run cannot reach the network: no fetching, no installing, no cloning. Something that
-needs one fails rather than hanging.
-
-A fenced code block labelled `mermaid` or `svg` is drawn as a picture on the page, so when a
-diagram or a figure would say it better than prose, write one: `mermaid` for a flow, a sequence, a
-state machine or a timeline, and `svg` when you need to draw exactly what you mean. Every other
-fence is shown as code.
-
+GUIDED = """\
 `AGENTS.md`, this repository's own guidance:
 
 # Polling
@@ -604,6 +605,33 @@ own. A region that asks for itself has to get its own trigger right; a region wi
 nothing to get wrong.
 
 Run `just test` before saying anything is done.
+"""
+"""
+What the bundled `guidance` plugin contributes for a repository carrying an `AGENTS.md`, written out.
+
+**One fact in two places, for `ASKING`'s reason**: the plugin is a script this console speaks to
+over a pipe, so there is nothing to import, and asking it would mean spawning the process this
+gallery exists not to. The heading line is the plugin's own wording; a reworded one leaves a
+screenshot of words nobody will read again.
+"""
+
+INSTRUCTIONS = instructing(
+    drawing_note(),
+    DEFAULT_INSTRUCTIONS,
+    GUIDED,
+    working_note(scratch=True),
+    network_note(CATALOGUE.default.isolation.network),
+)
+"""
+What the requests in this fixture carried, so the panel that draws a session's system prompt has
+something to draw.
+
+Composed by `instructing` from the blocks `conversing` hands it, in its order: what the page draws,
+the operator's standing instructions, what a plugin contributed, and what this session's tools
+reach, which `reaching` joins from the working note and the network note of a checkout session with
+a sandbox. Every block but the plugin's is the console's own function, so a reworded note reaches
+the panel without anybody copying it here; what that panel is for is showing a reader which of the
+scopes they are looking at.
 """
 
 ASKING = (
@@ -794,6 +822,29 @@ DRAWN: list[ModelMessage] = [
         ],
         usage=spending(asked=12_600, answered=214, cost="0.0391"),
         metadata=timing(4.1),
+    ),
+]
+
+# A reply that opens with its reasoning inside `<think>` tags rather than in a part of its own, which
+# is how some wires carry it, so a page draws what `unthought` makes of one: a reasoning panel with
+# the tags and the newlines they stood on gone, and the prose after it as the reply. A turn of the
+# branch on the other wire, since that is where a reader meets it.
+THOUGHT_INLINE: list[ModelMessage] = [
+    ModelRequest(parts=[UserPromptPart(content="Is an interval enough, or does the region need a key as well?")]),
+    ModelResponse(
+        timestamp=WHEN,
+        parts=[
+            TextPart(
+                content=(
+                    "<think>\n**Checking what the morph matches a region by**\n</think>\n\n"
+                    "An interval is enough on its own. The morph matches the region by its `id`, which "
+                    "the page already carries, so what was missing was only a trigger that outlives the "
+                    "element's first load."
+                )
+            )
+        ],
+        usage=spending(asked=46_000, answered=310, cost="0.0606"),
+        metadata=timing(5.2),
     ),
 ]
 
@@ -1152,9 +1203,9 @@ def returns(messages: Sequence[ModelMessage]) -> dict[str, ToolReturnPart]:
     }
 
 
-# A stand-in repository and one session's worktree of it, so the pages show what a console with
-# snapshots on looks like: the tree each turn started on, beside the fork link that would put it
-# back, and the repository the session is working in.
+# A stand-in repository and one session's checkout of it, so the pages show what a console with
+# snapshots on looks like: the fork link on each turn that would put its files back, and the
+# repository the session is working in.
 SINCE = timedelta(minutes=12)
 """
 How long ago the fixtures were last answered, which is the one thing a gallery cannot measure.
@@ -1165,7 +1216,7 @@ like a console nobody had touched.
 """
 
 REPOSITORY = "JoshKarpel/mainplate"
-WORKSPACE = Path("/home/you/.local/share/mainplate/workspaces/worktrees")
+WORKSPACE = Path("/home/you/.local/share/mainplate/workspaces/checkouts")
 
 # What a forge reaches, so the start page's picker has something in it. Two attachments of one
 # repository, because that is the case the labels have to disambiguate and a screenshot is where
@@ -1201,29 +1252,35 @@ FETCHES: Final[dict[str, Fetched]] = {
     ),
 }
 
-# A tree per model request rather than per turn, which is what a console with a worktree writes: a
+# A tree per model request rather than per turn, which is what a console with a checkout writes: a
 # snapshot is taken before every request, so the second request of a turn stands on whatever the
-# first one's tool calls left behind. The rules within a turn are the only place that shows, so a
-# fixture with one hash per turn would draw the design as it was before there were any.
+# first one's tool calls left behind. No page prints one. They are here because a checkpoint with a
+# checkout has them, and the fork page reads the branch it offers out of the one a fork would start
+# at; they name objects no store holds, so a fork from the seeded demo plants nothing of them.
 TREES = (
     ("9e75602b2554519c9f620dfdb2010586fde7e076", "c41d7a08b8e6cf2f4a90b3d5eec1120b7f5a3e91"),
     ("3de66468884176acb6dc1a522aa8cfa5ace6f0e0",),
 )
 
+# The commit every one of those trees sits on: the session committed nothing, so its `HEAD` never moved.
+STOOD_ON = "4be1f0c6d2a95c1e7b3f80a4d9e2c6b1a7f3e5d0"
 
-def snapshotted(written: dict[str, object]) -> dict[str, object]:
+
+def snapshotted(written: dict[str, object], branch: str | None) -> dict[str, object]:
     """
-    The same checkpoint with a tree before each of a turn's model requests, and a batch's diff
-    where its tools changed the tree.
+    The same checkpoint with a checkout state before each of a turn's model requests, and a batch's
+    diff where its tools changed the tree.
 
-    Only for the turns the checkpoint holds, because a tree recorded before a request in a turn
-    nobody took is a record no pass could write, and the seeder plants these into a real store.
+    Only for the turns the checkpoint holds, because a state recorded before a request in a turn
+    nobody took is a record no pass could write, and the seeder plants these into a real database.
+    `branch` is the one the session's choice put its checkout on, which is what a capture would
+    find; handed in because a fixture's choice is held beside its checkpoint rather than in it.
     """
     turns = transcript(written).turns
     return {
         **written,
         **{
-            tree_key(turn, at): records.Tree(tree=tree).recorded()
+            tree_key(turn, at): records.Tree(tree=tree, head=STOOD_ON, branch=branch).recorded()
             for turn, taken in enumerate(TREES[:turns])
             for at, tree in enumerate(taken)
         },
@@ -1245,7 +1302,7 @@ DECLARED: tuple[Installed, ...] = (
     Installed(tier=Tier.BUNDLED, name="handoff", path=Path("/opt/mainplate/plugins/handoff")),
     Installed(tier=Tier.BUNDLED, name="guidance", path=Path("/opt/mainplate/plugins/guidance")),
     Installed(tier=Tier.USER, name="notify", path=Path("/home/you/.config/mainplate/plugins/notify")),
-    Installed(tier=Tier.REPOSITORY, name="lint", path=Path("/srv/mainplate/worktrees/f3c1/.mainplate/lint")),
+    Installed(tier=Tier.REPOSITORY, name="lint", path=Path("/srv/mainplate/checkouts/f3c1/.mainplate/lint")),
 )
 
 # And what the press then ran, as one plugin with a card of both kinds of control. Written out rather
@@ -1291,8 +1348,8 @@ ENROLLED: tuple[Enrolled, ...] = (
 
 def settled_checkpoint() -> dict[str, object]:
     """
-    The parent session's checkpoint: two turns, a boundary between them, three commands and a
-    `/commit`, which is drawn as the command it ran.
+    The parent session's checkpoint: two turns, a boundary between them, three commands, a
+    `/commit`, which is drawn as the command it ran, one command run with the network on, and a push.
 
     The commands are ones the person ran themselves, which no model was told about and which the
     store holds beside what was said. Two exit states, because they are drawn differently and the
@@ -1344,6 +1401,28 @@ def settled_checkpoint() -> dict[str, object]:
             took=timedelta(seconds=0.21),
         )
     )
+    # Run with the network on, so the one mark a command's line carries for that is drawn somewhere.
+    written[inbox_key(6)] = recorded_command("uv sync", online=True)
+    written[result_key(inbox_key(6))] = recorded_result(
+        Result(
+            status=0,
+            output="Resolved 142 packages in 1.21s\nAudited 139 packages in 0.48ms\n",
+            took=timedelta(seconds=1.74),
+        )
+    )
+    # A push, drawn from the branch it records rather than from its text, which is what a screenshot
+    # has to show is not a line somebody typed.
+    written[inbox_key(7)] = recorded_push(branch_named(PARENT_ID))
+    written[result_key(inbox_key(7))] = recorded_result(
+        Result(
+            status=0,
+            output=(
+                "To github.com:joshkarpel/mainplate.git\n"
+                f" * [new branch]      {branch_named(PARENT_ID)} -> {branch_named(PARENT_ID)}\n"
+            ),
+            took=timedelta(seconds=1.32),
+        )
+    )
     written[inbox_key(1)] = recorded_prompt(opening(TOOL_IN_FLIGHT), forget=True)
     written[instructions_key(1)] = recorded_instructions(INSTRUCTIONS)
     return written
@@ -1384,7 +1463,7 @@ class Fixture:
         draws, and a fixture that skipped it would be a demo missing what the stills show.
         """
         working = replace(chosen, repository=session.repository).settled().branching(session.id)
-        taken = snapshotted(checkpoint) if session.repository is not None else checkpoint
+        taken = snapshotted(checkpoint, working.branch) if session.repository is not None else checkpoint
         return cls(session=session, chosen=working, checkpoint=taken)
 
 
@@ -1397,28 +1476,33 @@ def fixtures() -> tuple[Fixture, ...]:
     before the one it branched at: a checkpoint that said otherwise would be a plausible-looking
     approximation of a fork rather than one.
     """
-    parent, branch, deeper, other, detached, drawing, archived = LISTED
+    parent, branch, deeper, other, carried_on, detached, drawing, archived = LISTED
     if archived.archived is None:  # pragma: no cover - the fixture says it is, and this is what reads it
         raise ValueError("the gallery's last session is the archived one, and it records no time")
+    if carried_on.forked is None:  # pragma: no cover - the fixture says it is, and this is what reads it
+        raise ValueError("the gallery's carried-on session is a fork, and it records no origin")
+    closed = {**settled_checkpoint(), ARCHIVED_KEY: records.Archived(at=archived.archived).recorded()}
     return (
         Fixture.of(parent, ON_SONNET, settled_checkpoint()),
         # Branched at turn 1 and answered on a different model, so it carries turn 0 and nothing
         # after it.
         Fixture.of(branch, ON_OPUS, recorded(CONVERSATION)),
-        # A branch of that branch, at turn 2, on the other wire entirely: turns 0 and 1 come across.
-        Fixture.of(deeper, ON_GPT, recorded(CONVERSATION, TOOL_IN_FLIGHT)),
+        # A branch of that branch, at turn 2, on the other wire entirely: turns 0 and 1 come across,
+        # and turn 2 is its own, answered the way that wire answers.
+        Fixture.of(deeper, ON_GPT, recorded(CONVERSATION, TOOL_IN_FLIGHT, THOUGHT_INLINE)),
         Fixture.of(other, ON_SONNET, recorded(CONVERSATION)),
+        # What `Service.fork` carries from the end of the archived session below, through the same
+        # `before`, so it holds every turn and waits for the next message rather than re-asking one;
+        # and settled as a fork is, carrying its parent's branch on, which is what the fork page's box
+        # posts when nobody empties it.
+        Fixture.of(carried_on, ON_SONNET.settled(forked=True), before(closed, carried_on.forked.turn)),
         # On a repository nothing reaches, so a demo console has the row that renders a bare id.
         Fixture.of(detached, ON_SONNET, recorded(CONVERSATION)),
         Fixture.of(drawing, ON_SONNET, recorded(DRAWN)),
         # Archived, with the key the press writes rather than only the row's field, because the row's
         # field is *read* out of that key: a session with the field alone is one the sidebar draws as
         # open. The reconciler finds nothing on disk for it and leaves it be.
-        Fixture.of(
-            archived,
-            ON_SONNET,
-            {**settled_checkpoint(), ARCHIVED_KEY: records.Archived(at=archived.archived).recorded()},
-        ),
+        Fixture.of(archived, ON_SONNET, closed),
     )
 
 
@@ -1456,7 +1540,7 @@ def showing(
     `declared` is what the session's first pass read out of files, and `plugins` is what the press on
     the settings step then ran. The pair is the trust boundary and so is the pair of states worth
     drawing: `plugins` of `None` is a session still on that step, and `declared` of `None` as well is
-    one whose worktree is still being planted. Both default to something, because that is what every
+    one whose checkout is still being planted. Both default to something, because that is what every
     ordinary page shows - the rail draws a card per running plugin, and a gallery of pages with an
     empty rail would be a gallery of a console nobody has.
 
@@ -1467,7 +1551,7 @@ def showing(
     written - and it is what makes the failure pages the *only* ones drawing the line.
     """
     working = chosen.repository is not None
-    said = transcript(snapshotted(written) if working and started else written)
+    said = transcript(snapshotted(written, chosen.branch) if working and started else written)
     facts = facts_of(CATALOGUE, REFERENCE, chosen)
     return Conversation(
         session=session,
@@ -1483,8 +1567,8 @@ def showing(
         deferred=deferred,
         attention=attention if attention is not None else Claimed(),
         repository=REPOSITORY if working else None,
-        worktree=WORKSPACE / session.id if working else None,
-        # Which follows the repository, because a command runs in a session's worktree: it is what
+        checkout=WORKSPACE / session.id if working else None,
+        # Which follows the repository, because a command runs in a session's checkout: it is what
         # puts `Run` among the sending menu's answers, and so what makes `/run` and `!` reach a mode
         # at all.
         runnable=working,
@@ -1504,14 +1588,14 @@ def showing(
 
 
 # One sentence per page, for the index the documentation site draws over them. Every page has one
-# and nothing else does, which `test_browser.py` holds: a page added below without a caption here
+# and nothing else does, which `test_seed.py` holds: a page added below without a caption here
 # is a page the site would list with nothing beside it.
 CAPTIONS: Final[dict[str, str]] = {
     "dashboard.html": "The dashboard: what is unread and what is working, then a card per place to start a session in.",
     "new-session.html": "A new session in a repository: where to start in it, then the network, the endpoint and the model.",
     "new-session-unreferenced.html": "The same with no reference configured, so no card carries a price or a window.",
     "new-session-nothing.html": "A new session with no repository, which has no branch to start from.",
-    "setting-up.html": "A session whose worktree is still being planted, with nothing yet to switch.",
+    "setting-up.html": "A session whose checkout is still being planted, with nothing yet to switch.",
     "settings.html": "The settings step: a switch per plugin under a heading per tier, before anything runs.",
     "settings-installing.html": "The step after the press, with a pass out installing what the plugins need.",
     "settings-refused.html": "A setup that stopped, naming the plugin that would not answer.",
@@ -1523,6 +1607,10 @@ CAPTIONS: Final[dict[str, str]] = {
         "too long to draw open, and a shell command with what it said."
     ),
     "drawing.html": "A reply with a diagram and an SVG drawn as pictures, each a press away from its text.",
+    "reasoning-inline.html": (
+        "A branch on the other wire, whose last reply opens with its reasoning in `<think>` tags and is "
+        "drawn as a reasoning panel above the prose."
+    ),
     "waiting.html": "A message waiting for its turn.",
     "answering.html": "A turn part way through: two reads out at once, a steer taken and one still to be, a command running.",
     "handed-off.html": "A handoff: the plugin's ask, and the document the next stretch of context opens on.",
@@ -1533,7 +1621,7 @@ CAPTIONS: Final[dict[str, str]] = {
     "dropped.html": "Nothing answering the session and nothing scheduled to.",
     "archived.html": "An archived session, muted, with the fork from its end as the one control left.",
     "forking.html": "Forking at a turn: what is carried over and what is left behind.",
-    "forking-attach.html": "Forking a session that worked in no repository, which is the one that may pick one up.",
+    "forking-no-repository.html": "Forking a session that works in no repository, which has no branch to carry on.",
 }
 
 
@@ -1551,10 +1639,12 @@ def pages(links: Links = LINKS) -> dict[str, str]:
     a fixture's checkpoint rather than fixtures of their own, because every one of them is a session
     something should be answering, and in the demo nothing would be.
     """
-    parent, branch, _, other, _, drawing, archived = FIXTURES
+    parent, branch, deeper, other, _, _, drawing, archived = FIXTURES
     settled = parent.checkpoint
+    # Every entry below is numbered past the last one `settled_checkpoint` files, since a key written
+    # over one of those replaces what the settled session said rather than adding to it.
     waiting = dict(settled)
-    waiting[inbox_key(5)] = recorded_prompt("And what about a turn still being answered?")
+    waiting[inbox_key(8)] = recorded_prompt("And what about a turn still being answered?")
 
     # A turn part way through, read from the steps behind it rather than from messages it has not
     # written yet. The state exists only while a pass is actually running, so a fixture is the one
@@ -1564,9 +1654,9 @@ def pages(links: Links = LINKS) -> dict[str, str]:
     # And a command still running beside it, which is the third of a command's states and the one
     # that belongs on a page where something is still happening: a command with no result under a
     # settled turn would be one that never finishes.
-    answering[inbox_key(8)] = recorded_command("just shots")
-    answering[opened_key(2)] = inbox_key(5)
-    answering[heard_key(2, 0)] = inbox_key(5)
+    answering[inbox_key(11)] = recorded_command("just shots")
+    answering[opened_key(2)] = inbox_key(8)
+    answering[heard_key(2, 0)] = inbox_key(8)
     answering[model_key(2, 0)] = records.Response(
         response=ModelResponseTypeAdapter.dump_python(PARTWAY, mode="json")
     ).recorded()
@@ -1585,9 +1675,9 @@ def pages(links: Links = LINKS) -> dict[str, str]:
     # which is the honest state and not a distinction being lost: what separates them is which request
     # took them, and a request that has said nothing is not somewhere a panel can sit above. The taken
     # one moves up to its own answer when that lands, which is the one reorder this reading performs.
-    answering[inbox_key(6)] = recorded_steer("use the endpoint's own name for it, not the wire's")
-    answering[heard_key(2, 1)] = inbox_key(6)
-    answering[inbox_key(7)] = recorded_steer("and while you are there, check the phone width")
+    answering[inbox_key(9)] = recorded_steer("use the endpoint's own name for it, not the wire's")
+    answering[heard_key(2, 1)] = inbox_key(9)
+    answering[inbox_key(10)] = recorded_steer("and while you are there, check the phone width")
 
     # A handoff, which is two panels of a kind nobody in the conversation typed: the bundled plugin's
     # own ask, and the document that came back and starts the model's history again. Turn 1's opener
@@ -1609,7 +1699,7 @@ def pages(links: Links = LINKS) -> dict[str, str]:
         title="This session was asked to write down where it has got to.",
         tone="quiet",
     ).recorded()
-    handed[inbox_key(7)] = records.Note(
+    handed[inbox_key(8)] = records.Note(
         said=HANDED_OVER,
         plugin="bundled:handoff",
         forget=True,
@@ -1629,7 +1719,7 @@ def pages(links: Links = LINKS) -> dict[str, str]:
         failed=records.Failed(
             why=(
                 "PluginFailed(\"bundled:guidance exited 1: ValueError: '/srv/AGENTS.md' is not in the "
-                "subpath of '/srv/mainplate/worktrees/f3c1'\")"
+                "subpath of '/srv/mainplate/checkouts/f3c1'\")"
             ),
             at=len(answering),
         ),
@@ -1669,7 +1759,7 @@ def pages(links: Links = LINKS) -> dict[str, str]:
             status=400,
         ),
     )
-    # The state every session opens in, and stays in for as long as the clone and the worktree take:
+    # The state every session opens in, and stays in for as long as the clone and the checkout take:
     # the message is there to be drawn and what the session is answered under is not, because
     # composing that reads a repository the pass is the one to fetch. The system prompt panel is
     # drawn with nothing in it rather than left out, and a screenshot is where you find out whether
@@ -1700,12 +1790,12 @@ def pages(links: Links = LINKS) -> dict[str, str]:
     return {
         "dashboard.html": dashboard_page(links, READER, LISTED, REACHABLE, FETCHES),
         "new-session.html": new_session_page(
-            links, READER, LISTED, CATALOGUE, REACHABLE, REFERENCE, WORKING_IN, Filesystem.WORKTREE, FETCHES[WORKING_IN]
+            links, READER, LISTED, CATALOGUE, REACHABLE, REFERENCE, WORKING_IN, Filesystem.CHECKOUT, FETCHES[WORKING_IN]
         ),
         # The same page with nothing configured to look models up in, which is the default and the
         # one a screenshot has to prove still reads as a finished page rather than as a broken one.
         "new-session-unreferenced.html": new_session_page(
-            links, READER, LISTED, CATALOGUE, REACHABLE, None, WORKING_IN, Filesystem.WORKTREE, FETCHES[WORKING_IN]
+            links, READER, LISTED, CATALOGUE, REACHABLE, None, WORKING_IN, Filesystem.CHECKOUT, FETCHES[WORKING_IN]
         ),
         "new-session-nothing.html": new_session_page(
             links, READER, LISTED, CATALOGUE, REACHABLE, REFERENCE, None, Filesystem.NOTHING
@@ -1719,6 +1809,9 @@ def pages(links: Links = LINKS) -> dict[str, str]:
         "drawing.html": session_page(
             links, READER, LISTED, showing(drawing.session, drawing.checkpoint, chosen=drawing.chosen), REACHABLE
         ),
+        "reasoning-inline.html": session_page(
+            links, READER, LISTED, showing(deeper.session, deeper.checkpoint, chosen=deeper.chosen), REACHABLE
+        ),
         "waiting.html": session_page(links, READER, LISTED, showing(parent.session, waiting), REACHABLE),
         "answering.html": session_page(links, READER, LISTED, showing(parent.session, answering), REACHABLE),
         "handed-off.html": session_page(links, READER, LISTED, showing(parent.session, handed), REACHABLE),
@@ -1730,14 +1823,23 @@ def pages(links: Links = LINKS) -> dict[str, str]:
         "archived.html": session_page(links, READER, LISTED, closed, REACHABLE),
         # Forking at turn 1, so the page has something to show as carried over and something to
         # leave behind: the fork keeps turn 0 and waits to be told turn 1 differently. This session
-        # is already in a repository, so no repository control appears - it inherits that one.
+        # is already in a repository, so no repository control appears - it inherits that one - and
+        # the branch box holds the branch turn 1 started on, by the `fork_branch` the console reads it with.
         "forking.html": fork_page(
-            links, READER, LISTED, showing(parent.session, settled), 1, CATALOGUE, REACHABLE, REFERENCE
+            links,
+            READER,
+            LISTED,
+            showing(parent.session, settled),
+            1,
+            CATALOGUE,
+            REACHABLE,
+            REFERENCE,
+            fork_branch(settled, 1),
         ),
-        # And a fork of a session in *no* repository, which is the one that may pick one up: the
-        # ordinary shape of having thought something through and then going to work on it. The
-        # choice is settled against having none, as the console would settle it, so the rail says so.
-        "forking-attach.html": fork_page(
+        # And a fork of a session in *no* repository, which has no branch to carry on and no files
+        # to say anything about, and like every fork draws no checkout control. The choice is
+        # settled against having none, as the console would settle it, so the rail says so.
+        "forking-no-repository.html": fork_page(
             links,
             READER,
             LISTED,

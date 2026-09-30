@@ -8,12 +8,11 @@
 # tool included, is its arguments laid out one to a row and its return verbatim, which is what
 # every call was drawn as before any of the tools had a rendering of its own.
 #
-# **What the model was handed is on the page, or a press away.** Nothing here shows the model's
-# arguments or return as anything other than what they were, with two exceptions that are both
-# stated on the design page: an `edit` with a recorded diff shows the diff in place of its
-# operations and its reply, and a file's lines are shown without the anchors the tool wrote in
-# front of them, which are the model's names for lines and mean nothing to a person. The raw record
-# hangs off the request either way.
+# **What the model was handed is on the page.** Nothing here shows the model's arguments or return
+# as anything other than what they were, with two exceptions that are both stated on the design
+# page: an `edit` with a recorded diff shows the diff in place of its operations and its reply, and a
+# file's lines are shown without the anchors the tool wrote in front of them, which are the model's
+# names for lines and mean nothing to a person. What those two leave out is in the checkpoint only.
 
 from __future__ import annotations
 
@@ -56,10 +55,14 @@ from mainplate.tools.files.tools import DIFF
 # shape, and a value nested four deep at four spaces is mostly margin in a column this narrow.
 INDENT: Final = 2
 
-# The two labels a call's body is read under, written here and read by `mainplate.js`, which joins a
-# copied call back together from the list the page draws it as and names neither.
+# The three labels a call's body is read under, written here and read by `mainplate.js`, which joins
+# a copied call back together from the list the page draws it as and names none of them. `DIFFERED`
+# is its own constant rather than `DIFF`, though the two spell the same word today: `DIFF` is the
+# key an `edit` files its diff under in the record, and this is what a reader is shown, so renaming
+# either must not quietly rename the other.
 CALLED_WITH: Final = "called with"
 RETURNED: Final = "returned"
+DIFFERED: Final = "diff"
 
 # The tools whose returns carry lines of a file behind an anchor, which is what `rows_of` reads. The
 # console's own and nobody else's: a plugin's tool could print the same shape and would be shown it
@@ -71,9 +74,15 @@ ANCHORING: Final = frozenset({"read", "create", "edit", "grep"})
 # rather than written out, so a change to the scheme is a change here too.
 ANCHORED: Final = re.compile(rf"^(?P<anchor>[{ALPHABET}]{{{WIDTH}}}|{re.escape(UNADDRESSABLE)}){GUTTER}")
 
-# A unified diff's hunk header, which is where the line numbers on either side come from. The count
-# after the comma is left off for a hunk of one line, which is the format and not a shortcut.
-HUNK: Final = re.compile(r"^@@ -(?P<old>\d+)(?:,\d+)? \+(?P<new>\d+)(?:,\d+)? @@")
+# A unified diff's hunk header, which is where the line numbers on either side come from, and how
+# many lines of the hunk are on each side. The count after the comma is left off for a hunk of one
+# line, which is the format and not a shortcut.
+HUNK: Final = re.compile(r"^@@ -(?P<old>\d+)(?:,(?P<olds>\d+))? \+(?P<new>\d+)(?:,(?P<news>\d+))? @@")
+
+# One escape inside a path git quoted: three octal digits for each byte of a name outside printable
+# ASCII, or a backslash before a character C would escape. See `unquoted`.
+ESCAPE: Final = re.compile(rb"\\(?:(?P<byte>[0-7]{3})|(?P<char>.))", re.DOTALL)
+ESCAPED: Final = {b"a": b"\a", b"b": b"\b", b"t": b"\t", b"n": b"\n", b"v": b"\v", b"f": b"\f", b"r": b"\r"}
 
 
 def laid_out(said: str) -> str:
@@ -244,8 +253,8 @@ def anchored_element(content: str, language: str | None) -> Element:
 
     The anchors are left out rather than drawn faint, because they are the model's names for lines
     and say nothing to a person: what tells a file's line from the tool's is the tone the stylesheet
-    sets a tool's own line in, and what tells one line from the next is the file. A reader working
-    out which anchor the model meant has the raw record on the request.
+    sets a tool's own line in, and what tells one line from the next is the file. The cost, stated:
+    which anchor the model meant is not on the page at all, only in the checkpoint.
 
     Each run of the file's lines is coloured as one text rather than a line at a time, so a string
     or a comment that spans lines is read as one token. A run is what lies between two lines the
@@ -287,32 +296,50 @@ class Change:
 
 
 def changes_of(diff: str) -> Iterator[Change]:
-    """
+    r"""
     A unified diff as lines, numbered on the side each one is on.
 
-    The file headers are passed over: they name the path twice, and the fold's own summary already
-    names it once. A line that is none of the shapes a unified diff has is refused, because the only
-    thing that writes one of these is `diffed`, and a fixture that wrote one wrong should say so.
+    A hunk is read for exactly as many lines as its header counts on each side, and that is what
+    tells a file header from a line of the file: `--- a.sql` before a hunk names the file, while a
+    removed SQL comment is `--- old` *inside* one and is a line like any other. Telling them apart
+    by prefix alone drops the comment and numbers every line after it wrong. So the `---`/`+++`
+    headers are passed over only between hunks, where they name the path twice and the fold's own
+    summary already names it once, and so is a blank line there, which is how a diff that ends
+    with a newline ends.
+
+    `\ No newline at end of file` is passed over wherever it is: it says something about the line
+    before it rather than being one, and no line of a hunk can begin with a backslash. Anything
+    else is refused. What reaches here is written by `diffed` or by git, through `changes_by_file`,
+    and neither writes another shape, so a line that is none of them is a fault in the reading and
+    not a diff to draw around.
     """
     old = new = 0
+    olds = news = 0
     for line in diff.split("\n"):
-        if line.startswith(("--- ", "+++ ")):
-            continue
         if (header := HUNK.match(line)) is not None:
             old, new = int(header["old"]), int(header["new"])
+            olds, news = int(header["olds"] or 1), int(header["news"] or 1)
             yield Change("@", None, None, line)
             continue
+        if line.startswith("\\"):
+            continue
+        if not olds and not news and (not line or line.startswith(("--- ", "+++ "))):
+            continue
         match line[:1]:
-            case "-":
+            case "-" if olds:
                 yield Change("-", old, None, line[1:])
                 old += 1
-            case "+":
+                olds -= 1
+            case "+" if news:
                 yield Change("+", None, new, line[1:])
                 new += 1
-            case " ":
+                news -= 1
+            case " " if olds and news:
                 yield Change(" ", old, new, line[1:])
                 old += 1
                 new += 1
+                olds -= 1
+                news -= 1
             case _:
                 raise ValueError(f"not a line of a unified diff: {line!r}")
 
@@ -342,9 +369,9 @@ def diff_element(diff: str) -> Element:
     """
     The change an `edit` made, as the diff the tool recorded beside its reply.
 
-    The numbers on each side are the gutter, carried as data and painted by the stylesheet for the
-    reason a read's anchors are: copied, the block is a diff with its marks and without the numbers
-    the console drew. The mark is text, since a diff without its `-` and `+` is not one.
+    The numbers on each side are the gutter, carried as data on each line's own `.line` block and
+    painted in front of it by the stylesheet: copied, the block is a diff with its marks and without
+    the numbers the console drew. The mark is text, since a diff without its `-` and `+` is not one.
     """
     if not diff:
         return span(cls="tool__silent", children="no change")
@@ -356,49 +383,62 @@ def changes_by_file(diff: str) -> tuple[tuple[str, tuple[Change, ...]], ...]:
     """
     Each file a git diff changed, as its path and the numbered lines of its hunks.
 
-    What git prints around the lines a reader wants - the `diff --git` header then the `index`,
-    mode, rename and `---`/`+++` lines before the first hunk - is dropped, so what reaches
-    `changes_of` is the same clean shape `diffed` produces. The path comes off the `diff --git`
-    header, where it is the same on both sides whether the file was added, removed or edited. A
-    binary change has no lines to show and is left out, which is the one reading `--no-renames`
-    cannot turn into a line diff.
+    The diff is cut at each `diff --git` line, which no line of a hunk can be since every one of
+    those begins with its mark. Within a file, everything before the first hunk is git's header -
+    the `index` and mode lines, then `---` and `+++` - and only the hunks from there on go to
+    `changes_of`, so the header's shape never has to be enumerated. A file with no hunk is left
+    out: a binary change, a mode change, an empty file added. Under `--no-renames` that is the
+    whole of what prints no lines.
+
+    The path is read off the `+++` line, or off `---` for a file that was removed, and not off
+    `diff --git`, which names it twice with nothing to say where the first name stops: `a/my
+    b/file.txt b/my b/file.txt` has ` b/` in it three times. `+++` names it once, with a tab after
+    a name holding a space, and `unquoted` undoes the quoting git puts around a name outside
+    printable ASCII.
     """
     files: list[tuple[str, tuple[Change, ...]]] = []
-    path: str | None = None
-    hunks: list[str] = []
-    for line in diff.split("\n"):
-        if line.startswith("diff --git "):
-            if path is not None and hunks:
-                files.append((path, tuple(changes_of("\n".join(hunks)))))
-            _, _, rest = line.partition(" a/")
-            path = rest.partition(" b/")[0]
-            hunks = []
-        elif not line or line.startswith(
-            (
-                "index ",
-                "new file mode",
-                "deleted file mode",
-                "old mode",
-                "new mode",
-                "similarity index",
-                "dissimilarity index",
-                "rename from",
-                "rename to",
-                "copy from",
-                "copy to",
-                "Binary files",
-                "GIT binary patch",
-                "--- ",
-                "+++ ",
-                "\\",
-            )
-        ):
+    for section in re.split(r"^diff --git .*$", diff, flags=re.MULTILINE)[1:]:
+        header, at, hunks = section.partition("\n@@")
+        if not at:
             continue
-        else:
-            hunks.append(line)
-    if path is not None and hunks:
-        files.append((path, tuple(changes_of("\n".join(hunks)))))
+        files.append((path_of(header.split("\n")), tuple(changes_of("@@" + hunks))))
     return tuple(files)
+
+
+def path_of(header: Sequence[str]) -> str:
+    """
+    Which file a section of a git diff is about, off the `---` and `+++` lines of its header.
+
+    The new side's name unless the file was removed, in which case `+++` is `/dev/null` and the
+    old side's is the only name there is. A header with neither is refused, since `changes_by_file`
+    only hands over one that runs to a hunk, and git writes both lines in front of every hunk.
+    """
+    names = {line[:4]: line[4:].removesuffix("\t") for line in header if line.startswith(("--- ", "+++ "))}
+    after, before = names.get("+++ "), names.get("--- ")
+    named = before if after == "/dev/null" else after
+    if named is None:
+        raise ValueError(f"no file named in a diff's header: {header!r}")
+    return unquoted(named).partition("/")[2]
+
+
+def unquoted(name: str) -> str:
+    """
+    A name as git printed it in a diff's header, with git's quoting undone.
+
+    Git puts a name in double quotes when it holds a byte outside printable ASCII, a quote, or a
+    backslash, and writes each such byte as C would: three octal digits per byte of a multibyte
+    character, or a backslash before the character. The bytes are decoded as UTF-8, with anything
+    that is not shown as the replacement character, since the path is being drawn and not opened.
+    """
+    if len(name) < 2 or not name.startswith('"') or not name.endswith('"'):
+        return name
+    raw = ESCAPE.sub(
+        lambda found: (
+            bytes([int(found["byte"], 8)]) if found["byte"] is not None else ESCAPED.get(found["char"], found["char"])
+        ),
+        name[1:-1].encode(),
+    )
+    return raw.decode(errors="replace")
 
 
 def block_diff_element(files: Sequence[tuple[str, Sequence[Change]]]) -> Element:
@@ -528,17 +568,18 @@ def created(used: ToolUse) -> bool:
 
 def call_body(used: ToolUse) -> Element:
     """
-    What a call was handed and what it gave back, under the two labels the script reads them by.
+    What a call was handed and what it gave back, under the labels the script reads them by.
 
     Two calls are drawn as one half alone, because for each the other half would be the same thing
     again. An `edit` that recorded a diff is that: its operations are the diff said in anchors, and
     its reply is the diff's right-hand side said in anchors again, so either beside it would be the
     same change a third time. A `create` that succeeded is its reply: the new file under the tool's
     own line saying it was written, which is the content it was handed with a confirmation on top.
-    A reader who wants the anchors an edit was addressed by has the raw record on the request.
+    The cost, stated: the anchors an edit was addressed by are not on the page, only in the
+    checkpoint.
     """
     if (diff := recorded_diff(used)) is not None:
-        return dl(cls="tool__body", children=[dt(children=DIFF), dd(children=diff_element(diff))])
+        return dl(cls="tool__body", children=[dt(children=DIFFERED), dd(children=diff_element(diff))])
     if created(used) and used.returned is not None:
         return dl(
             cls="tool__body",

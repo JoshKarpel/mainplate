@@ -11,7 +11,7 @@ runs](sandbox.md). This is what the tools themselves are.
 Every tool lives under `tools/`, as `tools/{name}/{module}.py`. Only the constructor reaches the
 harness: `tools/__init__.py` exports the constructors and the values they take and nothing else, so
 `agent.py` asks for the tools a workspace affords without knowing that editing is anchored, that a
-worktree root has to be resolved against, or how a command is confined. A further tool is a new
+checkout root has to be resolved against, or how a command is confined. A further tool is a new
 package beside `files/` and `bash/` and one more name in that list, rather than an edit
 to anything that already imports them.
 
@@ -21,15 +21,18 @@ lets the interesting half be tested with a list of strings.
 ## Which tools a session gets
 
 **Over its *files*, that is decided by its `isolation`, not by whether it picked a repository.** A
-session on `WORKTREE` gets `read`, `edit` and `create` over its worktree and scratch, and `list` and
-`grep` over the worktree. One on `EVERYTHING` gets the first three over `/`, while `list` and `grep`
-refuse because nothing there is in git. One on `NOTHING` gets the first three over [its
-scratch](sandbox.md#the-scratch-directory) alone, which is nothing *of the machine*: a conversation
-that is not about a repository still wants to run a script or keep a note across turns, and a
-relative path there means the scratch. `bash` is added to all three wherever there is a sandbox to
-run it in, and on `NOTHING` the file tools come only with it, because the scratch is made by the
-first command and a `read` over a directory nothing creates is a tool that can only fail, which is
-worse than none and costs a description on every request.
+session on `CHECKOUT` gets `read`, `edit` and `create` over its checkout and scratch, and `list` and
+`grep` over the checkout. One on `EVERYTHING` gets the first three over `/`, and one on `NOTHING`
+gets them over [its scratch](sandbox.md#the-scratch-directory) alone, which is nothing *of the
+machine*: a conversation that is not about a repository still wants to run a script or keep a note
+across turns, and a relative path there means the scratch. `bash` is added to all three wherever
+there is a sandbox to run it in, and on `NOTHING` the file tools come only with it, because the
+scratch is made by the first command and a `read` over a directory nothing creates is a tool that
+can only fail, which is worse than none and costs a description on every request. `list` and `grep`
+are left out of the other two for the same reason: both ask git, nothing under `/` or in a scratch
+is in git, and `bash` answers what either would there. The cost, stated: a model on those arms finds
+its way around with `ls` and `rg`, without the depth bound `list` puts on an answer and without
+anchors on what a search finds, so an edit there follows a `read`.
 
 **`hand_off` is outside that entirely and is in every session**, `NOTHING` included, so a session
 with no files still has exactly one toolset rather than none. It is not an exception to the rule
@@ -84,10 +87,10 @@ costs around 400 tokens on every request, so it pays for itself if it heads off 
 enumeration in several thousand requests.
 
 **It runs git inside the same sandbox as `bash`.** The `ls-files` argv is this console's, but the
-worktree's configuration is the session's to write and may name a program git runs, so
-`Worktree.git` runs it behind `bwrap` with no network, no parent environment and nothing outside
-the session's checkout and its store. The cost, stated: a namespace per call, which a `list` run in
-the parent did not pay. See [what runs, and as whom](security.md).
+checkout's configuration is the session's to write and may name a program git runs, so
+`Checkout.git` runs it behind `bwrap` with no network, no parent environment and nothing outside
+the session's checkout and its store. The cost, stated: a namespace per call, set up and torn down
+around one `ls-files`. See [what runs, and as whom](security.md).
 
 ## `grep`
 
@@ -109,7 +112,8 @@ matching lines come back. Binary, oversized, vanished and otherwise unreadable f
 counted rather than making a repository-wide search fail on an unrelated artifact. Multiline,
 structural and unusually configured searches stay with `bash`.
 
-**Its standing cost is another tool definition in every filesystem-enabled request**, plus a second
+**Its standing cost is another tool definition in every request of a session with a checkout**,
+which is the only kind it is offered to, plus a second
 search interface beside the shell. That is bought for the observed common sequence it removes:
 `bash` finds a line, `read` repeats the read to get an anchor, and only then can `edit` act.
 
@@ -247,19 +251,30 @@ does not keep.
 
 **A batch runs several tools at once, and none of them sees the whole change, so the snapshot
 records it.** An edit hands back its own diff and a create its new file, but a `bash` can rewrite
-anything and hands nothing back; only the worktree knows what the batch did, because the worktree is
+anything and hands nothing back; only the checkout knows what the batch did, because the checkout is
 where it did it. `Stepping.request` captures the tree before every request, so the trees around a
 request whose response produced tool calls are both in hand the moment the *next* request snapshots,
 and the diff between them - `git diff tree:{i} tree:{i+1}`, untracked files included - is the batch's
 net change, recorded under `wrote:{i}` and replayed rather than recomputed. It is the one diff that
 covers an `edit`, a `create` and a `bash` alike, which is why it is what [the page](console.md#the-batchs-diff)
-draws below a tool panel, and why an edit's own diff is now the fine print inside the call.
+draws below a tool panel, and why an edit's own diff is the fine print inside the call.
 
-**A session with no worktree records an empty diff, and the page draws nothing for it.** The two
+**Recorded, though it could be recomputed.** Both trees are immutable objects in the store, so the
+text `git diff` prints for them is settled the moment the second is captured. What recording buys is
+that a page never runs git: a page is a pure function of already-answered questions, and a diff
+derived at render time would be a question asked during the render, on every render. The cost,
+stated: each batch's whole diff goes into a write-once checkpoint row with no bound on its size, and
+every page that draws the turn loads it, reads it into files and lines, and renders every line.
+`LONGEST_OPEN_DIFF` decides only whether the fold starts shut; a batch that rewrote a lockfile is
+still that many lines in the row, in the parse and in the markup, on every draw.
+
+**A session with no checkout records an empty diff, and the page draws nothing for it.** The two
 trees only exist where there is a repository to snapshot, so a scratch-only session's batch is as
 invisible to this as a batch that changed nothing - which is the honest reading, since a scratch has
 no history to diff against, and is why the mechanism stays on the snapshot rather than being
-rebuilt as a second one for files nobody is versioning. A turn a plugin ends at a tool call has no
+rebuilt as a second one for files nobody is versioning. That costs a row too: every request after a
+turn's first, in a session with no checkout, writes an empty `Wrote` beside its empty `Tree`, so the
+checkpoint holds a record per batch that says nothing. A turn a plugin ends at a tool call has no
 next request to snapshot, so its batch's diff is the one state that is never taken; the calls' own
 rendering still shows what each did.
 
@@ -270,7 +285,7 @@ editing pointless, since the first refused edit becomes a full rewrite that disc
 not read. `create` is that same whole-file write restricted to the one case where the objection does
 not apply, a path that does not exist yet having nothing to discard, so `here.exists()` is the
 entire difference between the tool that is here and the tool that is refused. It is also why there
-is no `delete` now that there is a `bash`: deletion addresses nothing and returns nothing, so it
+is no `delete` beside `bash`: deletion addresses nothing and returns nothing, so it
 never joins the anchoring scheme, and `rm` does it exactly as well.
 
 **The formatter is not wired into `edit`**, which was tried and dropped: exclusive bounds fix the

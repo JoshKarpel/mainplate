@@ -1,11 +1,11 @@
 # What a session takes on disk: which directories are its, and how much they hold.
 #
-# The checkpoint is the conversation, and nothing on disk is a copy of it: a worktree is what the
+# The checkpoint is the conversation, and nothing on disk is a copy of it: a checkout is what the
 # conversation is about, a scratch is what its commands fetched, and a plugin's scratch is what a
-# plugin fetched. All of it is the session's, all of it is outside the store, and all of it is what
-# archiving a session takes away while the checkpoint stays forkable. So the one place that knows
-# where all of it is has to be the place both the figure on a row and that deletion read, or the two
-# would be two lists of the same directories kept in step by hand.
+# plugin fetched. All of it is the session's, all of it is outside the database, and all of it is
+# what archiving a session takes away while the checkpoint stays forkable. So the one place that
+# knows where all of it is has to be the place both the figure on a row and that deletion read, or
+# the two would be two lists of the same directories kept in step by hand.
 #
 # The figure is *measured on a timer* rather than walked at render time, and that is a cost that was
 # measured rather than guessed. A warm walk over a toolchain is about a hundred milliseconds per
@@ -85,7 +85,7 @@ def measured(places: Iterable[Path]) -> int:
     Allocated blocks rather than apparent size, because the question is what the disk is holding
     and what deleting would free, and the two differ on every sparse file and every small one. A
     file linked more than once is counted once across the whole set, since `uv` links a venv in the
-    worktree to its cache in the scratch and both are the session's. Symbolic links are counted as
+    checkout to its cache in the scratch and both are the session's. Symbolic links are counted as
     themselves and never followed, so a link out to the machine cannot make a session look like the
     machine.
 

@@ -3,9 +3,9 @@
 #
 # Two halves share this process and one file. The console answers requests and never runs an
 # agent; the worker takes sessions off the queue, drives the agent, and never answers a request.
-# They are joined only by the store, which is what makes the split real rather than cosmetic, and
+# They are joined only by the database, which is what makes the split real rather than cosmetic, and
 # the assembly below keeps them separable: `build_app` takes whatever supplies a `Service`, so the
-# console runs over a store with a worker beside it (`open_console`), over one without
+# console runs over a database with a worker beside it (`open_console`), over one without
 # (`open_store`), or over one whose worker is another process entirely.
 #
 # They are in one process today because a personal console should be one command, and because
@@ -193,7 +193,8 @@ async def open_store(
     The file, migrated, as the service both halves read and write through.
 
     `migrate` and `prepare` both run every boot and both are idempotent. They are separate calls
-    because they own different tables: the store's three are the store's, and `sessions` is ours.
+    because they own different tables: `migrate`'s three are the durability library's, and
+    `sessions` is ours.
     """
     opened = connect(database)
     try:
@@ -201,7 +202,7 @@ async def open_store(
         await prepare(opened)
         await prepare_artifacts(opened)
         checkpointer = SqliteCheckpointer(opened)
-        # Only where there are workspaces, since a command runs in a session's worktree and a
+        # Only where there are workspaces, since a command runs in a session's checkout and a
         # console keeping none has nowhere to put one. The same pairing the file tools already have,
         # one level out.
         running = Commands(checkpointer=checkpointer, patience=patience) if workspaces is not None else None
@@ -224,18 +225,18 @@ async def open_store(
                 watching=watching,
                 # How to run a plugin, for the two events a request handler fires rather than a pass:
                 # a leader somebody typed and a control somebody pressed. Absent is a console with no
-                # plugins, which is what a store opened on its own is.
+                # plugins, which is what a database opened on its own is.
                 declaring=declaring,
             )
         finally:
-            # Inside the store's own `finally`, and the nesting is the point: cancelling a command
-            # is what makes it record that it was stopped, so the connection has to outlive that
-            # write. Closed the other way round, every command in flight at a shutdown would leave a
-            # panel saying it is still running.
+            # Inside the database's own `finally`, and the nesting is the point: cancelling a
+            # command is what makes it record that it was stopped, so the connection has to outlive
+            # that write. Closed the other way round, every command in flight at a shutdown would
+            # leave a panel saying it is still running.
             if running is not None:
                 await running.aclose()
     finally:
-        # Never `connection.close()`: the store's own `aclose` waits out any statement still
+        # Never `connection.close()`: the database's own `aclose` waits out any statement still
         # running on a worker thread, and closing under one segfaults the process rather than
         # raising.
         await opened.aclose()
@@ -244,9 +245,9 @@ async def open_store(
 @asynccontextmanager
 async def open_console(settings: Settings, config: Config, endpoints: Wires) -> AsyncIterator[Service]:
     """
-    The store, with a worker answering its sessions and a refresher keeping the models current.
+    The database, with a worker answering its sessions and a refresher keeping the models current.
 
-    Discovery happens here rather than in `serve`, and before the store is opened, because it is
+    Discovery happens here rather than in `serve`, and before the database is opened, because it is
     the last thing that can refuse: a lifespan that raises never lets the server take traffic, so
     an endpoint that cannot say what it serves is a start that fails naming the endpoint rather than
     a console whose picker is empty.
@@ -279,7 +280,7 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
     logger.info(f"repositories reachable: {len(reaching.current.repositories)}")
     workspaces = Workspaces(
         clones=Clones(root=settings.workspace_root / "clones"),
-        root=settings.workspace_root / "worktrees",
+        root=settings.workspace_root / "checkouts",
         scratch=settings.workspace_root / "scratch",
         reaching=reaching,
         bwrap=bwrap,
@@ -293,7 +294,7 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
     references = References()
     if config.model_reference is not None:
         await refreshed(references, config.model_reference)
-    # Every plugin outside a worktree, which is the bundled set and whatever `config.yaml` installs.
+    # Every plugin outside a checkout, which is the bundled set and whatever `config.yaml` installs.
     # Both are files this process cannot see change, so the *set* is fixed at startup; what each one
     # says is asked per session, on that session's own first pass, so a plugin edited on disk reaches
     # the next new session without the console being restarted. That matters most while somebody is

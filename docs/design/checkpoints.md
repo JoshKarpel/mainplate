@@ -14,7 +14,7 @@ The store's space is one key:
 
 | Key | Holds | Written by |
 |---|---|---|
-| `inbox:{n}` | A message or a command, filed in the order it arrived | `Service.say`, `Service.send`, `Service.run` and a plugin's `deliver` from outside a pass, and a plugin's tool from inside one |
+| `inbox:{n}` | A message or a command, filed in the order it arrived | `Service.say`, `Service.send`, `Service.run`, `Service.push` and a plugin's `deliver` from outside a pass, and a plugin's tool from inside one |
 
 This console's is the rest:
 
@@ -24,8 +24,8 @@ This console's is the rest:
 | `result:{entry}` | What the command delivered under `{entry}` exited with, said and took | `Commands`, when it finishes |
 | `instructions:{n}` | What the stretch of context beginning at turn `n` is answered under, exactly as the model is sent it | The first pass to reach it, before its first request, and replayed by every later one |
 | `turn:{n}:opened` | The entry this turn took | `Run.receive`, in the conversation body |
-| `turn:{n}:tree:{i}` | The worktree before the i-th model request | `Stepping.request` |
-| `turn:{n}:wrote:{i}` | The net change the i-th request's tool batch made, as a unified diff over the whole worktree; empty where nothing changed | `Stepping.request`, once the next snapshot is taken |
+| `turn:{n}:tree:{i}` | The checkout's git state before the i-th model request: its tree, the commit `HEAD` names, and its branch | `Stepping.request` |
+| `turn:{n}:wrote:{i}` | The net change the i-th request's tool batch made, as a unified diff over the whole checkout; empty where nothing changed | `Stepping.request`, once the next snapshot is taken |
 | `turn:{n}:heard:{i}` | How far down the inbox the turn had read when it made that request | `Run.pending`, through `Stepping.steering` |
 | `turn:{n}:model:{i}` | The i-th model response of that turn | `Stepping.request` |
 | `turn:{n}:refused:{i}` | Why the i-th request will never be accepted, where one never was. Exclusive with `model:{i}` | `Stepping.request` |
@@ -35,7 +35,7 @@ This console's is the rest:
 | `turn:{n}:messages` | What the model loop produced | The conversation body |
 | `failed:{at}` | Why the pass that raised at this point raised, and how far the session had got | `reporting`, in the composition root, on its way back out |
 | `archived` | That somebody archived the session, and when | `Service.archive`, on the press |
-| `archived:tree` | What the worktree held when it was taken off the disk | The reconciler in `archive.py`, just before uprooting it |
+| `archived:tree` | What the checkout held when it was taken off the disk | The reconciler in `archive.py`, just before uprooting it |
 
 **Nothing allocates a number by trying any more, and no key is contended.** A message used to name
 the turn it was going into, so writing one meant deciding which turn that was against a checkpoint
@@ -79,7 +79,7 @@ number it was just keyed by.
 It is also how the page tells a current failure from a spent one: this is why the session is stopped
 exactly while `at` is still what the session holds, because anything recorded since is a pass that
 got past it. That is `turn:{n}:refused:{i}`'s rule against a count rather than against a turn, and it
-has to be a count because a pass can fall over where no turn names it - planting a worktree, reading
+has to be a count because a pass can fall over where no turn names it - planting a checkout, reading
 a declaration, running a setup.
 
 **`turn:{n}:deferred:{i}` counts waits and not requests**, which is `refused:{i}`'s rule turned
@@ -93,7 +93,12 @@ not take yet](durability.md#a-request-the-provider-will-not-take-yet) for what t
 **The indexed kinds are numbered by position and the tool key deliberately is not.** Model requests
 happen in a fixed order, so counting them names a step the same way on every pass, and the tree
 captured before each one and the cursor recorded for it ride the same counter, so `tree:{i}`,
-`heard:{i}` and `model:{i}` are three parts of one request. `end:{j}` counts something else, which
+`heard:{i}` and `model:{i}` are three parts of one request. `wrote:{i}` is named by the same
+position and written one request later: it is the batch that `model:{i}` asked for, `tree:{i}`
+against `tree:{i+1}`, so it cannot exist until the next request has been snapshotted, and a turn's
+last request never has one. It is built from the request's position through
+`Stepping.identified` rather than counted by a counter of its own, which would be a second number
+to keep in step with the first. `end:{j}` counts something else, which
 is how many times the turn has tried to end, and carries the response count it was asked at so the
 page knows which request it went in front of. A *batch* of tool calls runs
 concurrently, so counting those would name a record by whichever won a race and hand a later pass
@@ -118,14 +123,14 @@ slot in somebody else's value, so its duration is a field on the record around i
 in both places; two places because the values are two different kinds of thing rather than for
 symmetry's sake.
 
-`opening_tree_key(n)` is `turn:{n}:tree:0`, and it is what two things mean by "this turn's tree": a
-fork plants its worktree at it, and the rule opening the turn shows it. Both want the state before
-the turn did anything.
+`opening_tree_key(n)` is `turn:{n}:tree:0`, and it is what a fork means by "this turn's state": it
+plants its checkout at it, and the fork page offers the branch it names. Both want the state before
+the turn did anything. Nothing draws it, since a snapshot is never something a reader handles.
 
 `instructions:{n}` is the one key here that is neither turn-prefixed nor named after an entry, and
 both halves of that are decided. Not turn-prefixed, because `before` copies those by shape and a
-fork that attached a repository its parent never had would inherit instructions with no guidance in
-them. Not session-level, because a forget ends a stretch of context and composing again there is
+fork that turned the network the other way, or whose plugins say something else once they are set
+up again, would inherit instructions describing its parent. Not session-level, because a forget ends a stretch of context and composing again there is
 free: the prefix it would have invalidated has just been thrown away.
 
 `archived` and `archived:tree` are session-level for the reason a fork of an archived session is a
@@ -178,7 +183,7 @@ without being taught that either.
 **The names are built in two places and have to agree.** `conversation.py` names them for the
 readers (`opened_key`, `tree_key`, `opening_tree_key`, `messages_key`, `model_key`, `tool_key`, read
 by `choice_of` and `reached` for the body, `transcript`, `so_far` and `responded` for the page,
-`before` for a fork, `planting` for a fork's worktree). `Stepping` in `durability.py` builds them
+`before` for a fork, `planting` for a fork's checkout). `Stepping` in `durability.py` builds them
 for the writers, from a turn prefix and a kind, which is what lets the durability layer name a step
 without importing the conversation. `tree_key(n, i)` and `Stepping.key("tree")` therefore produce
 the same string from opposite ends, and nothing enforces that: change one and change the other. That
@@ -263,6 +268,12 @@ An unknown *tag* is a hard parse failure, which is why readers parse by key, whe
 already knows what it asked for, and `records.Step` is only for the places that take a bag: a dump,
 an export, a migration. The HTTP boundary is the opposite case and stays that way, since an
 unrecognised disposition is a refusal.
+
+That asymmetry is why a push is a `command` with a `pushed` branch on it rather than a kind of its
+own, although nobody typed it. A new tag would leave every session that ever pushed unreadable by a
+build rolled back past it; a new field is ignored there, and the older build draws the command's
+text, `push`, as it always did. The cost is a shape nothing refuses, a shell line beside a branch,
+which only `recorded_push` writes.
 
 **Three shapes are deliberate exceptions.** `choice` is not a `records` model: it is already a
 record this console owns and has grown fields twice with no migration, and its parser encodes things

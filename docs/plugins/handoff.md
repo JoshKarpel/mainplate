@@ -21,7 +21,7 @@ settings, and nothing is replaced out of view.
 
 That was the first design and was worse in four ways at once:
 
-- **The worktree.** A fork plants a fresh one at a recorded tree, and an end-fork has no recorded
+- **The checkout.** A fork plants a fresh one at a recorded tree, and an end-fork has no recorded
   tree at all, so it falls through to the repository's default branch. The agent asked to describe
   the work would have been looking at a directory with none of it in it, and "check rather than
   recall" is the whole reason for letting it use tools.

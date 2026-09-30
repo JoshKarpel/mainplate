@@ -20,9 +20,9 @@ binds a port and the suite parallelizes; `Caller.watching` consumes a real event
 same encoder and decoder a socket would, which is how the console tests see the transcript with no
 document around it now that no endpoint serves one.
 
-The `app` fixture deliberately runs the console over a store with **no worker**, so a test asserting
-on a pending turn cannot race one. What the worker does is tested in `test_conversation.py`, a pass
-at a time.
+The `app` fixture deliberately runs the console over a database with **no worker**, so a test
+asserting on a pending turn cannot race one. What the worker does is tested in
+`test_conversation.py`, a pass at a time.
 
 **A test that builds its own app hands it the session's `assets`** rather than calling
 `served_assets()`: the inventory is a value, and building it compresses every first-party asset, which
@@ -99,7 +99,7 @@ fixtures are pinned to the *gallery's* zone for the same reason and one more: th
 page again when it was drawn against another clock, so an unpinned context would put a reload in the
 middle of every test that opens a page.
 
-**The store stamps an inbox row off its own clock, and the suite's clock does not turn it.** The
+**The database stamps an inbox row off its own clock, and the suite's clock does not turn it.** The
 session list is ordered by that stamp, so two sessions written to in one test are stamped within a
 millisecond of each other and ordered by the tiebreak, and a session nobody has written to is dated
 from the suite's 2031 clock while a written one is dated from the real one. A test about the order
@@ -146,9 +146,9 @@ a turn half-finished long enough to assert on it. It has no worker either, for t
 one more.
 
 `working` is the same fixture with workspaces behind it, which the command box needs and nothing
-else there does: a session must have a worktree before `Run` is offered at all. Two fixtures rather
+else there does: a session must have a checkout before `Run` is offered at all. Two fixtures rather
 than workspaces on the one, so a test that only drives a conversation does not get a clone and a
-worktree it never looks at. The real repository they are both built on lives in `conftest.py`, since
+checkout it never looks at. The real repository they are both built on lives in `conftest.py`, since
 two suites want one now.
 
 It drives Playwright's **async** binding, which is not a preference: `sync_playwright` runs an event
@@ -181,8 +181,6 @@ see.** These are the ones that turn on it:
   back, because the failure is a hairline.
 - `TestTheBoxYouTypeIn` asserts how one box *changes* across what is put in it, since every height
   is a correct rendering of some box.
-- `TestOpeningTheRecordBehindARequest` measures one element's box across a press, within its rule
-  rather than within the window, because the page follows the end.
 - `TestNamingAModeFromTheKeyboard` measures the message box across the press that enters a mode,
   because both layouts are correct markup.
 - `TestShuttingAFoldFromItsFrame` asks where the frame stops and the output starts.
@@ -195,6 +193,8 @@ see.** These are the ones that turn on it:
 - `TestWhereTheComposerSendsTo`, `TestTurningTheBoxIntoACommandBox` and
   `TestWhereTheCursorIsAfterSending` pin htmx's and the browser's own behaviour, which looks
   identical in the markup either way.
+- `TestWhereTheCursorIsOnArrival` asks where the focus is once a page lands, which the script
+  decides from whether the screen can hover and the server never renders.
 - `TestWatchingATurnArrive` pins a second render reaching a page nobody reloaded.
 - `TestTheSwitchOnATiersHeading` reads `checked` and `indeterminate` off the heading, because the
   server renders those once and the script sets them after that: a heading stuck on "some of them"
@@ -203,7 +203,7 @@ see.** These are the ones that turn on it:
 
 ## Real processes and real clocks
 
-`test_commands.py` runs real processes against a real worktree, and synchronises on the *record*
+`test_commands.py` runs real processes against a real checkout, and synchronises on the *record*
 rather than on a clock: a command is run by a task nobody holds a handle to, so what a test waits
 for is `result:{entry}` appearing. Any fixed sleep there is either racy or wasted, and the record is
 the actual signal.
@@ -219,7 +219,7 @@ is the mechanism - what it installs lands in the *session's* scratch, only the e
 crosses back, and a malformed line is loud. `TestAPluginThatSetsTheRepositoryUp` is the switch and
 the record, driven through a real pass, and it needs `tendings` for the reason above. Both put their
 plugin **into the repository a session plants from**, which is not incidental: the namespace binds
-the worktree, its store and two scratches, so a script anywhere else is one `bwrap` cannot find.
+the checkout, its store and two scratches, so a script anywhere else is one `bwrap` cannot find.
 
 **What that stub cannot cover is asserted against arguments instead.**
 `TestWhereARepositorysPluginRuns` reads the `bwrap` argv this console builds - the network on `setup`
@@ -227,14 +227,14 @@ and shut everywhere else, the session's scratch and the environment file on `set
 `$HOME` in the plugin's own scratch at every event including that one, a scratch per plugin per
 session - because running it to find out would be the same assertions made slowly and over a network.
 
-**`origin` and `worktree` in `conftest.py` are two different repositories.** `origin` is the plain
+**`origin` and `checkout` in `conftest.py` are two different repositories.** `origin` is the plain
 repository a stand-in forge reaches, and a test that wants the remote to move commits there;
-`worktree` is a session's checkout planted from it through `Workspaces`, with its own `.git`, its
-store, and an ignored `.env` and `built/` written in. A test that commits into `worktree` and expects
+`checkout` is a session's checkout planted from it through `Workspaces`, with its own `.git`, its
+store, and an ignored `.env` and `built/` written in. A test that commits into `checkout` and expects
 a new session to see it is committing to the wrong one. `checkout_in` is for a test that set a
 directory up itself and wants the file tools or `list` over it, with an empty store beside it.
 
 `test_snapshots.py` goes the whole way from a `Settings` with a relative database, because the other
 fixtures there hand an absolute workspace root and so would never notice a path resolved against the
 wrong directory. It parametrises over naming a base and naming nothing, because the no-base arm of
-planting a worktree is the one that is easy to get wrong.
+planting a checkout is the one that is easy to get wrong.

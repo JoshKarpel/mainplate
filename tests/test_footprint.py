@@ -60,7 +60,7 @@ class TestSizing:
         assert footprint_note(swept, Reader(zone=ZoneInfo("UTC"))).endswith("measured at 15:09")
         assert footprint_note(swept, Reader(zone=ZoneInfo("Asia/Tokyo"))).endswith("measured at 00:09")
         assert footprint_note(swept, Reader(zone=ZoneInfo("UTC"))).startswith(
-            "44 MiB on disk across this session's worktree, scratch and plugins,"
+            "44 MiB on disk across this session's checkout, scratch and plugins,"
         )
 
 
@@ -80,16 +80,16 @@ class TestMeasuring:
         assert measured([held]) == on_disk(held, nested, first, second)
 
     def test_a_file_linked_from_two_places_is_counted_once(self, tmp_path: Path) -> None:
-        """`uv` links a worktree's venv to the cache in the scratch, and both are the session's."""
+        """`uv` links a checkout's venv to the cache in the scratch, and both are the session's."""
         scratch = tmp_path / "scratch"
-        worktree = tmp_path / "worktree"
+        checkout = tmp_path / "checkout"
         scratch.mkdir()
-        worktree.mkdir()
+        checkout.mkdir()
         cached = scratch / "wheel.bin"
         cached.write_bytes(b"z" * 50_000)
-        os.link(cached, worktree / "wheel.bin")
+        os.link(cached, checkout / "wheel.bin")
 
-        assert measured([worktree, scratch]) == on_disk(worktree, scratch, cached)
+        assert measured([checkout, scratch]) == on_disk(checkout, scratch, cached)
 
     def test_a_symbolic_link_is_counted_as_itself_and_not_followed(self, tmp_path: Path) -> None:
         elsewhere = tmp_path / "elsewhere.bin"
@@ -108,7 +108,7 @@ def places(tmp_path: Path) -> Places:
     return Places(
         workspaces=Workspaces(
             clones=Clones(root=tmp_path / "clones"),
-            root=tmp_path / "worktrees",
+            root=tmp_path / "checkouts",
             scratch=tmp_path / "scratch",
             reaching=Reaching(current=Reachable(repositories=())),
             bwrap=None,
@@ -121,7 +121,7 @@ def places(tmp_path: Path) -> Places:
 class TestWhereASessionsDirectoriesAre:
     def test_a_session_in_a_repository_has_its_checkout_and_scratches(self, places: Places, tmp_path: Path) -> None:
         assert places.of("ab" * 16, "test:fixture") == (
-            tmp_path / "worktrees" / ("ab" * 16),
+            tmp_path / "checkouts" / ("ab" * 16),
             tmp_path / "scratch" / ("ab" * 16),
             tmp_path / "plugins" / ("ab" * 16),
         )
@@ -194,7 +194,7 @@ class TestSweeping:
 class TestWhatAPageSaysASessionTakes:
     """
     The figure on a row and on the session's card in the rail, read out of the holder rather than
-    walked, which is what lets these run over a store with no directories at all.
+    walked, which is what lets these run over a database with no directories at all.
     """
 
     @pytest.fixture
@@ -211,7 +211,7 @@ class TestWhatAPageSaysASessionTakes:
             answered = await caller.get(f"/sessions/{session.id}")
 
         assert answered.status == 200
-        note = "44 MiB on disk across this session&#39;s worktree, scratch and plugins, measured at 15:09"
+        note = "44 MiB on disk across this session&#39;s checkout, scratch and plugins, measured at 15:09"
         assert f'<span class="footprint" title="{note}">44 MiB</span>' in answered.text
         assert f'<dt>disk</dt><dd class="footprint" title="{note}">44 MiB</dd>' in answered.text
 

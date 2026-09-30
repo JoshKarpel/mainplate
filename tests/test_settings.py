@@ -12,9 +12,9 @@ class TestWhereWorkspacesGo:
     The workspace root is a place, not a place plus whatever directory the process is in.
 
     Everything below this runs `git` with a `cwd` of its own choosing - a clone is made from the
-    clones root, a worktree is added from the repository - so a relative root is resolved by git
+    clones root, a checkout is added from the repository - so a relative root is resolved by git
     against the wrong directory. The clone then lands at `workspaces/clones/workspaces/clones/...`,
-    the worktree lands inside the repository, and the checks that make both idempotent look at the
+    the checkout lands inside the repository, and the checks that make both idempotent look at the
     path that was asked for, never find it, and let every pass try again.
 
     Resolved here because this is where a configured path enters the process, so one absolute value
@@ -42,6 +42,6 @@ class TestWhereWorkspacesGo:
 
     def test_the_root_still_sits_beside_the_database_it_was_derived_from(self, tmp_path: Path) -> None:
         # The property the resolving must not quietly change: two consoles on two databases keep
-        # their own worktrees, because a checkpoint and the files it talks about are one session.
+        # their own checkouts, because a checkpoint and the files it talks about are one session.
         database = tmp_path / "over" / "here" / "mainplate.db"
         assert Settings(database=database).workspace_root == database.parent / "workspaces"

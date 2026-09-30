@@ -1,7 +1,7 @@
 # Where a command a model asked for actually runs, and what it can reach from there.
 #
 # The boundary here is a *mount namespace*, not a list of commands that are allowed. A denylist over
-# commands loses on contact with reality: `git stash` reads as safe and reverts the worktree, `git
+# commands loses on contact with reality: `git stash` reads as safe and reverts the checkout, `git
 # config` can set `core.hooksPath`, and a release next year adds something nobody has classified. A
 # mount says what a process can reach and is therefore already right about commands nobody has
 # thought of, including the ones a repository's own build script runs.
@@ -35,7 +35,7 @@ from mainplate.roots import environment_named
 if TYPE_CHECKING:
     # Only as a type: `snapshots.py` runs git against a checkout through a `Sandbox`, so the runtime
     # import goes that way round.
-    from mainplate.snapshots import Worktree
+    from mainplate.snapshots import Checkout
 
 BWRAP: Final = "bwrap"
 
@@ -60,7 +60,7 @@ class Venue(Enum):
 
     Separate from `Filesystem` on purpose: what a command may *read* and whether it may *dial out* are
     independent questions, and keeping them apart is what lets a session have the whole machine and
-    no network, or a worktree and a network, without one implying the other.
+    no network, or a checkout and a network, without one implying the other.
     """
 
     CONFINED = "confined"
@@ -72,23 +72,26 @@ class Filesystem(Enum):
     How much of the filesystem a session's tools can touch.
 
     Recorded on the session's `choice` and fixed for its life, like everything else there. It is not
-    free of the repository: a session that picked one is `WORKTREE` and cannot be anything else,
-    because the worktree is the point of having picked it. The other two are what a session with no
+    free of the repository: a session that picked one is `CHECKOUT` and cannot be anything else,
+    because the checkout is the point of having picked it. The other two are what a session with no
     repository chooses between, and `Service.start` is where that is made true rather than trusted.
 
     `NOTHING` is nothing *of this machine*. A session on it still gets a scratch directory of its own
     and commands inside it, where there is a sandbox to run them in: somewhere to run a script or
     keep a note across turns, reaching no file that was there before the session and none of the
     console's. It is the arm a conversation that is not about a repository lands on, and a
-    conversation still wants to run things.
+    conversation still wants to run things. The cost, stated: the arm that reaches nothing still
+    runs commands a model wrote; with the network on, that shell can dial out, which on exe.dev is
+    this console's authority over every attached repository; and every session with no repository
+    keeps a directory on disk until it is archived.
 
-    `EVERYTHING` still runs inside a sandbox, with `/` bound instead of a worktree. That buys nothing
+    `EVERYTHING` still runs inside a sandbox, with `/` bound instead of a checkout. That buys nothing
     about the filesystem and everything about the rest: the network switch is `--unshare-net`, the
     credential is kept out by `--clearenv`, and teardown is `--unshare-pid`, so dropping the sandbox
     for this arm would silently take all three with it and leave one axis unrepresentable.
     """
 
-    WORKTREE = "worktree"
+    CHECKOUT = "checkout"
     NOTHING = "nothing"
     EVERYTHING = "everything"
 
@@ -104,7 +107,7 @@ class Isolation:
     when there is one, and lands as a member rather than as a third parameter threaded through four
     signatures.
 
-    The axes stay independent of each other. The whole machine with no network and a worktree with
+    The axes stay independent of each other. The whole machine with no network and a checkout with
     one are both ordinary things to want, and both stay expressible because `EVERYTHING` is still a
     sandbox: the network switch is a flag on the same namespace rather than the absence of one.
     """
@@ -121,14 +124,14 @@ class Isolation:
         """
         A copy of this made to agree with whether a repository was picked.
 
-        A session working in one reaches its worktree and can reach nothing else, because the
-        worktree is the point of having picked it; a session working in none cannot reach a worktree
+        A session working in one reaches its checkout and can reach nothing else, because the
+        checkout is the point of having picked it; a session working in none cannot reach a checkout
         there is none of. Applied where a session is created rather than where one is read, so a
         contradictory pair is never recorded and no reader has to reconcile the two.
         """
         if repository is not None:
-            return replace(self, filesystem=Filesystem.WORKTREE)
-        if self.filesystem is Filesystem.WORKTREE:
+            return replace(self, filesystem=Filesystem.CHECKOUT)
+        if self.filesystem is Filesystem.CHECKOUT:
             return replace(self, filesystem=Filesystem.NOTHING)
         return self
 
@@ -156,10 +159,10 @@ class Bind:
 
 
 @dataclass(frozen=True, slots=True)
-class InAWorktree:
+class InACheckout:
     """A session's commands inside its own checkout, the store it borrows from, and its scratch directory."""
 
-    worktree: Worktree
+    checkout: Checkout
     scratch: Path
 
     scratch_named: RootName = "scratch"
@@ -193,7 +196,7 @@ class InAScratch:
     A session's commands inside its scratch directory and nothing else of the machine.
 
     What a session with no repository gets: somewhere to run things and keep what they made from
-    one turn to the next, with no worktree for a relative path to mean and no store to bind. It is
+    one turn to the next, with no checkout for a relative path to mean and no store to bind. It is
     `Filesystem.NOTHING`'s arm, and "nothing" still means nothing *of this machine*: the scratch is
     the session's own, made for it and taken off the disk with it.
     """
@@ -206,11 +209,11 @@ class OverEverything:
     """A session's commands over the whole machine, still inside a namespace."""
 
 
-type Confinement = InAWorktree | InAScratch | OverEverything
+type Confinement = InACheckout | InAScratch | OverEverything
 """
 Which shape of sandbox a session's commands get, decided when its agent is built.
 
-A value rather than a built `Sandbox`, because the worktree does not exist yet at that moment: a
+A value rather than a built `Sandbox`, because the checkout does not exist yet at that moment: a
 session's first pass plants it, and the agent that will use it is constructed before that happens.
 The scratch does not exist yet either, for every arm that has one: `bash` makes it on the first
 command, which is the one place that knows a command is about to run.
@@ -220,8 +223,8 @@ command, which is the one place that knows a command is about to run.
 def confined_by(confinement: Confinement) -> Sandbox:
     """The sandbox one confinement means."""
     match confinement:
-        case InAWorktree(worktree=worktree, scratch=scratch, scratch_named=named, session_scratch=session):
-            return Sandbox.around(worktree, scratch, named, session)
+        case InACheckout(checkout=checkout, scratch=scratch, scratch_named=named, session_scratch=session):
+            return Sandbox.around(checkout, scratch, named, session)
         case InAScratch(scratch=scratch):
             return Sandbox.within(scratch)
         case OverEverything():
@@ -231,10 +234,10 @@ def confined_by(confinement: Confinement) -> Sandbox:
 
 
 def starting_at(confinement: Confinement) -> Path:
-    """Where a command starts: the worktree, the scratch where that is all there is, or the root of everything."""
+    """Where a command starts: the checkout, the scratch where that is all there is, or the root of everything."""
     match confinement:
-        case InAWorktree(worktree=worktree):
-            return worktree.root
+        case InACheckout(checkout=checkout):
+            return checkout.root
         case InAScratch(scratch=scratch):
             return scratch
         case OverEverything():
@@ -254,7 +257,7 @@ def home_in(confinement: Confinement) -> Path | None:
     the whole machine, which has no scratch and gets the tmpfs.
     """
     match confinement:
-        case InAWorktree(scratch=scratch) | InAScratch(scratch=scratch):
+        case InACheckout(scratch=scratch) | InAScratch(scratch=scratch):
             return scratch
         case OverEverything():
             return None
@@ -266,13 +269,13 @@ def scratch_of(confinement: Confinement) -> Path | None:
     """
     The session's own scratch, which `bash` makes exist before the first command, or nothing at all.
 
-    Its own and never a plugin's: a plugin's namespace is `InAWorktree` around a directory of the
+    Its own and never a plugin's: a plugin's namespace is `InACheckout` around a directory of the
     plugin's, and `running.py` makes that one itself. Separate from `home_in` even though the two
     agree today, because they answer different questions and could stop agreeing without either
     being wrong.
     """
     match confinement:
-        case InAWorktree(scratch=scratch) | InAScratch(scratch=scratch):
+        case InACheckout(scratch=scratch) | InAScratch(scratch=scratch):
             return scratch
         case OverEverything():
             return None
@@ -290,10 +293,37 @@ def sandbox_command() -> str:
     found = shutil.which(BWRAP)
     if found is None:
         raise NoSandbox(
-            f"{BWRAP!r} is not on PATH, and it is what confines a command to a session's worktree. "
+            f"{BWRAP!r} is not on PATH, and it is what confines a command to a session's checkout. "
             "Install bubblewrap, or run a console whose sessions have no repository."
         )
     return found
+
+
+def checkout_places(checkout: Checkout) -> tuple[Bind, Bind]:
+    """
+    What any namespace around a checkout binds for the checkout's sake: it, and its store.
+
+    **The checkout is bound read-write whole, `.git` included**, so git works in there the way it
+    works anywhere: `add`, `commit`, `merge`, `rebase` and `fetch` all do what they say, against
+    this session's refs and nobody else's. What that costs is that the checkout's configuration is
+    the session's to write, and several of its keys name a program git runs. So nothing in the
+    parent runs git against it; `Checkout.git` runs it in a namespace of this shape too. See [what
+    runs, and as whom](../../docs/design/security.md).
+
+    **The store is bound read-only**, because the checkout borrows its objects through
+    `alternates` and `origin` is the store. Every session on the repository can therefore read
+    every tree any of them snapshotted; none of them can write it, which is what keeps one
+    session's git from reaching another's.
+
+    One function for the two namespaces a checkout is seen through, a session's commands in
+    `Sandbox.around` and git this console runs in `Checkout.confined`, because they have to agree:
+    a capture that bound the checkout differently from the command that wrote it would be reading
+    a different repository from the one the session was working in, and nothing would say so.
+    """
+    return (
+        Bind(path=checkout.root, writable=True, name="checkout"),
+        Bind(path=checkout.store.path, writable=False),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,7 +337,7 @@ class Sandbox:
     namespace from being things the filesystem answer can change by accident.
 
     Every path is absolute and every one is bound at *its own* path inside the namespace rather than
-    at a tidy `/worktree`. A checkout's `alternates` file names the store by its absolute path, so a
+    at a tidy `/checkout`. A checkout's `alternates` file names the store by its absolute path, so a
     remapped store is one whose borrowed objects every git in here fails to find.
     """
 
@@ -316,25 +346,16 @@ class Sandbox:
     @classmethod
     def around(
         cls,
-        worktree: Worktree,
+        checkout: Checkout,
         scratch: Path,
         scratch_named: RootName = "scratch",
         session_scratch: Path | None = None,
     ) -> Sandbox:
         """
-        A checkout, its store read-only, and a scratch directory: what a `WORKTREE` session reaches.
+        A checkout, its store read-only, and a scratch directory: what a `CHECKOUT` session reaches.
 
-        **The checkout is bound read-write whole, `.git` included**, so git works in here the way it
-        works anywhere: `add`, `commit`, `merge`, `rebase` and `fetch` all do what they say, against
-        this session's refs and nobody else's. What that costs is that the checkout's configuration
-        is the session's to write, and several of its keys name a program git runs. So nothing in the
-        parent runs git against it; `Worktree.git` runs it in here too. See [what runs, and as
-        whom](../../docs/design/security.md).
-
-        **The store is bound read-only**, because the checkout borrows its objects through
-        `alternates` and `origin` is the store. Every session on the repository can therefore read
-        every tree any of them snapshotted, which a shared clone always allowed; none of them can
-        write it, which is what keeps one session's git from reaching another's.
+        The checkout and its store are `checkout_places`, which says why each is bound the way it
+        is and why that is one function rather than written here.
 
         `session_scratch` adds a second writable directory under the name a command finds the
         session's own under, which is what a plugin getting the repository ready is given at `setup`.
@@ -343,12 +364,12 @@ class Sandbox:
 
         All of them are **absolute as a precondition**: `Settings.workspace_root` resolves once
         where a configured path enters the process, so everything derived from it is already
-        absolute and nothing here re-establishes it.
+        absolute and nothing here re-establishes it. A relative path would be resolved against
+        whatever directory bwrap happened to start in, which is not a thing to guess at per call.
         """
         return cls(
             places=(
-                Bind(path=worktree.root, writable=True, name="worktree"),
-                Bind(path=worktree.store.path, writable=False),
+                *checkout_places(checkout),
                 Bind(path=scratch, writable=True, name=scratch_named),
                 *(() if session_scratch is None else (Bind(path=session_scratch, writable=True, name="scratch"),)),
             )
@@ -374,7 +395,7 @@ class Sandbox:
         Still a sandbox, and that is the point: the filesystem is wide open here, so what this is
         still buying is the network namespace, the cleared environment, and a pid namespace that
         reaps whatever a command leaves behind. A session on this arm can read the console's own
-        configuration and its store, which is what choosing it means.
+        configuration and its database, which is what choosing it means.
         """
         return cls(places=(Bind(path=Path("/"), writable=True),))
 
@@ -389,7 +410,7 @@ class Sandbox:
         The `bwrap` prefix a command runs behind, as the arguments before the command itself.
 
         `home` is what `$HOME` is inside, and the default is the tmpfs, which is what a session over
-        the whole machine gets. A session in a worktree passes its scratch, and a confined plugin
+        the whole machine gets. A session in a checkout passes its scratch, and a confined plugin
         passes whichever directory is its to keep things in: every tool that fetches keeps what it
         fetched under `$HOME`, so on a tmpfs a `setup` that resolved an interpreter and a package
         tree would find neither at the next call, with the network shut and no way to fetch them
@@ -402,11 +423,13 @@ class Sandbox:
         repository's script setting `PATH` for every plugin would redirect what the repository's
         other plugins execute at every turn boundary.
 
-        A `WORKTREE` sandbox binds the complete checkout read-write, including its private Git
-        metadata, and the scratch read-write; a `NOTHING` sandbox binds the scratch alone. Git may
-        therefore add, commit, merge, rebase and continue conflicts normally. Any repository
-        configuration or hook Git executes still runs inside this same namespace, with the parent's
-        environment cleared and only this session's directories writable.
+        A `CHECKOUT` sandbox binds the checkout read-write whole, `.git` included, its store
+        read-only, and the scratch read-write; a `NOTHING` sandbox binds the scratch alone. So git in
+        here adds, commits, merges and rebases as it would anywhere, and what that costs is that a
+        hook or a configured program the session wrote runs too. It runs *in here*, with the
+        parent's environment cleared and only this session's directories writable, which is what
+        makes it the session's own `bash` over again rather than a way out of it; see
+        `checkout_places`.
 
         A `EVERYTHING` sandbox binds `/` read-write instead, which subsumes all of that and is the point
         of choosing it. Everything below the binds is identical either way, which is why there is one
@@ -446,9 +469,9 @@ class Sandbox:
             "--tmpfs",
             SOMEWHERE_TO_WRITE,
             # **After** the tmpfs, and that ordering is the whole of why it works. bwrap applies
-            # these in the order given, so a worktree root that happens to live under `/tmp` is
+            # these in the order given, so a checkout root that happens to live under `/tmp` is
             # covered by the tmpfs and vanishes if these come first, leaving a sandbox with no
-            # worktree in it and a command that cannot even change directory into one.
+            # checkout in it and a command that cannot even change directory into one.
             *places,
             *network,
             # `--unshare-pid` is teardown as much as isolation: killing the namespace's init reaps

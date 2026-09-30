@@ -59,6 +59,7 @@ from mainplate.conversation import recorded_steer
 from mainplate.conversation import result_key
 from mainplate.conversation import tool_key
 from mainplate.forge import Workspaces
+from mainplate.markup import DRAWABLE
 from mainplate.pages import CACHE_ID
 from mainplate.pages import OPENING
 from mainplate.pages import ZONE_COOKIE
@@ -72,7 +73,6 @@ from mainplate.plugins.running import Spawned
 from mainplate.sandbox import Filesystem
 from mainplate.service import Service
 from mainplate.sessions import read_tending
-from scripts.gallery import CAPTIONS
 from scripts.gallery import ZONE
 from scripts.gallery import pages
 from scripts.gallery import write
@@ -1158,10 +1158,13 @@ class TestTheGridMonospaceIsDrawnOn:
             assert [family.split(",")[0].strip('"') for family in drawn] == ["JuliaMono"] * len(MONOSPACE)
 
         for where in MONOSPACE:
-            measured = await self.rasterised(page, where)
+            # Measured inside each subtest rather than once above them, so a selector that matches
+            # nothing fails the claims that read it and leaves the rest of the loop running.
             with subtests.test("a run of box drawing has no gap in it", where=where):
+                measured = await self.rasterised(page, where)
                 assert measured["gaps"] == 0
             with subtests.test("the pitch stays inside the ink it joins with", where=where):
+                measured = await self.rasterised(page, where)
                 # Strictly inside, which is the stylesheet's own rule: the pitch is a pixel under the
                 # span, so that the two ways of being wrong are not equally likely. The gap check
                 # above is the coarse half and this is the exact one - a canvas rasterises a glyph
@@ -1294,12 +1297,25 @@ class TestDrawingAFence:
         image = pre.locator("img.drawing")
         await expect(image).to_be_visible(timeout=15_000)
         assert any(url.endswith("/assets/mermaid.min.js") for url in fetched), "and the library where there is one"
-        assert await self.loaded(image), "the library's SVG draws as an image"
-        # At the diagram's own size rather than the block's: the library declares a percentage
-        # width, which inside an image would be the whole block.
-        box = await image.bounding_box()
-        assert box is not None
-        assert box["width"] < 600, f"a three-node flowchart drawn {box['width']}px wide is one stretched to the block"
+
+    @pytest.mark.timeout(30)
+    async def test_a_diagram_is_drawn_at_its_own_size_rather_than_the_blocks(
+        self, page: Page, gallery: str, subtests: pytest.Subtests
+    ) -> None:
+        pre = await self.drawable(page, gallery, "mermaid")
+        image = pre.locator("img.drawing")
+        await expect(image).to_be_visible(timeout=15_000)
+
+        with subtests.test("the library's SVG draws as an image"):
+            assert await self.loaded(image)
+
+        with subtests.test("at the diagram's own width"):
+            # The library declares a percentage width, which inside an image would be the whole block.
+            box = await image.bounding_box()
+            assert box is not None
+            assert box["width"] < 600, (
+                f"a three-node flowchart drawn {box['width']}px wide is one stretched to the block"
+            )
 
     @pytest.mark.timeout(30)
     async def test_a_diagram_that_cannot_be_drawn_says_so_in_the_block(self, page: Page, gallery: str) -> None:
@@ -1322,6 +1338,15 @@ class TestDrawingAFence:
         with subtests.test("a fence that is not a picture takes no button"):
             await expect(plain.locator(".copy")).to_have_count(1)
             await expect(plain.locator(".draw")).to_have_count(0)
+
+        # The script keeps a map of its own from label to kind, and this is what holds it to the set
+        # `markup.py` lets onto the page: a label allowed there and missing here is a fence the page
+        # keeps and the script shows as code with nothing to press.
+        for label in sorted(DRAWABLE):
+            with subtests.test(f"a fence labelled {label.removeprefix('language-')} takes the draw button"):
+                fence = page.locator(f".panel pre:has(> code.{label})")
+                assert await fence.count(), "the gallery draws a fence of every label the page allows"
+                await expect(fence.first.locator(".draw")).to_have_count(1)
 
         with subtests.test("the copy button stays in its corner and the draw button stands to its left"):
             # The copy button sits where it does on every other block, so a reader's hand finds it
@@ -1366,8 +1391,7 @@ class TestDrawingAFence:
 
 class TestALineThatDoesNotFit:
     """
-    A block of lines scrolls sideways rather than wrapping, and one whose lines do not fit takes a
-    button that opens it on its own, as wide as the window.
+    A block of lines scrolls sideways rather than wrapping.
 
     A browser because every answer here is a measurement: a wrapped diff and a scrolling one are both
     correct markup, and whether a block overflows is a property of the layout and never of the page.
@@ -1409,61 +1433,6 @@ class TestALineThatDoesNotFit:
             longest, *rows = widths
             assert all(abs(row - longest) < 1 for row in rows), f"every row {longest}px wide, and they were {rows}"
 
-        with subtests.test("a block takes a focus button exactly where its lines do not fit"):
-            await expect(pre.locator("[data-focus]")).to_have_count(1)
-            mismatched = await page.evaluate(
-                """() => [...document.querySelectorAll('.transcript .panel pre')].filter((pre) => {
-                  const code = pre.querySelector(':scope > code');
-                  const overflows = Boolean(code) && !code.hidden && code.scrollWidth > code.clientWidth;
-                  return overflows !== Boolean(pre.querySelector(':scope > [data-focus]'));
-                }).map((pre) => pre.closest('.panel').id)"""
-            )
-            fitting = await page.locator(".transcript .panel pre:not(:has(> [data-focus]))").count()
-            assert fitting > 0, "the gallery has blocks that fit, or the rule is unexercised"
-            assert mismatched == []
-
-    async def test_pressing_focus_opens_the_block_wider_than_its_column_and_escape_puts_it_away(
-        self, page: Page, gallery: str
-    ) -> None:
-        pre = await self.batch(page, gallery)
-        column = await pre.bounding_box()
-        assert column is not None
-        await pre.locator("[data-focus]").click()
-        dialog = page.locator("dialog#focused")
-        await expect(dialog).to_be_visible()
-        opened = await dialog.bounding_box()
-        assert opened is not None
-        assert opened["width"] > column["width"] + 200, f"{opened['width']}px against a {column['width']}px column"
-        shown = await dialog.locator("pre").text_content()
-        written = await pre.locator("code").text_content()
-        assert shown == written, "the block as it was, and none of the buttons seated in it"
-        await page.keyboard.press("Escape")
-        await expect(dialog).to_be_hidden()
-
-    async def test_a_press_on_the_backdrop_puts_it_away(self, page: Page, gallery: str) -> None:
-        pre = await self.batch(page, gallery)
-        await pre.locator("[data-focus]").click()
-        dialog = page.locator("dialog#focused")
-        await expect(dialog).to_be_visible()
-        await page.mouse.click(2, 2)
-        await expect(dialog).to_be_hidden()
-
-    async def test_copying_a_block_that_can_be_focused_hands_over_none_of_the_button(
-        self, page: Page, gallery: str
-    ) -> None:
-        await page.context.grant_permissions(["clipboard-read", "clipboard-write"])
-        pre = await self.batch(page, gallery)
-        await expect(pre.locator("[data-focus]")).to_have_count(1)
-        await pre.locator("[data-copy]").click()
-        taken = str(await page.evaluate("() => navigator.clipboard.readText()"))
-        assert taken == await pre.locator("code").text_content()
-
-    async def test_a_phone_is_offered_no_focus_button(self, phone: Page, gallery: str) -> None:
-        """A window a phone's width is barely wider than the block, so the button is not drawn there."""
-        pre = await self.batch(phone, gallery)
-        await expect(pre.locator("[data-focus]")).to_have_count(1)
-        await expect(pre.locator("[data-focus]")).to_be_hidden()
-
 
 SIDES = pytest.mark.parametrize(
     ("column", "box"),
@@ -1490,10 +1459,10 @@ class TestPuttingASideColumnAway:
     ) -> None:
         await page.goto(f"{gallery}/session.html", wait_until="load")
         before = await width_of(page, "main")
-        fold = page.locator(f"{box} > .fold")
-        await expect(fold).to_have_attribute("aria-expanded", "true")
-        await fold.click()
-        await expect(fold).to_have_attribute("aria-expanded", "false")
+        away = page.locator(f"{box} > .away")
+        await expect(away).to_have_attribute("aria-expanded", "true")
+        await away.click()
+        await expect(away).to_have_attribute("aria-expanded", "false")
         await expect(page.locator(f"{box} > [class$='__sheet']")).to_be_hidden()
         assert await width_of(page, box) < 40, "a strip the width of the button"
         assert await width_of(page, "main") > before + 200
@@ -1503,31 +1472,39 @@ class TestPuttingASideColumnAway:
         self, page: Page, gallery: str, column: str, box: str
     ) -> None:
         await page.goto(f"{gallery}/session.html", wait_until="load")
-        await page.locator(f"{box} > .fold").click()
+        await page.locator(f"{box} > .away").click()
         await page.reload(wait_until="load")
-        assert await page.evaluate(f"() => document.documentElement.dataset.{column}") == "shut"
-        await expect(page.locator(f"{box} > .fold")).to_have_attribute("aria-expanded", "false")
-        await page.locator(f"{box} > .fold").click()
+        assert await page.evaluate(f"() => document.documentElement.dataset.{column}") == "away"
+        await expect(page.locator(f"{box} > .away")).to_have_attribute("aria-expanded", "false")
+        await page.locator(f"{box} > .away").click()
         await page.reload(wait_until="load")
         await expect(page.locator(f"{box} > [class$='__sheet']")).to_be_visible()
 
     async def test_the_list_put_away_on_a_session_is_away_on_the_dashboard(self, page: Page, gallery: str) -> None:
         await page.goto(f"{gallery}/session.html", wait_until="load")
-        await page.locator(".sessions > .fold").click()
+        await page.locator(".sessions > .away").click()
         await page.goto(f"{gallery}/dashboard.html", wait_until="load")
         await expect(page.locator(".sessions__sheet")).to_be_hidden()
-        await expect(page.locator(".sessions > .fold")).to_have_attribute("aria-expanded", "false")
+        await expect(page.locator(".sessions > .away")).to_have_attribute("aria-expanded", "false")
 
-    async def test_a_narrow_window_draws_no_fold_and_its_clasp_still_slides_the_list_out(
+    async def test_a_narrow_window_draws_no_button_and_its_clasp_still_slides_the_list_out(
         self, phone: Page, gallery: str
     ) -> None:
         """What a wide window put away is not the narrow shape's to act on: there the clasps put both away."""
-        await phone.add_init_script("localStorage.setItem('mainplate:list', 'shut')")
+        await phone.add_init_script("localStorage.setItem('mainplate:list', 'away')")
         await phone.goto(f"{gallery}/session.html", wait_until="load")
-        await expect(phone.locator(".sessions > .fold")).to_be_hidden()
+        await expect(phone.locator(".sessions > .away")).to_be_hidden()
         await phone.locator(".sessions__clasp").click()
         await expect(phone.locator(".sessions__sheet")).to_be_visible()
         await expect(phone.locator(".sessions__sheet .home")).to_be_in_viewport()
+
+    async def test_without_the_script_no_button_is_offered_and_both_columns_are_out(
+        self, unscripted: Page, gallery: str
+    ) -> None:
+        """A button that does nothing without the script is a control that lies, so the script seats it."""
+        await unscripted.goto(f"{gallery}/session.html", wait_until="load")
+        await expect(unscripted.locator(".sessions__sheet")).to_be_visible()
+        await expect(unscripted.locator(".away")).to_have_count(0)
 
 
 class TestTheWidthTheConversationIsReadAt:
@@ -1549,7 +1526,7 @@ class TestTheWidthTheConversationIsReadAt:
         self, page: Page, gallery: str
     ) -> None:
         await page.goto(f"{gallery}/session.html", wait_until="load")
-        await page.locator(".sessions > .fold").click()
+        await page.locator(".sessions > .away").click()
         before = await width_of(page, ".transcript")
         await self.drag(page, -120)
         after = await width_of(page, ".transcript")
@@ -1558,7 +1535,7 @@ class TestTheWidthTheConversationIsReadAt:
 
     async def test_the_width_dragged_to_is_kept_across_a_load(self, page: Page, gallery: str) -> None:
         await page.goto(f"{gallery}/session.html", wait_until="load")
-        await page.locator(".sessions > .fold").click()
+        await page.locator(".sessions > .away").click()
         await self.drag(page, -120)
         dragged = await width_of(page, ".transcript")
         await page.reload(wait_until="load")
@@ -1571,8 +1548,8 @@ class TestTheWidthTheConversationIsReadAt:
         await page.add_init_script("localStorage.setItem('mainplate:reading', '400')")
         await page.goto(f"{gallery}/session.html", wait_until="load")
         # Both columns away, so the room is wider than the measure and the width is what decides.
-        await page.locator(".sessions > .fold").click()
-        await page.locator(".rail > .fold").click()
+        await page.locator(".sessions > .away").click()
+        await page.locator(".rail > .away").click()
         room = await page.evaluate(
             """() => {
               const main = document.querySelector('main');
@@ -1585,41 +1562,44 @@ class TestTheWidthTheConversationIsReadAt:
             "() => document.documentElement.scrollWidth > document.documentElement.clientWidth"
         )
 
-    async def test_the_arrows_move_the_edge_and_home_puts_the_measure_back(self, page: Page, gallery: str) -> None:
+    async def test_the_arrows_move_the_edge(self, page: Page, gallery: str) -> None:
         await page.goto(f"{gallery}/session.html", wait_until="load")
-        await page.locator(".sessions > .fold").click()
+        await page.locator(".sessions > .away").click()
         measure = await width_of(page, ".transcript")
         await page.locator(".reading__grip").focus()
         await page.keyboard.press("ArrowLeft")
         await page.keyboard.press("ArrowLeft")
         assert await width_of(page, ".transcript") > measure + 50
+
+    async def test_home_puts_the_measure_back_and_keeps_nothing(self, page: Page, gallery: str) -> None:
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        await page.locator(".sessions > .away").click()
+        measure = await width_of(page, ".transcript")
+        await self.drag(page, -120)
+        await page.locator(".reading__grip").focus()
         await page.keyboard.press("Home")
         assert await width_of(page, ".transcript") == pytest.approx(measure, abs=1)
         assert await page.evaluate("() => localStorage.getItem('mainplate:reading')") is None
 
     async def test_a_double_press_puts_the_measure_back(self, page: Page, gallery: str) -> None:
         await page.goto(f"{gallery}/session.html", wait_until="load")
-        await page.locator(".sessions > .fold").click()
+        await page.locator(".sessions > .away").click()
         measure = await width_of(page, ".transcript")
         await self.drag(page, -120)
         await page.locator(".reading__grip").dblclick()
         assert await width_of(page, ".transcript") == pytest.approx(measure, abs=1)
 
-    async def test_there_is_no_grip_where_there_is_no_conversation_or_no_room(
-        self, page: Page, phone: Page, gallery: str
-    ) -> None:
+    async def test_there_is_no_grip_where_there_is_no_conversation(self, page: Page, gallery: str) -> None:
         await page.goto(f"{gallery}/dashboard.html", wait_until="load")
+        # The control: the script ran, or a grip it never seated would pass for one it declined to.
+        await expect(page.locator(".sessions > .away")).to_have_count(1)
         await expect(page.locator(".reading__grip")).to_have_count(0)
+
+    async def test_there_is_no_grip_where_there_is_no_room(self, phone: Page, gallery: str) -> None:
+        """A phone's conversation already has the whole width."""
         await phone.goto(f"{gallery}/session.html", wait_until="load")
+        await expect(phone.locator(".reading__grip")).to_have_count(1)
         await expect(phone.locator(".reading__grip")).to_be_hidden()
-
-
-async def test_every_gallery_page_has_a_caption_and_nothing_else_does() -> None:
-    """
-    The documentation site lists the gallery from `CAPTIONS`, so a page without one would be listed
-    with nothing beside it and a caption without a page would name a link to nowhere.
-    """
-    assert set(CAPTIONS) == set(pages())
 
 
 class TestWhatComesOutOfACopyButton:
@@ -2549,11 +2529,12 @@ class TestFoldingADocumentTheConsoleHandedOver:
 
         with subtests.test("a shut one names what is in it"):
             # Which is the whole reason drawing them shut costs nothing: a guidance block opens by
-            # naming the file it came from, and a system prompt by saying what the session is for.
+            # naming the file it came from, and a system prompt by the first block it is composed
+            # of, which is the console's own note on what the page draws.
             told = await panels.locator("> .panel__meta > .opening").evaluate_all(
                 "lines => lines.map(line => line.textContent)"
             )
-            assert told[0].startswith("You are a helpful assistant")
+            assert told[0].startswith("A fenced code block labelled `mermaid` or `svg` is drawn as a picture")
             assert told[1].startswith("`src/mainplate/AGENTS.md`, guidance for this part of the repository:")
 
     async def test_the_frame_around_it_shuts_the_panel_it_belongs_to(self, page: Page, gallery: str) -> None:
@@ -2568,88 +2549,16 @@ class TestFoldingADocumentTheConsoleHandedOver:
         await panel.locator(".panel__role").click()
         await expect(panel).to_have_attribute("open", "")
 
-        # The band below the prose, which is where a reader who has just read to the end already is.
-        box = await panel.locator(".block--document").bounding_box()
+        # The band below the prose, which is where a reader who has just read to the end already is,
+        # and so brought into the window first: a prompt taller than the window has its band below it,
+        # and a press there lands on nothing.
+        document = panel.locator(".block--document")
+        await document.evaluate("(block) => block.scrollIntoView({ block: 'end' })")
+        box = await document.bounding_box()
         assert box
         await page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] - 2)
 
         await expect(panel).not_to_have_attribute("open", "")
-
-
-class TestOpeningTheRecordBehindARequest:
-    """
-    The `r{i}` on a rule stays exactly where it was when it is pressed.
-
-    A control that moves under the finger that pressed it is a control a reader cannot press twice,
-    and it reads as the page having jumped rather than as something having opened. Invisible to a
-    markup assertion and to a still alike: both states are correct markup and each screenshot is
-    right on its own, so what has to be measured is one element's box across the press.
-    """
-
-    async def opened(self, console: tuple[str, Service], page: Page) -> Locator:
-        """A conversation with one recorded request in it, as the closed tag on that request's rule."""
-        url, service = console
-        session = await started(service, "what is a mainplate", DEFAULT_CHOICE)
-        await taking(service, session.id)
-        await service.checkpointer.supply(session.id, model_key(0, 0), PARTWAY)
-        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
-        tag = page.locator(".tag").first
-        await expect(tag).to_have_count(1)
-        return tag
-
-    async def where_on_its_rule(self, tag: Locator) -> dict[str, float]:
-        """
-        Where the marker sits within the rule it is on, rather than within the window.
-
-        The window is the wrong frame for this one question: the page follows the end, so a record
-        opening at the bottom of a conversation scrolls the transcript under it, which is the
-        console doing what it is asked and would report as the marker having moved. What the marker
-        must not do is change its place on its own line.
-        """
-        return dict(
-            await tag.evaluate(
-                """(tag) => {
-                    const summary = tag.querySelector('summary').getBoundingClientRect();
-                    const rule = tag.closest('.rule').getBoundingClientRect();
-                    return { x: summary.x - rule.x, y: summary.y - rule.y };
-                }"""
-            )
-        )
-
-    async def test_the_marker_does_not_move_when_it_is_pressed(self, page: Page, console: tuple[str, Service]) -> None:
-        tag = await self.opened(console, page)
-        before = await self.where_on_its_rule(tag)
-        await tag.locator("summary").click()
-        await expect(tag).to_have_attribute("open", "")
-        assert await self.where_on_its_rule(tag) == before
-
-    async def test_the_record_opens_underneath_the_rule_it_belongs_to(
-        self, page: Page, console: tuple[str, Service]
-    ) -> None:
-        """
-        The other half of the same measurement: nothing moving is also what a tag that never opened
-        would report, so the record has to be shown to arrive, below the line and across it.
-        """
-        tag = await self.opened(console, page)
-        summary = tag.locator("summary")
-        record = tag.locator(".record__json")
-        await expect(record).to_be_hidden()
-        await summary.click()
-        await expect(record).to_be_visible()
-        # All three boxes in one go, because the page follows the end: a record opening at the
-        # bottom scrolls the transcript under it, so two measurements taken a call apart are two
-        # measurements of different scroll positions and their difference means nothing.
-        placed = await tag.evaluate(
-            """(tag) => {
-                const box = one => { const {x, y, width, height} = one.getBoundingClientRect();
-                                     return {x, y, width, height}; };
-                return { summary: box(tag.querySelector('summary')),
-                         record: box(tag.querySelector('.record__json')),
-                         rule: box(tag.closest('.rule')) };
-            }"""
-        )
-        assert placed["record"]["y"] >= placed["summary"]["y"] + placed["summary"]["height"]
-        assert placed["record"]["width"] > placed["rule"]["width"] / 2
 
 
 async def landed_on_the_branch(console: tuple[str, Service], page: Page) -> None:
@@ -2657,7 +2566,7 @@ async def landed_on_the_branch(console: tuple[str, Service], page: Page) -> None
     Answer the settings step of the branch a send just navigated to, so a transcript is drawn.
 
     **A fork lands on that step**, because it carries its parent's turns and none of its plugins, and
-    that is the console working rather than a fixture to loosen: a branch plants a fresh worktree and
+    that is the console working rather than a fixture to loosen: a branch plants a fresh checkout and
     may be planted at a tree whose `.mainplate/` says something new, so it asks again. This console
     runs no worker, so the pass that press would ask for never happens and the registration is written
     here instead of clicked.
@@ -2784,18 +2693,18 @@ class TestAPluginsOwnCard:
 
         # At rest the row is marked clean and its own `Set` is not drawn: there is nothing to press.
         await expect(page.locator(".plugin__number")).to_have_attribute("data-clean", "")
-        await expect(page.locator(".plugin__set")).to_be_hidden()
+        await expect(page.locator(".plugin__number .typed__set")).to_be_hidden()
 
         await page.fill(".plugin__number input", "120")
 
         await expect(page.locator(".plugin__number")).to_have_attribute("data-dirty", "")
-        await expect(page.locator(".plugin__set")).to_be_visible()
+        await expect(page.locator(".plugin__number .typed__set")).to_be_visible()
         assert await read_tending(service.database, session) == before, "typing records nothing"
 
-        await page.click(".plugin__set")
+        await page.click(".plugin__number .typed__set")
 
         await expect(page.locator(".plugin__number")).to_have_attribute("data-clean", "")
-        await expect(page.locator(".plugin__set")).to_be_hidden()
+        await expect(page.locator(".plugin__number .typed__set")).to_be_hidden()
         assert (await read_tending(service.database, session)).of("bundled:handoff")["reserve"] == 120
 
     async def test_typing_the_recorded_value_back_leaves_nothing_to_press(
@@ -2826,6 +2735,50 @@ class TestAPluginsOwnCard:
         """
         await a_conversation(console, page)
         await expect(page.locator(".plugin__unit")).to_have_text("K")
+
+
+class TestNamingASessionFromItsCard:
+    """
+    The name row, which is a typed row like a plugin's number and has to behave as one.
+
+    A browser for `TestAPluginsOwnCard`'s reason - whether the mark is drawn is a comparison against a
+    property no server renders - and one more: the tab's title changing without a reload is htmx
+    lifting a `<title>` out of the answer, which no markup assertion can see happen.
+    """
+
+    async def test_the_name_waits_to_be_set_and_says_that_it_is_waiting(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """Typing into the box marks the row and records nothing, exactly as a number does."""
+        _, service = console
+        await a_conversation(console, page)
+        row = page.locator(".rename .typed")
+        await expect(row).to_have_attribute("data-clean", "")
+        await expect(row.locator(".typed__set")).to_be_hidden()
+
+        await row.locator("input").fill("A better name")
+
+        await expect(row).to_have_attribute("data-dirty", "")
+        await expect(row.locator(".typed__set")).to_be_visible()
+        assert (await service.listed())[0].title == "what is a mainplate", "typing records nothing"
+
+    async def test_pressing_the_mark_renames_the_tab_without_reloading_the_page(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """
+        The row swaps itself and the tab follows from the answer's `<title>`. A marker left on
+        `window` before the press is how "without reloading" is seen: a reload would take it away.
+        """
+        await a_conversation(console, page)
+        await page.evaluate("window.stillThisDocument = true")
+        row = page.locator(".rename .typed")
+
+        await row.locator("input").fill("A better name")
+        await row.locator(".typed__set").click()
+
+        await expect(page).to_have_title("A better name")
+        await expect(page.locator(".rename .typed")).to_have_attribute("data-clean", "")
+        assert await page.evaluate("window.stillThisDocument === true")
 
 
 class TestTheSwitchOnATiersHeading:
@@ -3065,11 +3018,12 @@ async def working(
     tmp_path: Path, catalogues: Catalogues, workspaces: Workspaces, assets: Inventory
 ) -> AsyncIterator[tuple[str, Service]]:
     """
-    The console over a store with files, which is what a command needs somewhere to run in.
+    The console over a database with workspaces beside it, which is what a command needs somewhere
+    to run in.
 
     A second fixture rather than workspaces on the first, because the one above is deliberately a
     console with none: what most of these drive is a conversation, and giving every one of them a
-    real repository would put a clone and a worktree behind tests that never look at either.
+    real repository would put a clone and a checkout behind tests that never look at either.
     """
     async with open_store(tmp_path / "mainplate.db", LEASE, catalogues, workspaces) as service:
         async with serving(build_app(already(service), assets), port=0) as server:
@@ -3715,7 +3669,8 @@ class TestWhereTheCursorIsOnArrival:
 
 class TestWhereTheCursorIsAfterSending:
     """
-    Back in the box, whichever way the message left it.
+    Back in the box where there is a pointer, whichever way the message left it, and left out of it
+    on a touch screen.
 
     Both ways lose the focus, for reasons no markup assertion can see. Pressing Send moves it to the
     button, and `hx-disable` blurs the box itself while the post is in flight, so by the time the
@@ -3723,9 +3678,9 @@ class TestWhereTheCursorIsAfterSending:
     conversation is type again, that is a click or a Tab of finding the box before every message
     after the first.
 
-    On a touch screen the box is not, and it is the same reason opening a session does not put the
-    cursor in the box: focus brings the keyboard up over the answer the reader is now watching for,
-    so there is nothing to type into until they touch it.
+    On a touch screen the cursor is left out of the box, for the reason opening a session leaves it
+    out: focus brings the keyboard up over the answer the reader is now watching for, so there is
+    nothing to type into until they touch it.
 
     It is also a matter of *when*: htmx re-enables what it disabled just after the event this is
     driven from, so a focus asked for any sooner is asked of a box that is still disabled and takes
@@ -3752,7 +3707,7 @@ class TestWhereTheCursorIsAfterSending:
         await expect(page.locator("#transcript")).to_contain_text("one more thing")
         await expect(page.locator(".composer textarea")).to_be_focused()
 
-    async def test_a_phone_sends_and_the_box_stays_off_the_cursor(
+    async def test_a_phone_sends_and_the_cursor_stays_out_of_the_box(
         self, phone: Page, console: tuple[str, Service]
     ) -> None:
         await a_conversation(console, phone)

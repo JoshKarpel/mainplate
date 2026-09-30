@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from collections.abc import Iterator
 from functools import lru_cache
 from typing import Final
@@ -44,6 +45,14 @@ TOKENS: Final[frozenset[str]] = frozenset({name for name in STANDARD_TYPES.value
 # per label would be a class of the model's choosing on the page. `language-` is `codehilite`'s own
 # prefix, kept so the class reads as what it is. Everything else a fence is labelled with reaches
 # the formatter the same way and is stripped by the sanitiser, which is the test that pins this.
+#
+# One fact written in three places, because three readers need it in three forms: here, as the
+# classes the sanitiser lets through; `DRAWABLE` in `mainplate.js`, as the classes the script draws
+# a picture from; and `drawing_note` in `agent.py`, as the sentence telling a model which labels
+# the page draws. A label added here and to neither of the others is a class that survives to the
+# page and is drawn by nothing, or drawn and never asked for. `test_markup.py` holds the sentence
+# against this set, and `test_the_buttons_a_fence_takes` in `test_browser.py` holds the script's
+# map against it.
 LANGUAGE_PREFIX: Final = "language-"
 DRAWABLE: Final[frozenset[str]] = frozenset(f"{LANGUAGE_PREFIX}{label}" for label in ("mermaid", "svg"))
 
@@ -108,19 +117,32 @@ EXTENSION_CONFIGS: Final = {
     }
 }
 
-# One converter per kind of text, for the process. `Markdown` accumulates state across a conversion
-# and must be reset between them, which makes it a place rather than a value; holding one is safe
-# here only because `convert` never awaits, so no second render can interleave with one on this
-# event loop. Neither is safe to share across threads, and this must not become one that is.
-#
-# Two of them, and the whole difference is `nl2br`. A chat box promises that a newline is a newline,
-# because Markdown's own rule - a line break needs two trailing spaces - is a rule about *documents*
-# and nobody typing a message knows it. A guidance file is a document, written by somebody who does:
-# it is soft-wrapped at whatever width its author's editor uses, so honouring those newlines draws a
-# paragraph as a column of ragged lines that says nothing about how it was written.
-MESSAGE = Markdown(extensions=[*EXTENSIONS, "nl2br"], extension_configs=EXTENSION_CONFIGS, output_format="html")
 
-DOCUMENT = Markdown(extensions=EXTENSIONS, extension_configs=EXTENSION_CONFIGS, output_format="html")
+class Converters(threading.local):
+    """
+    One converter per kind of text, for each thread that renders.
+
+    Per thread because `Markdown` accumulates state across a conversion and must be reset between
+    them, which makes it a place rather than a value: a transcript renders on a worker thread while
+    smaller pages render on the event loop, so one shared converter would have two conversions
+    running through it at once. Never await between `reset` and `convert` either, since two renders
+    on the one event loop could then interleave through the same instance.
+
+    Two of them, and the whole difference is `nl2br`. A chat box promises that a newline is a newline,
+    because Markdown's own rule - a line break needs two trailing spaces - is a rule about *documents*
+    and nobody typing a message knows it. A guidance file is a document, written by somebody who does:
+    it is soft-wrapped at whatever width its author's editor uses, so honouring those newlines draws a
+    paragraph as a column of ragged lines that says nothing about how it was written.
+    """
+
+    def __init__(self) -> None:
+        self.message = Markdown(
+            extensions=[*EXTENSIONS, "nl2br"], extension_configs=EXTENSION_CONFIGS, output_format="html"
+        )
+        self.document = Markdown(extensions=EXTENSIONS, extension_configs=EXTENSION_CONFIGS, output_format="html")
+
+
+CONVERTERS = Converters()
 
 
 def converted(converter: Markdown, text: str) -> Markup:
@@ -158,7 +180,7 @@ def as_message(text: str) -> Markup:
     at the boundary that accepts it, and a key is the exact text, so the same message renders once
     however many times it is drawn.
     """
-    return converted(MESSAGE, text)
+    return converted(CONVERTERS.message, text)
 
 
 @lru_cache(maxsize=64)
@@ -169,7 +191,7 @@ def as_document(text: str) -> Markup:
     Cached for the reason a message is, and smaller because there are far fewer of them: one per
     stretch of context, plus whatever a turn was handed on approach.
     """
-    return converted(DOCUMENT, text)
+    return converted(CONVERTERS.document, text)
 
 
 # The lexer a shell command is coloured by. `sh -c` is what runs it, and Pygments' one shell lexer
@@ -213,16 +235,18 @@ def highlighted(language: str, text: str) -> tuple[Markup, ...]:
     """
     `text` as one run of markup per line of it, each token wrapped in the class Pygments names it.
 
-    Per line rather than as the one block the HTML formatter produces, because what the page draws
-    in front of each line - an anchor, a diff's line numbers - is a fact about that line, so the
-    markup has to be cut where the lines are. A token that spans lines is cut with them, which is
-    what the formatter's own line wrapping does too.
+    Per line rather than as the one block the HTML formatter produces, because the page draws each
+    line as a `.line` span of its own, `display: block` with its newline as its last character, so
+    that a line paints its whole row and a line the tool wrote can be set in its own tone while the
+    block's text still reads as lines. That span has to hold exactly one line's markup, so the
+    markup is cut where the lines are. A token that spans lines is cut with them, which is what the
+    formatter's own line wrapping does too.
 
     Stripping and the trailing newline are both off, so the lexer is handed exactly the text and
     hands back exactly as many lines. The one preprocessing step no option turns off is a bare
     carriage return becoming a line break, so a text that comes back with a different number of
-    lines is shown uncoloured rather than misaligned: what the gutter says about a line has to be
-    about that line.
+    lines is shown uncoloured rather than misaligned: a line's span has to hold that line, and not
+    the one before it.
 
     Cached for the reason a message is, and bounded smaller because what is cached is larger: a
     read is up to fifteen hundred lines, where a message is a few paragraphs.

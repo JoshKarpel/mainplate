@@ -86,8 +86,8 @@ class TestReadingAKeyBack:
         What the key's shape is for, and the reason it is not `turn:{n}:instructions`.
 
         `before` carries turn-prefixed keys across by shape, so a turn-shaped name would hand a
-        branch its parent's system prompt - and a fork may *attach* a repository the parent never
-        had, whose guidance and index would then be missing from words the branch is answered under.
+        branch its parent's system prompt - and a fork may turn the network the other way and sets
+        its plugins up again, so the words it is answered under may not be its parent's.
         """
         recorded: dict[str, object] = {
             CHOICE_KEY: {"endpoint": "here", "model": "ripe/fast"},
@@ -276,23 +276,27 @@ class TestArrangingTheTree:
 
         assert arrange([orphan]) == ((orphan, 0),)
 
-    def test_an_active_branch_of_an_archived_parent_leads_the_list(self) -> None:
+    # The lists below are in the order `read_sessions` hands back, every active session above every
+    # archived one, since keeping that order is what `arrange` is asked to do.
+
+    def test_an_active_branch_of_an_archived_parent_is_a_root_above_it(self) -> None:
         parent = self.branch("parent", archived=True)
         child = self.branch("child", "parent")
+
         assert arrange([child, parent]) == ((child, 0), (parent, 0))
 
-    def test_an_archived_branch_of_an_active_parent_follows_all_active_rows(self) -> None:
-        parent = self.branch("parent")
+    def test_an_archived_branch_of_an_active_parent_is_a_root_among_the_archived(self) -> None:
+        parent, other = self.branch("parent"), self.branch("other")
         child = self.branch("child", "parent", archived=True)
-        other = self.branch("other")
-        assert arrange([parent, child, other]) == ((parent, 0), (other, 0), (child, 0))
 
-    def test_branches_stay_nested_within_their_status_group(self) -> None:
-        active = self.branch("active")
-        active_child = self.branch("active-child", "active")
+        assert arrange([parent, other, child]) == ((parent, 0), (other, 0), (child, 0))
+
+    def test_branches_stay_nested_within_their_group(self) -> None:
+        active, active_child = self.branch("active"), self.branch("active-child", "active")
         archived = self.branch("archived", archived=True)
         archived_child = self.branch("archived-child", "archived", archived=True)
-        assert arrange([archived, archived_child, active, active_child]) == (
+
+        assert arrange([active_child, active, archived_child, archived]) == (
             (active, 0),
             (active_child, 1),
             (archived, 0),

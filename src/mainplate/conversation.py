@@ -14,15 +14,17 @@
 # writes them and the functions that read them cannot drift apart:
 #
 #     inbox:{n}            a message or a command, filed by the store in the order it arrived and
-#                          appended from outside a pass, by `Service.say`, `send` and `run`
+#                          appended from outside a pass, by `Service.say`, `send`, `run` and `push`
 #     result:{entry}       what the command delivered under that entry exited with, said and took,
 #                          written by `Commands` when it finishes
 #     choice               the endpoint, model, repository, isolation, thinking level and output
 #                          override this session is on, written once at creation
 #     turn:{n}:opened      the entry this turn took, recorded by `Run.receive` in the body below
-#     turn:{n}:tree:{i}    the worktree as it stood before the i-th model request of that turn
+#     turn:{n}:tree:{i}    the checkout as it stood before the i-th model request of that turn
 #     turn:{n}:heard:{i}   how far down the inbox the turn had read when it made that request
 #     turn:{n}:model:{i}   the i-th model response of that turn, written by `Stepping.request`
+#     turn:{n}:wrote:{i}   what the tool batch that response asked for changed, written a request
+#                          later, once there is a tree on both sides of the batch
 #     turn:{n}:tool:{id}   what one tool call returned, or why it failed, and how long it took,
 #                          named by the call's own id
 #     turn:{n}:deferred:{i} the i-th time this turn was told to come back later, and when
@@ -145,8 +147,8 @@ from mainplate.durability import parse_injected
 from mainplate.durability import parse_model_response
 from mainplate.durability import parse_refused
 from mainplate.durability import parse_returned
+from mainplate.durability import parse_snapshot
 from mainplate.durability import parse_took
-from mainplate.durability import parse_tree
 from mainplate.durability import parse_wrote
 from mainplate.durability import stepping
 from mainplate.forge import Workspaces
@@ -185,7 +187,7 @@ from mainplate.plugins.running import PluginFailed
 from mainplate.reference import Prices
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
-from mainplate.snapshots import Worktree
+from mainplate.snapshots import Checkout
 from mainplate.snapshots import parse_branch
 from mainplate.snapshots import parse_commitish
 from mainplate.tending import TENDED
@@ -243,7 +245,7 @@ The same for what the session's repository names about itself, read once from th
 at.
 
 Its own key rather than a half of the one above, for failure isolation rather than because a fork
-treats the two differently: the operator's files sit outside every worktree and a repository's is in
+treats the two differently: the operator's files sit outside every checkout and a repository's is in
 one, so one can fail to read on its own and the other should stay recorded. A fork carries neither
 and reads both again, out of the tree it is planted at.
 
@@ -266,7 +268,7 @@ PLUGINS_REFUSED_KEY: StepKey = "plugins:refused"
 Why a session's plugins could not be *declared*, where they could not.
 
 About reading files rather than about running any of them, which is the whole of what this key is
-for: a worktree that would not plant or a `.mainplate/mainplate.yaml` that would not parse happens in
+for: a checkout that would not plant or a `.mainplate/mainplate.yaml` that would not parse happens in
 a pass with nobody waiting on it, so it needs somewhere to be recorded and a `Try again` on the step.
 Setting up is the other half and is numbered per attempt, because it is a thing somebody retries by
 moving a switch; see `setup_refused_key`.
@@ -289,7 +291,7 @@ anything is planted or run, so a message queued before the press is passed over 
 
 ARCHIVED_TREE_KEY: StepKey = "archived:tree"
 """
-What the worktree held when it was taken off the disk, captured by the reconciler just before.
+What the checkout held when it was taken off the disk, captured by the reconciler just before.
 
 Its own key rather than a field on `archived`, because the two are written at two moments by two
 parties: the press records the fact, and the reconciler, which waits until no pass holds the session,
@@ -304,7 +306,7 @@ def setup_key(attempt: int) -> StepKey:
     That somebody answered the settings step, for the nth time, which is what lets a pass set up.
 
     **The trust boundary as a recorded fact.** A plugin is a program this console executes, so the
-    pass that plants a worktree reads what each tier declares and stops; what this says is that a
+    pass that plants a checkout reads what each tier declares and stops; what this says is that a
     person has since looked at that list and pressed the button, and it is the only thing that lets
     the next pass run any of it.
 
@@ -347,7 +349,7 @@ def failed_key(at: int) -> StepKey:
     these per point it actually reached rather than one per lease.
 
     Not turn-prefixed either, and deliberately: a pass can fail before it has reached a turn at all -
-    planting a worktree, reading a declaration, running a setup - and a key naming a turn would have
+    planting a checkout, reading a declaration, running a setup - and a key naming a turn would have
     had to invent one for those. Where it *did* get to is `at`, which is a number the page compares
     rather than a name it parses.
     """
@@ -366,7 +368,7 @@ OUTPUT_OVERRIDE_FIELD: Final = "output_override"
 
 REPOSITORY_FIELD: Final = "repository"
 
-# Where in that repository the session's worktree starts, and what branch it starts there, inside the
+# Where in that repository the session's checkout starts, and what branch it starts there, inside the
 # recorded choice and on the form that begins one. Named here beside the repository they depend on,
 # for the reason the turn keys are: the code that writes them and the code that reads them are both
 # in this file and must not drift.
@@ -454,7 +456,7 @@ class Disposition(Enum):
     what is below the branch point and the record rides on the message that opens the turn."""
 
     RUN = "run"
-    """`Service.run`, which runs the text as a command in this session's own worktree.
+    """`Service.run`, which runs the text as a command in this session's own checkout.
 
     The one answer here that is not a message going somewhere. It is in this field all the same,
     because the question the menu asks is what happens to what you typed and this is one more answer
@@ -543,7 +545,7 @@ Every word the console's own composer can answer to, which no plugin of the oper
 
 `here` is left out because it is never typed: it is what Send does, and Send is a button rather than
 a leader. Everything else is a row somebody can reach by `/word`, on *some* session - `run` and `push`
-only where there is a worktree, `online` only where its network is off, `parent` only on a fork,
+only where there is a checkout, `online` only where its network is off, `parent` only on a fork,
 `next` only while a turn is being answered - and
 the set is the union rather than what one session draws, since a leader that collided only while a
 turn was running would be a row that means two things some of the time.
@@ -785,9 +787,9 @@ def turns_in(recorded: Mapping[str, object]) -> int:
 
 def tree_key(turn: int, at: int) -> StepKey:
     """
-    What the worktree looked like before the `at`-th model request of this turn.
+    What the checkout looked like before the `at`-th model request of this turn.
 
-    One per model request rather than one per turn, because with tools the worktree changes
+    One per model request rather than one per turn, because with tools the checkout changes
     *during* a turn and a single snapshot at the top would describe only the state the first
     request saw. A model request is also the only honest place to take one: it is the boundary at
     which every tool of the previous batch has returned, where a capture between two calls of the
@@ -805,9 +807,10 @@ def wrote_key(turn: int, at: int) -> StepKey:
 
     Numbered by the request whose *response* produced the batch, in step with `tree_key` one request
     along: the diff under `wrote:{at}` is `tree:{at}` against `tree:{at+1}`, so it exists only once
-    the request after the batch has been snapshotted. Built here and by `Stepping.key("wrote")` there,
-    with the same drift hazard `tree_key` carries and the same answer, an assertion in
-    `test_conversation.py`.
+    the request after the batch has been snapshotted. Built here and by `Stepping.identified("wrote",
+    ...)` there, with the same drift hazard `tree_key` carries; the answer is
+    `TestWhatOnePassDoes`, which runs a batch that writes a file and reads its diff back through
+    this key.
     """
     return f"{turn_prefix(turn)}:wrote:{at}"
 
@@ -955,7 +958,7 @@ def opening_tree_key(turn: int) -> StepKey:
     """
     The tree a turn *started* on, which is the one two other things mean by "this turn's tree".
 
-    A fork plants its worktree at it, so a branch re-asks its question against the files that
+    A fork plants its checkout at it, so a branch re-asks its question against the files that
     question was asked about; and the person's panel shows it, because that is where the fork link
     already is and what going back to this turn would put on disk. Both want the state before the
     turn did anything, which is the snapshot taken before its first model request.
@@ -1055,7 +1058,7 @@ def parse_isolation(recorded: object, repository: str | None) -> Isolation:
     How much of the filesystem a session reaches, defaulted from what it is working in.
 
     A record written before this field existed has no key, and what it must read back as is exactly
-    what that session already had: a worktree if it picked a repository and no files if it did not.
+    what that session already had: a checkout if it picked a repository and no files if it did not.
     Deriving the default from `repository` rather than picking a constant is what makes that true for
     both kinds of session at once.
 
@@ -1064,7 +1067,7 @@ def parse_isolation(recorded: object, repository: str | None) -> Isolation:
     here would mean a record this console never writes, and quietly correcting it would hide that.
     """
     if recorded is None:
-        return Isolation(filesystem=Filesystem.WORKTREE if repository is not None else Filesystem.NOTHING)
+        return Isolation(filesystem=Filesystem.CHECKOUT if repository is not None else Filesystem.NOTHING)
     if not isinstance(recorded, dict):
         raise TypeError(f"an isolation must be a mapping, not {recorded!r}")
     named = recorded.get(FILESYSTEM_FIELD)
@@ -1220,15 +1223,24 @@ def instructing(*blocks: str | None) -> str:
     """
     The instructions one request carries, composed from every scope that had something to say.
 
-    In order of increasing specificity, so the last word belongs to whatever is most local: the
-    operator's standing instructions, then whatever each running plugin contributed at `setup`,
-    then the note saying what this session's tools reach. Empty blocks are dropped rather than
-    joined, so a console with no plugins produces exactly what this console produced before there
-    were any.
+    In order of increasing specificity, so the last word belongs to whatever is most local. Four
+    kinds of block, as `conversing` hands them over:
 
-    Here rather than in a module of its own, because what used to be in that module is a plugin now:
-    reading a repository's `AGENTS.md` and handing over the guidance a directory carries are the
-    bundled `guidance` plugin's, and what was left beside them was this one join.
+    - `drawing_note`, what this console's page draws from a reply, the same in every session;
+    - the operator's standing instructions, `Settings.instructions`, the same in every session on
+      this console;
+    - whatever each running plugin contributed at `setup`, which is where the operator's guidance
+      files and a repository's `AGENTS.md` arrive, through the bundled `guidance` plugin;
+    - the note saying what this session's tools reach, from `reaching`.
+
+    The order is also the cache's: the blocks that are the same across sessions come first, so the
+    prefix two sessions share runs as far as it can before anything particular to one of them.
+    Empty blocks are dropped rather than joined, so a console with no plugins composes the
+    instructions with nothing where a plugin's block would be.
+
+    Here rather than in a module of its own, because reading a repository's `AGENTS.md` and handing
+    over the guidance a directory carries are the bundled `guidance` plugin's, and what is left of
+    telling a session anything that is the console's own is this one join.
     """
     return "\n\n".join(block.strip() for block in blocks if block and block.strip())
 
@@ -1239,8 +1251,9 @@ def instructions_key(began: int) -> StepKey:
 
     **Not `turn:{n}:instructions`**, deliberately, and the fork is what decides it: `before` copies
     turn-prefixed keys by shape, so a turn-shaped name would carry a parent's instructions into a
-    branch that may have attached a repository the parent never had. Named this way a fork composes
-    its own, which is what a session that can differ in its choice should do.
+    branch that may have turned the network the other way and sets its plugins up again, both of
+    which are in what it is told. Named this way a fork composes its own, which is what a session
+    that can differ in its choice should do.
     """
     return f"instructions:{began}"
 
@@ -1272,7 +1285,7 @@ def instructed_in(recorded: Mapping[str, object], turns: int) -> dict[int, str |
     under that turn's own rule, which for a forget is the rule saying the context was cleared there.
 
     **`None` is a stretch whose instructions have not been composed yet**, which is a real state and
-    not a missing record: composing reads the repository's guidance out of a worktree the pass is the
+    not a missing record: composing reads the repository's guidance out of a checkout the pass is the
     one to plant, so a session's first turn is queued before there is anything to compose. The page
     draws that as a system prompt panel with nothing in it yet, so what is coming is visible from the
     moment the message is.
@@ -1522,6 +1535,8 @@ class Command:
     result: Result | None = None
     online: bool = False
     """Whether it ran with the network on in a session whose commands otherwise have it off."""
+    pushed: str | None = None
+    """The branch this console pushed, where this is a push rather than a line somebody typed."""
 
 
 type Block = Prose | Steering | Guidance | Command | Reasoning | ToolUse
@@ -1548,26 +1563,14 @@ class Panel:
     kind: Kind
     blocks: tuple[Block, ...]
 
-    tree: str | None = None
-    """
-    The worktree this turn started on, for the panel that opens one, and nothing for the rest.
-
-    Carried on the turn's first panel, which is the person's, and read from there by the rule that
-    opens the turn: this is a fact about the turn rather than about the message, and the rule is
-    where the fork link that would go back to it lives. Kept here rather than moved onto the rule so
-    that where a turn begins is decided once, by the panels, instead of by a second list beside them.
-
-    Absent on every other panel, and absent altogether where no worktree is configured, since a hash
-    for a directory nobody chose would be a fact about nothing.
-    """
-
     forget: bool = False
     """
     Whether the turn this panel opens was asked with the model's context cleared.
 
-    Carried on the turn's first panel beside `tree`, and for the same reason: it is a fact about the
-    turn rather than about the message, and the rule that opens the turn is what draws it. Where a
-    turn begins is decided once, by the panels, rather than by a second list beside them.
+    Carried on the turn's first panel, which is the person's, and read from there by the rule that
+    opens the turn: it is a fact about the turn rather than about the message, and the rule is what
+    draws it. Kept here rather than moved onto the rule so that where a turn begins is decided once,
+    by the panels, instead of by a second list beside them.
 
     `False` on every other panel, which is not a claim about them: only the panel that opens a turn
     is ever asked.
@@ -1607,12 +1610,13 @@ class Panel:
 
     diff: str | None = None
     """
-    The net change this request's tool batch made to the worktree, as the unified diff a pass recorded.
+    The net change this request's tool batch made to the checkout, as the unified diff a pass recorded.
 
     Carried on a tool panel rather than on a rule, because it is about what the *batch* did and a batch
     is what one tool panel draws. `None` is every other kind of panel, a batch the turn ended before
-    its diff was taken, and the ordinary case of an empty one: the page draws a figure only where the
-    diff has something in it, so nothing distinguishes "recorded nothing" from "recorded no change".
+    its diff was taken, and the ordinary case of an empty one, which `with_diffs` turns into `None`
+    rather than carrying as `""`: nothing on the page distinguishes "recorded nothing" from
+    "recorded no change", so a panel has one way of saying either and never holds an empty string.
     """
 
     @property
@@ -1777,14 +1781,17 @@ class Request:
     """
     One round trip to the model, as the rule at its boundary reports.
 
-    A request is the unit four recorded things are actually about - the tree taken before it, the
-    response it came back with, what that response cost and when it landed - and none of them is
-    about a panel. That is the whole reason a rule stands here: hung on panels, each had to be
-    attributed to a chosen one.
+    A request is the unit three recorded things are actually about - the response it came back
+    with, what that response cost and when it landed - and none of them is about a panel. That is
+    the whole reason a rule stands here: hung on panels, each had to be attributed to a chosen one.
+
+    **The tree taken before it is not one of them**, though it is recorded under the same turn and
+    index. A snapshot is how this console puts a session's files back for a fork, and a hash of one
+    is nothing a reader can act on: the checkout's own git never names it, so printing it would make
+    a detail of the mechanism look like a fact about the work.
     """
 
     at: int
-    tree: str | None
     spent: Spent
     when: datetime
     """
@@ -1805,15 +1812,12 @@ def requests_in(recorded: Mapping[str, object], turn: int, responses: Sequence[M
     """
     What each of a turn's model requests is worth saying, in the order they were made.
 
-    The tree comes from `turn:{n}:tree:{i}` and the spend and the moment from the response itself,
-    which are the two halves of one request written by opposite ends: the snapshot is taken before
-    the ask and the answer arrives with its own usage and stamp. Reading them together here is what
-    lets one rule say all three.
+    The spend and the moment both come from the response itself, which arrives with its own usage
+    and stamp, so one rule can say both without reading anything else the turn recorded.
     """
     return tuple(
         Request(
             at=at,
-            tree=parse_tree(recorded.get(tree_key(turn, at))),
             spent=spent_on([response]),
             when=response.timestamp,
         )
@@ -2157,6 +2161,21 @@ def recorded_command(said: str, *, online: bool = False) -> dict[str, object]:
     return records.Command(said=said, online=online).recorded()
 
 
+# What a push records as its text: the word the composer answers to. Not what the page draws, which
+# is the branch; it is there for a build that predates `pushed` and reads only this.
+PUSHED: Final = "push"
+
+
+def recorded_push(branch: str) -> dict[str, object]:
+    """
+    A push of `branch` by this console, as the value the store's codec will take.
+
+    A command record naming the branch it pushed, which is what sets it apart from a person running
+    `push` in the sandbox: see `records.Command.pushed`.
+    """
+    return records.Command(said=PUSHED, pushed=branch).recorded()
+
+
 def commit_command(message: str) -> str:
     """
     The command `/commit` runs: `git commit` with `message`, quoted, as its message.
@@ -2191,6 +2210,16 @@ def parse_result(recorded: object) -> Result:
     return Result(status=held.status, output=held.output, took=held.took)
 
 
+def command_from(entry: str, was: records.Command, recorded: Mapping[str, object]) -> Command:
+    """
+    One recorded command as the page draws it, with its result where it has one.
+
+    Written once for the two places a command is drawn from, inside a turn and queued past the last
+    one, so a field added to the record reaches both or neither.
+    """
+    return Command(entry=entry, text=was.said, result=result_in(recorded, entry), online=was.online, pushed=was.pushed)
+
+
 def ran_in(recorded: Mapping[str, object], held: Sequence[Posted], turn: int) -> tuple[tuple[int, Command], ...]:
     """
     Every command run while this turn was in hand, each with how many of its requests had answered.
@@ -2214,7 +2243,7 @@ def ran_in(recorded: Mapping[str, object], held: Sequence[Posted], turn: int) ->
         if key.startswith(answering):
             made += 1
         elif (was := said.get(key)) is not None:
-            ran.append((made, Command(entry=key, text=was.said, result=result_in(recorded, key), online=was.online)))
+            ran.append((made, command_from(key, was, recorded)))
     return tuple(ran)
 
 
@@ -2380,7 +2409,7 @@ def registered_in(recorded: Mapping[str, object]) -> tuple[Enrolled, ...] | None
 
 def declared_in(recorded: Mapping[str, object]) -> tuple[Installed, ...] | None:
     """
-    Every plugin this session may run, or nothing at all where its worktree is still being planted.
+    Every plugin this session may run, or nothing at all where its checkout is still being planted.
 
     The two halves read as one list, exactly as the registration's do: which key a plugin came back
     under is the fork's question and no reader's, and what tells the tiers apart is what each plugin
@@ -2487,7 +2516,7 @@ def latest_tree(recorded: Mapping[str, object]) -> object | None:
     What a fork from the *end* of a conversation plants at. A turn's own opening tree is the state
     before it did anything, which is right for re-asking that turn and wrong for carrying on after
     the last one. The end the console offers is an archived session's, and the reconciler captured
-    that worktree on the way to taking it off the disk, so the archived tree wins where there is one:
+    that checkout on the way to taking it off the disk, so the archived tree wins where there is one:
     it holds everything, what a person ran after the last request and what a plugin fixed at the
     turn's end included. The last request's tree of the last turn is the answer for an end reached by
     URL on a live session, which no control offers, and it predates both of those.
@@ -2503,6 +2532,40 @@ def latest_tree(recorded: Mapping[str, object]) -> object | None:
         if newest is not None:
             return newest
     return None
+
+
+def fork_point(recorded: Mapping[str, object], at: int) -> object | None:
+    """
+    The checkout state a fork from before turn `at` starts from, as the record holding it.
+
+    The turn's own opening state, which is the one before it did anything and is right for asking it
+    again; and for a fork from the end, which has no turn to re-ask and so no opening state, the
+    newest one the parent recorded, which is `latest_tree`'s rule. Nothing where the parent recorded
+    none, which a session that never reached a turn has.
+
+    One rule read by two callers, `Service.fork` carrying it across and `fork_branch` naming the
+    branch the fork page pre-fills, so the branch a person is offered is the branch of the state the
+    fork will actually be planted at.
+    """
+    started_on = recorded.get(opening_tree_key(at))
+    if started_on is None and at > 0:
+        return latest_tree(recorded)
+    return started_on
+
+
+def fork_branch(recorded: Mapping[str, object], at: int) -> str | None:
+    """
+    The branch a fork from before turn `at` is offered, as the parent was on it at `fork_point`.
+
+    What the fork page's box starts out holding, so carrying the parent's work on under its own name
+    needs nothing typed. Nothing on a detached `HEAD`, and nothing where the parent recorded no
+    checkout, and the box is then empty and the fork gets a branch of its own.
+
+    A function of the checkpoint rather than a call that loads one, so the fork page reads it out of
+    the load it already made, and the gallery draws that page by the same rule instead of a copy.
+    """
+    snapshot = parse_snapshot(fork_point(recorded, at))
+    return None if snapshot is None else snapshot.branch
 
 
 def parse_failed(recorded: object) -> records.Failed:
@@ -2594,8 +2657,9 @@ def wrote_in(recorded: Mapping[str, object], turn: int) -> dict[int, str]:
 
     A batch whose diff has not been taken yet is simply absent, which is the running turn's own state:
     the record lands when the request *after* the batch snapshots, so the panel watching the batch
-    runs draws no figure until then rather than a placeholder nothing fills in. Absent and empty read
-    the same to the page, which draws only where a diff has something in it.
+    runs draws no figure until then rather than a placeholder nothing fills in. An empty diff is
+    read back as the empty string it was recorded as; `with_diffs` is where absent and empty become
+    the one `None` a panel carries.
     """
     wanted = f"{turn_prefix(turn)}:wrote:"
     found: dict[int, str] = {}
@@ -2734,7 +2798,7 @@ def panelled(turn: int, sourced: Sequence[Sourced]) -> Iterator[Panel]:
         yield Panel(turn=turn, at=at, kind=kind, blocks=tuple(block for block, _ in run), asked=asked)
 
 
-def said_by(turn: int, said: records.Delivered, tree: str | None = None) -> Panel:
+def said_by(turn: int, said: records.Delivered) -> Panel:
     """
     A turn's opening panel, which is whatever message it opened on and is always its first.
 
@@ -2753,7 +2817,6 @@ def said_by(turn: int, said: records.Delivered, tree: str | None = None) -> Pane
         at=0,
         kind="prompt" if noted is None else "note",
         blocks=(Prose(text=said.said),),
-        tree=tree,
         forget=records.forgets(said),
         # What the plugin said about how its panel is drawn, or nothing at all for a message somebody
         # typed. The label falls back to the plugin's own name here rather than at render time,
@@ -2770,11 +2833,14 @@ def with_diffs(panels: Iterable[Panel], wrote: Mapping[int, str]) -> tuple[Panel
 
     A tool panel is what draws a batch, so the diff computed for that batch's request rides on it
     rather than on a rule; `None` where none was recorded, which is a batch the turn ended before
-    diffing, and an empty one, which is a batch that changed nothing. The page draws a figure only
-    where the returned reading is not `None`, so those two read alike there.
+    diffing, and where an empty one was, which is a batch that changed nothing. Both are `None`
+    rather than one being `""`, so a panel has one way of saying there is no change to draw and a
+    reader cannot come to test for the other.
     """
     return tuple(
-        replace(panel, diff=wrote.get(panel.asked)) if panel.kind == "tool" and panel.asked is not None else panel
+        replace(panel, diff=wrote.get(panel.asked) or None)
+        if panel.kind == "tool" and panel.asked is not None
+        else panel
         for panel in panels
     )
 
@@ -2813,7 +2879,7 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         held = owned_in(recorded, inbox, opened, turn, listening=False)
         said = parse_messages(answered)
         answering = responses_in(said)
-        panels.append(said_by(turn, held[0].what, parse_tree(recorded.get(opening_tree_key(turn)))))
+        panels.append(said_by(turn, held[0].what))
         blocks = parted(said, tooks_in(recorded, turn, answering))
         panels.extend(
             with_diffs(panelled(turn, alongside(blocks, ran_in(recorded, held, turn))), wrote_in(recorded, turn))
@@ -2830,7 +2896,7 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         # response prices it on the way past, so this is the same reading the settled half above does
         # rather than a second, poorer one.
         answering = responded(recorded, turn)
-        panels.append(said_by(turn, held[0].what, parse_tree(recorded.get(opening_tree_key(turn)))))
+        panels.append(said_by(turn, held[0].what))
         blocks = blocks_from(recorded, held, turn, answering)
         panels.extend(
             with_diffs(panelled(turn, alongside(blocks, ran_in(recorded, held, turn))), wrote_in(recorded, turn))
@@ -2848,12 +2914,7 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
     for waiting in queued_in(recorded, inbox, opened, listening=running is not None):
         if isinstance(waiting.what, records.Command):
             at = max(turn - 1, 0)
-            ran = Command(
-                entry=waiting.key,
-                text=waiting.what.said,
-                result=result_in(recorded, waiting.key),
-                online=waiting.what.online,
-            )
+            ran = command_from(waiting.key, waiting.what, recorded)
             panels.append(
                 Panel(turn=at, at=sum(1 for panel in panels if panel.turn == at), kind="command", blocks=(ran,))
             )
@@ -2870,23 +2931,6 @@ def transcript(recorded: Mapping[str, object]) -> Transcript:
         system_prompts=instructed_in(recorded, turn),
         answered_at=latest,
     )
-
-
-def requested_at(recorded: Mapping[str, object], turn: int, at: int) -> object | None:
-    """
-    The `at`-th model response of a turn, exactly as the checkpoint holds it.
-
-    One key and one value, which is what replaced showing a *panel's* record. A panel is a run of
-    blocks of one kind and a request is a round trip, and the two cross-cut, so a panel's record was
-    a slice of a stored value reached by indices one walk had to hand to another. A request is a
-    thing the record actually has a key for, so this is a lookup.
-
-    Read straight from `turn:{n}:model:{at}` rather than out of `turn:{n}:messages`, and the two are
-    not the same claim: the step is what the provider answered, where the messages are what the agent
-    concluded the turn was. The step is the earlier and more literal of the two, and it is there
-    while the turn is still running.
-    """
-    return recorded.get(model_key(turn, at))
 
 
 def recording(said: Sequence[ModelMessage]) -> Callable[[], Awaitable[object]]:
@@ -2950,41 +2994,44 @@ class NoSuchRepository(LookupError):
     """
 
 
-async def planting(workspaces: Workspaces | None, run: Run, chosen: Choice, turn: int) -> Worktree | None:
+async def planting(workspaces: Workspaces | None, run: Run, chosen: Choice, turn: int) -> Checkout | None:
     """
-    The session's own worktree, made to exist before the turn that will work in it.
+    The session's own checkout, made to exist before the turn that will work in it.
 
-    A turn already carrying a recorded tree is planted *at* it, which is what a fork is: it
-    inherits the tree of the turn it is re-asking, so the branch answers the same question against
-    the same files. Every other turn plants at whatever the session was started at, which is a base
-    somebody named or the repository's own head, and which only happens once because the worktree is
-    then already there.
+    A turn already carrying a recorded checkout state is planted *at* it, which is what a fork is:
+    it inherits the state of the turn it is re-asking - the commit, the history under it and the
+    uncommitted files on top - so the branch answers the same question against the same repository.
+    Every other turn plants at whatever the session was started at, which is a base somebody named or
+    the repository's own head, and which only happens once because the checkout is then already there.
 
     Both are handed over on every pass and only one can be true of a session at a time: `settled`
-    clears the base and the branch on a fork, so a run that finds a recorded tree finds no base
-    beside it and `Worktrees.plant`'s ranking never has to choose between two answers somebody gave.
+    clears the base on a fork, so a run that finds a recorded state finds no base beside it and
+    `Checkouts.plant`'s ranking never has to choose between two answers somebody gave. The branch is
+    handed over either way, since it names what to *call* the commit rather than which one.
     """
     if workspaces is None or chosen.repository is None:
         return None
-    at = parse_tree(run.recorded.get(opening_tree_key(turn)))
-    planted = await workspaces.plant(run.workflow, chosen.repository, tree=at, base=chosen.base, branch=chosen.branch)
+    at = parse_snapshot(run.recorded.get(opening_tree_key(turn)))
+    planted = await workspaces.plant(
+        run.workflow, chosen.repository, snapshot=at, base=chosen.base, branch=chosen.branch
+    )
     if planted is None:
         raise NoSuchRepository(f"no forge reaches {chosen.repository!r} and it has never been cloned")
     return planted
 
 
-def working_in(workspaces: Workspaces | None, session: str, chosen: Choice) -> Worktree | None:
+def working_in(workspaces: Workspaces | None, session: str, chosen: Choice) -> Checkout | None:
     """
     Where this session's files are, as a value, without asking whether they are there yet.
 
-    A path rather than a planted worktree, because it is needed *before* the pass reaches the turn
+    A path rather than a planted checkout, because it is needed *before* the pass reaches the turn
     that plants one: the agent is built once per pass and its file tools are bound to this root,
     and the snapshot scope needs the same root for the same reason. Naming a directory cannot
     fail, and nothing here touches it until a tool is called, which is after `planting` has run.
     """
     if workspaces is None or chosen.repository is None:
         return None
-    return workspaces.worktree(session, chosen.repository)
+    return workspaces.checkout(session, chosen.repository)
 
 
 def taken(entries: Sequence[Entry]) -> tuple[records.Delivered, ...]:
@@ -3187,7 +3234,7 @@ and in `without-durability` already means what the mechanism made of a pass.
 
 
 async def declaring_plugins(
-    run: Run, declaring: Declaring, chosen: Choice, worktree: Worktree | None
+    run: Run, declaring: Declaring, chosen: Choice, checkout: Checkout | None
 ) -> tuple[Installed, ...]:
     """
     Which plugins this session *may* run, read out of files on its first pass and never run here.
@@ -3199,7 +3246,7 @@ async def declaring_plugins(
     the settings step runs. See `setting_plugins_up`.
 
     **Two steps, one per tier group**, for failure isolation rather than because a fork treats them
-    differently: the console's own scripts are read from files outside every worktree and a
+    differently: the console's own scripts are read from files outside every checkout and a
     repository's from a file in one, so one of the two can fail on its own, and a declaration that
     would not parse should leave the other half recorded. A fork carries neither and reads both
     afresh, which is what lets a branch pick up an edited `.mainplate/`.
@@ -3212,9 +3259,9 @@ async def declaring_plugins(
     declaration mean "this session has looked" rather than "nobody has looked". A console with no
     plugins at all records two empty sets and its sessions reach the settings step exactly as a
     console with six do; without the write there would be no way to tell a console with none from a
-    session whose worktree is still being planted.
+    session whose checkout is still being planted.
     """
-    where = None if worktree is None else worktree.root
+    where = None if checkout is None else checkout.root
 
     async def console() -> object:
         return recorded_declaration(declaring.console)
@@ -3235,13 +3282,13 @@ async def setting_plugins_up(
     declaring: Declaring,
     declared: Sequence[Installed],
     tended: Tending,
-    worktree: Worktree | None,
+    checkout: Checkout | None,
 ) -> tuple[Enrolled, ...] | None:
     """
     Set up exactly the plugins somebody left switched on, and record what each of them contributed.
 
     **The one place a plugin is executed on somebody's say-so, and the whole of why the settings step
-    exists.** Nothing before this has run one: the pass that planted the worktree read what each tier
+    exists.** Nothing before this has run one: the pass that planted the checkout read what each tier
     *declares* out of files, and `setup_key` says a person has since looked at that list and pressed
     the button. What runs is exactly the set the switches left on, so a plugin turned off is not
     merely contributing nothing, it was never launched.
@@ -3280,17 +3327,17 @@ async def setting_plugins_up(
         )
     on = [each for each in declared if tended.on(each.qualified, ON)]
     # By tier, because that is the question the two keys answer: failure isolation between what was
-    # read from files outside every worktree and what was read from one. Confinement happens to
+    # read from files outside every checkout and what was read from one. Confinement happens to
     # draw the same line today and is a different question.
     asking = [
         (key, [each for each in on if (each.tier is Tier.REPOSITORY) is repository])
         for key, repository in ((PLUGINS_KEY, False), (REPOSITORY_PLUGINS_KEY, True))
     ]
     unrecorded = [(key, asked) for key, asked in asking if key not in run.recorded]
-    said = await asyncio.gather(*(setting_up(asked, speaking, run.workflow, worktree) for _, asked in unrecorded))
+    said = await asyncio.gather(*(setting_up(asked, speaking, run.workflow, checkout) for _, asked in unrecorded))
     ready = dict(zip((key for key, _ in unrecorded), (enrolled for enrolled, _ in said), strict=True))
     # Across both tiers, which costs nothing and asks for no rule about which of them may set a
-    # variable: only a plugin inside the namespace is offered the file, so a plugin outside a worktree
+    # variable: only a plugin inside the namespace is offered the file, so a plugin outside a checkout
     # contributes an empty mapping here by construction rather than by being excluded.
     environment = {name: value for _, asked in said for name, value in asked.items()}
 
@@ -3355,7 +3402,7 @@ def conversing(
     costs is that a change takes effect on the next pass, which is the next turn.
 
     **The first pass of a session answers nothing, and that is the shape rather than an accident.**
-    It plants the worktree and asks every plugin what it is, records both, and then reaches
+    It plants the checkout and asks every plugin what it is, records both, and then reaches
     `opening_turn` with an empty inbox and comes back `Blocked`. Nothing about that is a new
     mechanism: `opening_turn` already suspends a pass on the inbox, so "set up, then stop and wait"
     is `planting` moving above it plus a session that is queued by `make_ready` rather than by a
@@ -3367,15 +3414,17 @@ def conversing(
         chosen = choice_of(run.recorded)
         if chosen is None:
             raise NeverStarted(f"{run.workflow} records no endpoint, so it was never started by this console")
-        # Before anything is planted, declared or run: an archived session's worktree is on its way
+        # Before anything is planted, declared or run: an archived session's checkout is on its way
         # off the disk, and a pass that planted it again would be racing the reconciler for it.
         if archived_in(run.recorded) is not None:
             return Archived()
         # One value for the session's files, used twice: the agent's tools are bound to it, and
-        # every snapshot inside a turn is taken of it. A session with no repository has none, and
-        # gets an agent with no file tools rather than tools that refuse every call.
-        worktree = working_in(workspaces, run.workflow, chosen)
-        # Every session's, worktree or none: a session with no repository still runs things, and
+        # every snapshot inside a turn is taken of it. A session with no repository has none, so it
+        # has nothing snapshotted and no `list` or `grep`; what its file tools and `bash` reach is
+        # its scratch, or the machine on `EVERYTHING`, where there is a sandbox, and nothing without
+        # one. `reaching` decides which.
+        checkout = working_in(workspaces, run.workflow, chosen)
+        # Every session's, checkout or none: a session with no repository still runs things, and
         # the scratch is where what they made is kept. Whether the isolation reaches it is
         # `reaching`'s to say, and it says nothing of it on the whole-machine arm.
         scratch = None if workspaces is None else workspaces.scratch_at(run.workflow)
@@ -3383,7 +3432,7 @@ def conversing(
         # check split in two. Without one there is no endpoint to answer on at all, and finding that
         # out before the first `awaiting` is what makes it a failure the console can explain rather
         # than one discovered mid-turn; the agent itself cannot be built this early any more, because
-        # what it is told includes the repository's own guidance and the worktree holding it is
+        # what it is told includes the repository's own guidance and the checkout holding it is
         # planted inside the loop.
         endpoints.for_endpoint(chosen.endpoint)
         # What each stretch of context in this pass is answered under, by the turn it began at.
@@ -3414,15 +3463,15 @@ def conversing(
         # and nothing for a replay to disagree with.
         #
         # **Above `opening_turn` rather than below it**, which is the whole of what makes a settings
-        # step possible: a repository's plugins cannot be *named* until its worktree is planted, and
-        # the worktree is planted by a pass. So the first pass of a session plants, reads what is
+        # step possible: a repository's plugins cannot be *named* until its checkout is planted, and
+        # the checkout is planted by a pass. So the first pass of a session plants, reads what is
         # declared, and then blocks with an empty inbox.
         await planting(workspaces, run, chosen, at.turn)
         # Settled once, so the three readers below cannot come to differ over what a console given no
         # `Declaring` runs: no scripts, no way to speak to one, and nothing a repository may add.
         sourcing = declaring or Declaring()
         try:
-            declared = await declaring_plugins(run, sourcing, chosen, worktree)
+            declared = await declaring_plugins(run, sourcing, chosen, checkout)
         except (Refused, BadDeclaration) as raised:
             # **A failure ends the pass with nothing declared**, and the reason is written where the
             # page can say which file and why. `Stalled` rather than a raise, because the next pass
@@ -3439,7 +3488,7 @@ def conversing(
         enrolled = registered_in(run.recorded)
         if enrolled is None:
             try:
-                enrolled = await setting_plugins_up(run, sourcing, declared, tended, worktree)
+                enrolled = await setting_plugins_up(run, sourcing, declared, tended, checkout)
             except (PluginFailed, Refused, BadDeclaration) as raised:
                 # **Recorded against the attempt it belongs to**, which is what makes the step
                 # somebody can act on: turning the plugin off and pressing again opens a new attempt
@@ -3456,7 +3505,7 @@ def conversing(
             enrolled=on,
             tending=tended,
             speaking=sourcing.speaking,
-            worktree=worktree,
+            checkout=checkout,
             delivering=(lambda note: delivering(run.workflow, note)) if delivering is not None else nowhere,
             storing=(
                 (lambda plugin, values: storings(run.workflow, plugin, values)) if storings is not None else unstored
@@ -3512,7 +3561,7 @@ def conversing(
             #
             # **It holds exactly what the model is sent**, which is what lets the page draw the
             # system prompt from the moment a turn opens rather than only once one has landed.
-            # `agent_for` speaks this string verbatim, so the note about this session's worktree and
+            # `agent_for` speaks this string verbatim, so the note about this session's checkout and
             # network is composed in here beside the plugins' own instead of being appended out there:
             # appended, it would be a sentence the model carried that no record held, recomposed on
             # every turn in front of a cached prefix it is supposed to sit still behind.
@@ -3520,12 +3569,13 @@ def conversing(
             # What every plugin contributed is already settled: `setup` ran above this loop, on this
             # pass or an earlier one, and its answer is recorded - so this reads a value.
             said_under = (
+                # What the page draws from a reply, which is the console's to say and the same for
+                # every session: the least specific block there is, so it is first, and constant, so
+                # it lengthens the prefix every session shares.
+                drawing_note(),
                 instructions,
                 *live.instructions(),
-                reaching(chosen.isolation, worktree, scratch, bwrap).note,
-                # What the page draws from a reply, which is the console's to say and the same for
-                # every session, so it is last and constant: nothing under it moves between sessions.
-                drawing_note(),
+                reaching(chosen.isolation, checkout, scratch, bwrap).note,
             )
 
             async def composing(blocks: Sequence[str] = said_under) -> object:
@@ -3550,7 +3600,7 @@ def conversing(
                 endpoints,
                 chosen,
                 spoken,
-                worktree=worktree,
+                checkout=checkout,
                 scratch=scratch,
                 bwrap=bwrap,
                 plugins=live,
@@ -3567,7 +3617,7 @@ def conversing(
             # this pass. A pass that resumes mid-conversation issues its first request under
             # `turn:7:model:0` exactly as the pass that first reached turn 7 did.
             #
-            # The snapshots are inside this rather than taken here, and that is what the worktree
+            # The snapshots are inside this rather than taken here, and that is what the checkout
             # is handed over for. One per model request is the only cadence that holds once tools
             # can write: the first is taken before the model is asked anything, which is the state
             # a rewind to this turn puts back, and each later one records what the previous batch
@@ -3582,7 +3632,7 @@ def conversing(
             # What the plugins say each time the model tries to stop, recorded per attempt under this
             # turn, so a resumed pass replays the turn being kept going rather than asking again.
             keeping = keeping_through(run, live, at.turn, opening_of(asked))
-            with stepping(run, turn_prefix(at.turn), worktree, pricer, draining, spending, injecting, gating) as scope:
+            with stepping(run, turn_prefix(at.turn), checkout, pricer, draining, spending, injecting, gating) as scope:
                 try:
                     answered = await answering_turn(agent, asked.said, at.history, scope, keeping)
                 except AllowanceSpent:

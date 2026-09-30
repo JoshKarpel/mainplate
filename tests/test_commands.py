@@ -25,7 +25,6 @@ from without_durability.interfaces import inbox_key
 from mainplate import records
 from mainplate.agent import Choice
 from mainplate.app import build_app
-from mainplate.commands import PUSHED
 from mainplate.commands import UNFINISHED
 from mainplate.commands import Commands
 from mainplate.conversation import SETUP_ENVIRONMENT_KEY
@@ -38,6 +37,7 @@ from mainplate.conversation import model_key
 from mainplate.conversation import parse_result
 from mainplate.conversation import reached
 from mainplate.conversation import recorded_command
+from mainplate.conversation import recorded_push
 from mainplate.conversation import recorded_result
 from mainplate.conversation import result_key
 from mainplate.conversation import transcript
@@ -80,10 +80,10 @@ def caller_form() -> dict[str, str]:
 
 async def planted(service: Service, workspaces: Workspaces, chosen: Choice) -> str:
     """
-    A session whose worktree is actually on disk, without driving a pass to get it there.
+    A session whose checkout is actually on disk, without driving a pass to get it there.
 
     Planted directly rather than through `conversing`, because what these tests are about is what
-    happens in the worktree and not how it came to exist: a pass would bring a stand-in provider, an
+    happens in the checkout and not how it came to exist: a pass would bring a stand-in provider, an
     agent and a whole turn along with it to produce one directory.
     """
     session = await started(service, "hello", chosen)
@@ -150,13 +150,21 @@ class TestWhatTheStoreHolds:
         recorded = {**said_at(0, "have a look"), **ran_at(1, "sleep 30")}
         assert transcript(recorded).panels[-1].blocks == (Command(entry=inbox_key(1), text="sleep 30"),)
 
+    def test_a_push_recorded_before_pushes_named_their_branch_reads_as_it_always_did(self) -> None:
+        """
+        A checkpoint value is durable, so the shape an earlier build wrote a push in has to keep
+        loading: a command whose text is `push` and nothing else, which is all it ever said.
+        """
+        recorded = {**said_at(0, "have a look"), inbox_key(1): {"kind": "command", "said": "push", "online": False}}
+        assert transcript(recorded).panels[-1].blocks == (Command(entry=inbox_key(1), text="push"),)
+
 
 class TestWhereACommandIsDrawn:
     """
     Where it was run, in both readings of the turn it ran during.
 
     Two properties, and the second is what the inbox bought. A command sits after the requests that
-    had answered when somebody typed it, because the store files an entry in the order it arrived and
+    had answered when somebody typed it, because the database files an entry in the order it arrived and
     counting this turn's model records ahead of it says how far the reply had got. And the two
     readings agree: the page morphs one into the other when a turn lands, so a command that moved at
     that moment would be the transcript rewriting itself under whoever was reading it.
@@ -299,9 +307,34 @@ class TestHowACommandIsDrawn:
         assert "no output" not in drawn.text
         assert 'class="ran__body"' not in drawn.text
 
+    async def test_a_push_is_drawn_naming_the_branch_it_pushed(self, app: ASGIApp, service: Service) -> None:
+        session = await started(service, "have a look", DEFAULT_CHOICE)
+        entry = await service.checkpointer.append(session.id, recorded_push("try-it-this-way"))
+
+        async with calling(app) as caller:
+            drawn = await caller.get(f"/sessions/{session.id}")
+
+        line = drawn.text.split(f'id="ran-{entry.key}"', 1)[1].split("</summary>", 1)[0]
+        assert 'class="ran__pushed"' in line
+        assert '<code class="ran__line">try-it-this-way</code>' in line
+
+    async def test_a_command_whose_text_is_push_is_drawn_as_the_line_somebody_typed(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """The other half of the one above: the text alone must not make a command look like a push."""
+        session = await started(service, "have a look", DEFAULT_CHOICE)
+        entry = await service.checkpointer.append(session.id, recorded_command("push"))
+
+        async with calling(app) as caller:
+            drawn = await caller.get(f"/sessions/{session.id}")
+
+        line = drawn.text.split(f'id="ran-{entry.key}"', 1)[1].split("</summary>", 1)[0]
+        assert 'class="ran__pushed"' not in line
+        assert '<code class="ran__line">push</code>' in line
+
 
 class TestRunningOne:
-    async def test_a_command_runs_in_the_session_s_own_worktree(
+    async def test_a_command_runs_in_the_session_s_own_checkout(
         self, running: Service, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
         session = await planted(running, workspaces, on_fixture)
@@ -335,7 +368,7 @@ class TestRunningOne:
 
         assert (await ran(running, session, "exit 3")).status == 3
 
-    async def test_a_git_write_lands_in_the_worktree(
+    async def test_a_git_write_lands_in_the_checkout(
         self, running: Service, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
         """The point of the whole thing: the checkout's git is the session's, so a commit commits."""
@@ -417,7 +450,7 @@ class TestRunningOne:
     ) -> None:
         """
         What the queue removed the need to check for. Two writers picking a number by trying could
-        lose the loser's command to the store's keep-the-first rule; the store names an entry, so
+        lose the loser's command to the database's keep-the-first rule; the database names an entry, so
         three appends are three entries and there is nothing to race for.
         """
         session = await planted(running, workspaces, on_fixture)
@@ -446,11 +479,11 @@ class TestRunningOne:
         assert entry is not None
         assert (await running.checkpointer.load(session))[entry] == recorded_command("echo late")
 
-    async def test_a_command_before_the_first_turn_says_the_worktree_is_not_there_yet(
+    async def test_a_command_before_the_first_turn_says_the_checkout_is_not_there_yet(
         self, running: Service, on_fixture: Choice
     ) -> None:
         """
-        The common case rather than an odd one. A worktree is planted by the session's *first pass*,
+        The common case rather than an odd one. A checkout is planted by the session's *first pass*,
         because a clone is a network fetch and creating a session is a POST somebody is waiting on -
         so between creating one and its first reply there is a repository, a `Run` on offer, and
         nowhere yet to run in. What that must not be is a `FileNotFoundError` repr.
@@ -460,7 +493,7 @@ class TestRunningOne:
         came = await ran(running, session.id, "git status")
 
         assert came.status == UNFINISHED
-        assert "worktree is made on its first turn" in came.output
+        assert "checkout is made on its first turn" in came.output
 
     async def test_a_session_with_no_files_has_nowhere_to_run_one(self, running: Service) -> None:
         """`None` rather than a raise: it is a state the page can explain, not a fault."""
@@ -481,7 +514,7 @@ class TestRunningOne:
     ) -> None:
         """
         A record left unwritten is a command that says it is still going for ever, which nobody can
-        tell from one that is. The write is shielded for exactly this, and the store outlives the
+        tell from one that is. The write is shielded for exactly this, and the database outlives the
         cancellation because `open_store` closes the runner inside its own `finally`.
         """
         session = await planted(running, workspaces, on_fixture)
@@ -581,7 +614,27 @@ class TestPushingOne:
         assert came.status == 0, came.output
         assert "try-it-this-way" in came.output
         assert await run("git", "rev-parse", "refs/heads/try-it-this-way", cwd=origin) == made
-        assert (await running.checkpointer.load(session))[entry] == recorded_command(PUSHED)
+        assert (await running.checkpointer.load(session))[entry] == recorded_push("try-it-this-way")
+
+    async def test_a_push_records_what_a_command_whose_text_is_push_does_not(
+        self, running: Service, workspaces: Workspaces, on_fixture: Choice
+    ) -> None:
+        """
+        A person running `push` in the sandbox and the console pushing both say `push`, so the
+        record has to carry what tells them apart, or the page cannot.
+        """
+        session = await planted(running, workspaces, replace(on_fixture, branch="try-it-this-way"))
+
+        typed = await running.run(session, "push")
+        pushed = await running.push(session)
+
+        assert typed is not None
+        assert pushed is not None
+        await settled(running, session, typed)
+        await settled(running, session, pushed)
+        recorded = await running.checkpointer.load(session)
+        assert records.Command.model_validate(recorded[typed]).pushed is None
+        assert records.Command.model_validate(recorded[pushed]).pushed == "try-it-this-way"
 
     async def test_a_push_the_remote_refuses_is_a_result_rather_than_a_fault(
         self, running: Service, workspaces: Workspaces, on_fixture: Choice, origin: Path
@@ -715,7 +768,7 @@ class TestThroughTheConsole:
             answer = await caller.post(f"/sessions/{session}/messages", {"prompt": "", "disposition": "push"})
 
         assert answer.status == 200
-        assert recorded_command(PUSHED) in (await running.checkpointer.load(session)).values()
+        assert recorded_push(branch_named(session)) in (await running.checkpointer.load(session)).values()
 
     async def test_pushing_with_something_in_the_box_is_refused_rather_than_dropped(
         self, app: ASGIApp, running: Service, workspaces: Workspaces, on_fixture: Choice
@@ -726,14 +779,14 @@ class TestThroughTheConsole:
             answer = await caller.post(f"/sessions/{session}/messages", {"prompt": "hello", "disposition": "push"})
 
         assert answer.status == 422
-        assert recorded_command(PUSHED) not in (await running.checkpointer.load(session)).values()
+        assert recorded_push(branch_named(session)) not in (await running.checkpointer.load(session)).values()
 
 
 class TestCommittingThroughTheConsole:
     """
     `/commit`, which is a `Run` of `git commit` with the box as the message: a shortcut that commits
     what is staged and stages nothing. What git did is read off the recorded result, which is what a
-    reader sees too, rather than by running git against the worktree from out here.
+    reader sees too, rather than by running git against the checkout from out here.
     """
 
     MESSAGE = "Scroll a long line inside its block\n\nIt's the block that scrolls, and never the page."
@@ -776,22 +829,36 @@ class TestCommittingThroughTheConsole:
         assert committed.status != 0
         assert "stray.txt" in committed.output, "git names the file it was not told to commit"
 
-    async def test_the_menu_offers_it_where_there_are_files_and_a_session_without_refuses_it(
+    async def test_the_menu_offers_it_where_there_are_files(
         self, app: ASGIApp, running: Service, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
         with_files = await planted(running, workspaces, on_fixture)
-        without = await started(running, "hello", replace(DEFAULT_CHOICE, repository=None))
 
         async with calling(app) as caller:
             offered = await caller.get(f"/sessions/{with_files}")
+
+        assert 'value="commit"' in offered.text
+
+    async def test_the_menu_of_a_session_with_no_files_does_not_offer_it(self, app: ASGIApp, running: Service) -> None:
+        without = await started(running, "hello", replace(DEFAULT_CHOICE, repository=None))
+
+        async with calling(app) as caller:
             plain = await caller.get(f"/sessions/{without.id}")
+
+        assert 'value="forget"' in plain.text, "the control: the session has a menu at all"
+        assert 'value="commit"' not in plain.text
+
+    async def test_a_session_with_no_files_refuses_it_and_records_nothing(self, app: ASGIApp, running: Service) -> None:
+        without = await started(running, "hello", replace(DEFAULT_CHOICE, repository=None))
+
+        async with calling(app) as caller:
             refused = await caller.post(
                 f"/sessions/{without.id}/messages", {"prompt": "a message", "disposition": "commit"}
             )
 
-        assert 'value="commit"' in offered.text
-        assert 'value="commit"' not in plain.text
         assert refused.status == 422
+        recorded = (await running.checkpointer.load(without.id)).values()
+        assert recorded_command(commit_command("a message")) not in recorded
 
 
 @pytest.mark.parametrize(
@@ -858,12 +925,10 @@ class TestStartingSomewhereThroughTheForm:
 
 class TestOfferingWhereToStart:
     """
-    The completions beside the field, swapped in when a workspace card is picked.
+    The completions beside the field, swapped in once the new-session page has arrived.
 
-    The same shape the model group already has under the endpoint cards, and it exists for a reason
-    a still cannot show: what a repository's branches are is a question with a different answer per
-    card, so a page that serialized one list would be offering the wrong repository's the moment
-    somebody changed their mind.
+    Asked for rather than drawn with the page, because they are a round trip to the remote and the
+    rest of the page is not.
     """
 
     @pytest.fixture

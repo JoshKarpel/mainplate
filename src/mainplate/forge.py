@@ -1,7 +1,7 @@
 # Where a repository comes from, as one question asked of whatever can answer it.
 #
 # A **forge** answers exactly one thing: what repositories can this console reach? Everything below
-# it - worktrees, snapshots, forking - takes a git directory and never asks how it got there, which
+# it - checkouts, snapshots, forking - takes a git directory and never asks how it got there, which
 # is what makes this a seam rather than a layer. A second forge is one class here, not an edit in
 # four files, and that is deliberate: exe.dev is the one that exists because it is the one we are
 # on, and a GitHub App or another git host is the same two answers from a different place.
@@ -29,10 +29,11 @@ from typing import Final
 from typing import Protocol
 
 from mainplate.sandbox import NoSandbox
+from mainplate.snapshots import Checkout
+from mainplate.snapshots import Checkouts
 from mainplate.snapshots import Ran
+from mainplate.snapshots import Snapshot
 from mainplate.snapshots import Store
-from mainplate.snapshots import Worktree
-from mainplate.snapshots import Worktrees
 from mainplate.snapshots import demanded
 from mainplate.snapshots import git_at
 
@@ -213,6 +214,7 @@ class Fetches:
 
 
 def utc_now() -> datetime:
+    """The moment it is, which is what `Workspaces.clock` reads unless a test hands it another."""
     return datetime.now(UTC)
 
 
@@ -244,28 +246,35 @@ def named(listed: str) -> tuple[str, ...]:
 @dataclass(frozen=True, slots=True)
 class Clones:
     """
-    Where this console keeps the repositories it has been given, one bare clone each.
+    Where this console keeps the repositories it has been given, one store each.
 
-    **Bare**, and that is the whole shape of it: a bare repository has no working tree, so there is
-    no "main" checkout to be confused with a session's. Each is the `Store` every session's checkout
-    of that repository borrows its objects from, which is also what makes a fork cheap, since the
-    tree a fork checks out is already an object here.
+    **Bare**, and that is the whole shape of it: a store is a bare clone, which has no working tree,
+    so there is no "main" checkout to be confused with a session's. Each is the `Store` every
+    session's checkout of that repository borrows its objects from, which is also what makes a fork
+    cheap, since the tree a fork checks out is already an object here.
 
-    Clones live under one root and are named by the repository id rather than by its URL, so the
+    Stores live under one root and are named by the repository id rather than by its URL, so the
     same repository reached through a different forge tomorrow is still the same directory.
     """
 
     root: Path
 
     def at(self, repository: str) -> Path:
+        """Where a repository's store is, or would be, which is a question with no I/O in it."""
         return self.root / f"{repository.replace('/', '%')}.git"
 
     def store(self, repository: str) -> Store:
+        """
+        A repository's store, as the value git in the parent runs against, whether or not it is cloned.
+
+        A value rather than a lookup, like `Checkouts.checkout`, so naming one costs nothing and
+        cannot fail; the first git against a store not cloned yet is what says so.
+        """
         return Store(path=self.at(repository))
 
-    def worktrees(self, repository: str, under: Path, bwrap: str, identity: tuple[tuple[str, str], ...]) -> Worktrees:
+    def checkouts(self, repository: str, under: Path, bwrap: str, identity: tuple[tuple[str, str], ...]) -> Checkouts:
         """The checkouts of one repository, which is what a session is actually planted in."""
-        return Worktrees(store=self.store(repository), root=under, bwrap=bwrap, identity=identity)
+        return Checkouts(store=self.store(repository), root=under, bwrap=bwrap, identity=identity)
 
     def cloned(self, repository: str) -> bool:
         """Whether this repository is already on disk, which is a question with no I/O in it."""
@@ -273,23 +282,44 @@ class Clones:
 
     async def refresh(self, repository: Repository) -> Ran:
         """
-        Bring this clone's idea of the remote up to date, so a branch name means today's commit.
+        Bring this store's idea of the remote up to date, so a branch name means today's commit.
 
-        Into `refs/remotes/origin/` and never over `refs/heads/`, which is the whole care here. A
-        bare clone's branches live under `refs/heads/` and are as old as the clone; fetching over
+        Into `refs/remotes/origin/` and never over `refs/heads/`, which is the whole care here. The
+        store's own branches live under `refs/heads/` and are as old as the clone; fetching over
         them with a forcing refspec would also walk over a branch a session started and has been
         committing to, which is somebody's work rather than a stale copy. Fetching beside them costs
-        one namespace and takes nothing away, and `Worktrees.resolve` is what prefers the fresh side.
+        one namespace and takes nothing away, and `Checkouts.resolve` is what prefers the fresh side.
+
+        **Nothing unreachable is ever pruned from the store**, and this is where that is set, before
+        every fetch, because a fetch is what takes a commit a checkout borrows out of the store's
+        reach: `--prune` drops a branch the remote deleted and the forcing refspec drops a commit it
+        rewrote, and the fetch then runs git's automatic `gc` itself. A checkout borrows the store's
+        objects without the store knowing which, so a commit a session merged from a branch the
+        remote has since deleted is one only the checkout still refers to, and a `gc` pruning it
+        would break that checkout's history. Set
+        here rather than once at the clone, so a store cloned before the setting was written gets it
+        at its next fetch, and before anything that fetch drops can be pruned. A store that will not
+        take the setting is not fetched, and that is reported the way a failed fetch is. **Read
+        before it is written**, because a write takes the configuration's lock and git does not wait
+        for one: two refreshes of one store at once, the loop's round and a session being planted,
+        would race for it, and the one that lost would skip its fetch and report a failure the
+        remote never had. The cost, stated: a store only grows, and every fetch is one more `git
+        config` read beside it.
 
         Logged rather than raised, because this is an improvement on what a name resolves to and not
         a precondition for planting: a machine that is offline, or a repository whose integration was
-        detached this morning, still gets the worktree it would have got before this existed. The
-        store keeps the last refs it fetched, so a failed round leaves sessions exactly as current
-        as the one before it and the next round tries again. What git said comes back, so the caller
-        can hold it where a page can say so; see `Workspaces.refresh`.
+        detached this morning, still gets the checkout it would have got anyway. The store keeps the
+        last refs it fetched, so a failed round leaves sessions exactly as current as the one before
+        it and the next round tries again. What git said comes back, so the caller can hold it where
+        a page can say so; see `Workspaces.refresh`.
         """
-        fetched = await self.store(repository.id).git(
-            "fetch", "--prune", "--tags", repository.url, "+refs/heads/*:refs/remotes/origin/*"
+        store = self.store(repository.id)
+        held = await store.git("config", "--get", "gc.pruneExpire")
+        kept = held if held.out == "never" else await store.git("config", "gc.pruneExpire", "never")
+        fetched = (
+            await store.git("fetch", "--prune", "--tags", repository.url, "+refs/heads/*:refs/remotes/origin/*")
+            if kept.ok
+            else kept
         )
         if not fetched.ok:
             logger.warning(f"could not refresh {repository.name}, so a branch name may be stale: {fetched.err}")
@@ -299,12 +329,12 @@ class Clones:
         """
         What branches this repository has right now, for the page to offer as a starting point.
 
-        Asked of the **remote** rather than of the clone, which is what lets the very first session on
-        a repository be started on a branch: there is no clone yet at that moment, and cloning to find
+        Asked of the **remote** rather than of the store, which is what lets the very first session on
+        a repository be started on a branch: there is no store yet at that moment, and cloning to find
         out what to check out is minutes of network inside a request somebody is waiting on.
         `ls-remote` transfers no objects, so it is one round trip and no disk.
 
-        It also cannot go stale in the way reading the clone would. A clone is refreshed only while
+        It also cannot go stale in the way reading the store would. A store is refreshed only while
         some session works in it, so a list read from one would be as old as the last such session -
         which is exactly the trap a named base already had.
 
@@ -329,15 +359,13 @@ class Clones:
         """
         The repository on disk, cloned if this is the first time it has been asked for.
 
-        Idempotent, so a second session on the same repository is a checkout rather than a second
-        clone. The clone is bare and the URL is passed as an argument to `git clone` deliberately:
-        on exe.dev it carries no credential at all, because there is none to carry.
+        Idempotent, so a second session on the same repository plants a checkout from the store
+        rather than making a second clone. The store is bare and the URL is passed as an argument to
+        `git clone` deliberately: on exe.dev it carries no credential at all, because there is none to
+        carry.
 
-        **Nothing unreachable is ever pruned from it**, set on every call so a clone made before this
-        was true gets it too. A checkout borrows the store's objects without the store knowing which,
-        so a commit a session merged from a branch the remote has since deleted is one only the
-        checkout still refers to, and a `gc` pruning it would break that checkout's history. The
-        cost, stated: a store only grows.
+        What keeps a store from pruning what a checkout borrows is set by `refresh`, before the first
+        fetch that could take any of it out of reach, which nothing does to a store just cloned.
         """
         here = self.at(repository.id)
         if not self.cloned(repository.id):
@@ -346,21 +374,20 @@ class Clones:
             cloning = ("clone", "--bare", repository.url, str(here))
             demanded(await git_at(self.root, *cloning), cloning)
             # A clone just made is current, so its branches are what a `refresh` would have fetched.
-            # Copied under `refs/remotes/origin/` from the clone itself, with no network, because
+            # Copied under `refs/remotes/origin/` from the store itself, with no network, because
             # that is the namespace `resolve` prefers and a checkout's `git fetch` reads.
             await self.store(repository.id).demand("fetch", "--quiet", ".", "+refs/heads/*:refs/remotes/origin/*")
-        await self.store(repository.id).demand("config", "gc.pruneExpire", "never")
         return here
 
 
 @dataclass(frozen=True, slots=True)
 class Workspaces:
     """
-    Where a session's files come from and where they live: clones of repositories, checkouts of
-    clones.
+    Where a session's files come from and where they live: stores of repositories, checkouts of
+    stores.
 
     One value rather than several passed around together, because they only mean anything as a
-    set: a checkout is of a clone, a clone is of something a forge reaches, and git runs against a
+    set: a checkout is of a store, a store is of something a forge reaches, and git runs against a
     checkout only behind `bwrap`. It is what the worker is handed to make a session's files exist,
     and what the service is handed to say where they are.
     """
@@ -394,6 +421,12 @@ class Workspaces:
     """What each store's last clone or fetch came to, which the dashboard draws. See `refresh`."""
 
     clock: Callable[[], datetime] = utc_now
+    """
+    What a fetch is stamped with, handed in so a test can say when "now" is.
+
+    The only moment this reads: a fetch's record is the one thing here that depends on when it
+    happened rather than on what git said.
+    """
 
     async def refresh(self, repository: Repository) -> None:
         """
@@ -406,6 +439,12 @@ class Workspaces:
         self.fetched(repository.id, None if came.ok else came.err or came.out or f"git exited {came.code}")
 
     def fetched(self, repository: str, failed: str | None) -> None:
+        """
+        Hold what one store's last clone or fetch came to, stamped now, for the dashboard to draw.
+
+        Rebinds `fetches.current` to a new mapping rather than writing into it, so a page reading the
+        old one mid-render reads a whole answer.
+        """
         self.fetches.current = {**self.fetches.current, repository: Fetched(at=self.clock(), failed=failed)}
 
     def at(self, session: str) -> Path:
@@ -416,10 +455,10 @@ class Workspaces:
         """
         Somewhere a session may keep things that are not its repository's.
 
-        Outside the worktree rather than inside it, which is what keeps it out of everything git
-        answers: a directory under the worktree is `--others` to `git ls-files`, so it would show up
-        in `list` and in `status`, and excluding it means writing an exclusion into a git directory
-        that is read-only wherever a command can see it.
+        Outside the checkout rather than inside it, which is what keeps it out of everything git
+        answers: a directory under the checkout is `--others` to `git ls-files`, so it would show up
+        in `list` and in `status`, and the only place to write an exclusion is the checkout's own
+        `.git/info/exclude`, which anything the session runs could take out again.
 
         Nothing snapshots this, deliberately and for the reason snapshots are gitignore-aware in the
         first place: going back to before a call should not uninstall what was installed between
@@ -428,13 +467,13 @@ class Workspaces:
         """
         return self.scratch / session
 
-    def worktrees(self, repository: str) -> Worktrees:
+    def checkouts(self, repository: str) -> Checkouts:
         """Every session's checkout of one repository, refused where nothing could confine git in one."""
         if self.bwrap is None:
             raise NoSandbox(f"nothing confines git on this machine, so no session may work in {repository!r}")
-        return self.clones.worktrees(repository, self.root, self.bwrap, self.identity)
+        return self.clones.checkouts(repository, self.root, self.bwrap, self.identity)
 
-    def worktree(self, session: str, repository: str) -> Worktree:
+    def checkout(self, session: str, repository: str) -> Checkout:
         """
         A session's checkout, knowing which store it borrows from, which is what lets a snapshot of it
         be kept after the checkout is gone.
@@ -443,9 +482,10 @@ class Workspaces:
         a session's choice, and the callers all have it: a checkout is only ever named for a session
         that picked a repository.
         """
-        return self.worktrees(repository).worktree(session)
+        return self.checkouts(repository).checkout(session)
 
     def named(self, repository: str) -> Repository | None:
+        """The repository an id names while some forge reaches it, read from the current answer."""
         return self.reaching.current.offers(repository)
 
     async def branches(self, repository: str) -> tuple[str, ...]:
@@ -464,15 +504,15 @@ class Workspaces:
         session: str,
         repository: str,
         *,
-        tree: str | None = None,
+        snapshot: Snapshot | None = None,
         base: str | None = None,
         branch: str | None = None,
-    ) -> Worktree | None:
+    ) -> Checkout | None:
         """
-        A session's worktree, cloning the repository first if this console has not seen it before.
+        A session's checkout, cloning the repository first if this console has not seen it before.
 
         Idempotent at both levels, so this is what every pass calls and only the first one does any
-        work: a cache that exists is reused, and a checkout that exists is left exactly as the
+        work: a store that exists is reused, and a checkout that exists is left exactly as the
         session left it.
 
         A repository **no forge currently reaches is still usable once cloned**, which is the same
@@ -481,21 +521,25 @@ class Workspaces:
         session on one that was never cloned, and that is the honest failure because there is
         nowhere to get it from.
 
-        **Planting a worktree fetches first**, whether or not a base was named, because starting a
+        **Planting a checkout fetches first**, whether or not a base was named, because starting a
         session is the moment somebody wants current code and is waiting on it. The background
-        loop in `fetching.py` keeps the clone current after that, while the session works; this
+        loop in `fetching.py` keeps the store current after that, while the session works; this
         fetch is what makes a fast-moving repository's new session start on the `main` of now rather
         than of up to one round ago.
 
-        Two cases skip it and both would be round trips that cannot change an answer. A clone that
-        has just been *made* is current by construction. And a **fork** plants at a recorded tree,
-        which is an object this console wrote and therefore already holds.
+        Two cases skip it and both would be round trips that cannot change an answer. A store that
+        has just been *cloned* is current by construction. And a **fork** plants at a recorded
+        snapshot, whose tree and commit a capture already carried into the store - where there is a
+        commit. A parent whose `HEAD` named none, on an orphan branch, recorded a tree alone, and its
+        fork stands on the default branch the way a new session does, so it fetches the way one does:
+        skipped, it would stand on a `main` up to a fetch interval old, which is a new session's plant
+        without the one step that makes it mean the repository as it is now.
 
-        Only where the worktree is about to be made, which keeps the cost to one fetch per session
-        rather than one per pass: a session's second turn finds its worktree planted and never
+        Only where the checkout is about to be made, which keeps the cost to one fetch per session
+        rather than one per pass: a session's second turn finds its checkout planted and never
         reaches this at all.
         """
-        worktrees = self.worktrees(repository)
+        checkouts = self.checkouts(repository)
         cloning = not self.clones.cloned(repository)
         if cloning:
             found = self.named(repository)
@@ -503,8 +547,9 @@ class Workspaces:
                 return None
             await self.clones.ensure(found)
             self.fetched(repository, None)
-        if not cloning and tree is None and not worktrees.planted(session):
+        at_recorded_commit = snapshot is not None and snapshot.head is not None
+        if not cloning and not at_recorded_commit and not checkouts.planted(session):
             reached = self.named(repository)
             if reached is not None:
                 await self.refresh(reached)
-        return await worktrees.plant(session, tree=tree, base=base, branch=branch)
+        return await checkouts.plant(session, snapshot=snapshot, base=base, branch=branch)

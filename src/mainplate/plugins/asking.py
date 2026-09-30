@@ -63,7 +63,7 @@ from mainplate.plugins.protocol import settings_of
 from mainplate.plugins.protocol import state_of
 from mainplate.plugins.running import Speaking
 from mainplate.plugins.running import Spoke
-from mainplate.snapshots import Worktree
+from mainplate.snapshots import Checkout
 from mainplate.tending import TENDED
 from mainplate.tending import Tending
 
@@ -185,7 +185,7 @@ class Live:
     `handed` as unset and each delivered a document carrying a boundary.
     """
     speaking: Speaking | None = None
-    worktree: Worktree | None = None
+    checkout: Checkout | None = None
     """
     This session's checkout as this console knows it, store and all, rather than as a path.
 
@@ -285,7 +285,7 @@ class Live:
         """
         if self.speaking is None:  # pragma: no cover - a `Live` with plugins always has one
             raise RuntimeError("this console was given no way to run a plugin")
-        spoke = await self.speaking(plugin.installed, payload, self.worktree)
+        spoke = await self.speaking(plugin.installed, payload, self.checkout)
         answered = parse_answer(plugin.qualified, spoke.said)
         refusing(plugin.qualified, payload.event, answered)
         return answered
@@ -306,7 +306,7 @@ class Live:
             "plugin": plugin.qualified,
             "settings": self.settings(plugin),
             "state": self.state(plugin),
-            "worktree": None if self.worktree is None else str(self.worktree.root),
+            "checkout": None if self.checkout is None else str(self.checkout.root),
         }
 
     async def perform(self, plugin: Enrolled, answered: Answered) -> tuple[records.Note, ...]:
@@ -359,7 +359,7 @@ def opening_of(said: records.Delivered) -> Opening:
 
 
 async def setting_up(
-    installed: Sequence[Installed], speaking: Speaking, session: str, worktree: Worktree | None
+    installed: Sequence[Installed], speaking: Speaking, session: str, checkout: Checkout | None
 ) -> tuple[tuple[Enrolled, ...], dict[str, str]]:
     """
     Set every declared plugin up, all at once, and fail naming whichever one will not answer.
@@ -383,10 +383,10 @@ async def setting_up(
     next attempt sets all of them up again. Recording each separately would still leave a session
     half set up, and being run twice is what an install is already built to survive.
     """
-    where = None if worktree is None else str(worktree.root)
+    where = None if checkout is None else str(checkout.root)
     spoke = await asyncio.gather(
         *(
-            speaking(each, SettingUp(session=session, plugin=each.qualified, worktree=where), worktree)
+            speaking(each, SettingUp(session=session, plugin=each.qualified, checkout=where), checkout)
             for each in installed
         )
     )
@@ -805,8 +805,8 @@ class Declaring:
     Where a console's plugins come from, held once for the process and read per session.
 
     The bundled set and the operator's are both fixed at startup, because both are files outside
-    every worktree and neither can change under a running console without one being restarted.
-    A repository's are read per session, from the worktree, once.
+    every checkout and neither can change under a running console without one being restarted.
+    A repository's are read per session, from the checkout, once.
 
     Injected into the pass and into the service rather than reached for, symmetric with `Pricer` and
     `Draining`: what runs a plugin spawns processes and knows about sandboxes, and a console given

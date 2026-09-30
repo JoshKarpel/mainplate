@@ -35,7 +35,7 @@ SOURCE = "def first():\n    return 1\n\n\ndef second():\n    return 2\n"
 @pytest.fixture
 def files(tmp_path: Path, bwrap: str) -> Files:
     (tmp_path / "app.py").write_text(SOURCE)
-    return Files(roots=(GitTracked(worktree=checkout_in(tmp_path, bwrap)),))
+    return Files(roots=(GitTracked(checkout=checkout_in(tmp_path, bwrap)),))
 
 
 def naming(files: Files, at: int) -> str:
@@ -146,7 +146,7 @@ class TestTwoCallsAtOneFileAtOnce:
 
 class TestReachingTheScratchDirectory:
     """
-    The second place a session may touch, and the three ways it differs from the worktree.
+    The second place a session may touch, and the three ways it differs from the checkout.
 
     Named absolutely rather than reached relatively, covered by `read`/`edit`/`create` but not by
     `list`, and still bounded: somewhere out of reach is refused exactly as it was before.
@@ -157,7 +157,7 @@ class TestReachingTheScratchDirectory:
         scratch = tmp_path.parent / "scratch-for-session"
         scratch.mkdir(exist_ok=True)
         (tmp_path / "app.py").write_text(SOURCE)
-        return Files(roots=(GitTracked(worktree=checkout_in(tmp_path, bwrap)), Scratch(path=scratch)))
+        return Files(roots=(GitTracked(checkout=checkout_in(tmp_path, bwrap)), Scratch(path=scratch)))
 
     async def test_a_file_there_can_be_created_read_and_edited(self, reaching: Files) -> None:
         where = str(reaching.roots[1].path / "plan.md")
@@ -200,7 +200,7 @@ class TestNamingTheRootInsteadOfSpellingItOut:
     """
     A place is reached by what it is rather than by where it is.
 
-    A worktree sits under 32 hex characters of session id, and a model that has to reproduce those
+    A checkout sits under 32 hex characters of session id, and a model that has to reproduce those
     from memory eventually reproduces them wrong, which is a refusal it then has to recover from.
     """
 
@@ -211,13 +211,13 @@ class TestNamingTheRootInsteadOfSpellingItOut:
         scratch = tmp_path.parent / f"scratch-{tmp_path.name}"
         scratch.mkdir(exist_ok=True)
         (tmp_path / "app.py").write_text(SOURCE)
-        return Files(roots=(GitTracked(worktree=checkout_in(tmp_path, bwrap)), Scratch(path=scratch)))
+        return Files(roots=(GitTracked(checkout=checkout_in(tmp_path, bwrap)), Scratch(path=scratch)))
 
     async def test_a_named_root_is_what_a_relative_path_joins(self, reaching: Files) -> None:
         await reaching.create("plan.md", "one\ntwo\n", root="scratch")
 
         assert (reaching.roots[1].path / "plan.md").read_text() == "one\ntwo\n"
-        assert not (reaching.roots[0].path / "plan.md").exists(), "and not in the worktree"
+        assert not (reaching.roots[0].path / "plan.md").exists(), "and not in the checkout"
 
     async def test_the_same_name_in_two_roots_is_two_files(self, reaching: Files) -> None:
         # The case that says `root` decides rather than decorates: one name, two places, and each
@@ -231,14 +231,14 @@ class TestNamingTheRootInsteadOfSpellingItOut:
     async def test_a_root_nobody_has_is_refused_and_the_refusal_names_the_ones_there_are(self, reaching: Files) -> None:
         # Taught at the moment it is got wrong, which is what lets one tool description serve every
         # session: what a session's places are called varies and its tools' descriptions do not.
-        with pytest.raises(Refused, match=r"no 'somewhere' here.*worktree, scratch"):
+        with pytest.raises(Refused, match=r"no 'somewhere' here.*checkout, scratch"):
             await reaching.read("app.py", 1, 10, root="somewhere")
 
     async def test_what_comes_back_names_the_root_only_where_it_is_not_the_first(self, reaching: Files) -> None:
         await reaching.create("plan.md", "one\n", root="scratch")
 
         assert "plan.md in scratch" in await reaching.read("plan.md", 1, 10, root="scratch")
-        assert "in worktree" not in await reaching.read("app.py", 1, 10), "which would be on every line"
+        assert "in checkout" not in await reaching.read("app.py", 1, 10), "which would be on every line"
 
     async def test_an_absolute_path_still_lands_where_it_points(self, reaching: Files) -> None:
         # `root` says what a *relative* path joins and nothing else, so naming one cannot redirect a
@@ -259,11 +259,11 @@ class TestStayingInsideTheWorkspace:
             pytest.param("sub/../../outside.txt", id="a climb hidden mid-path"),
         ],
     )
-    async def test_a_path_leaving_the_worktree_is_refused(self, files: Files, escape: str) -> None:
+    async def test_a_path_leaving_the_checkout_is_refused(self, files: Files, escape: str) -> None:
         with pytest.raises(Refused, match="outside this session's workspace"):
             await files.read(escape, 1, 10)
 
-    async def test_a_symlink_pointing_out_of_the_worktree_is_refused(self, files: Files, tmp_path: Path) -> None:
+    async def test_a_symlink_pointing_out_of_the_checkout_is_refused(self, files: Files, tmp_path: Path) -> None:
         """
         The case only resolving catches. Comparing the joined path would see a name under the root
         and let the read through to wherever the link actually goes.
@@ -275,7 +275,7 @@ class TestStayingInsideTheWorkspace:
         with pytest.raises(Refused, match="outside this session's workspace"):
             await files.read("link.txt", 1, 10)
 
-    async def test_writing_outside_the_worktree_is_refused_too(self, files: Files) -> None:
+    async def test_writing_outside_the_checkout_is_refused_too(self, files: Files) -> None:
         with pytest.raises(Refused, match="outside this session's workspace"):
             await files.create("../planted.txt", "anything")
 
@@ -384,7 +384,7 @@ class TestListingADirectory:
 
     async def test_an_ignored_directory_is_left_out(self, repository: Files) -> None:
         """
-        The reason this asks git rather than walking. A worktree usually carries an installed
+        The reason this asks git rather than walking. A checkout usually carries an installed
         environment or a build directory, and one of those listed in full is tens of thousands of
         paths spent before the model has asked its first real question.
         """
@@ -408,7 +408,7 @@ class TestListingADirectory:
         with pytest.raises(Refused, match="there is no directory at"):
             await repository.listing("absent", 1)
 
-    async def test_a_path_leaving_the_worktree_is_refused(self, repository: Files) -> None:
+    async def test_a_path_leaving_the_checkout_is_refused(self, repository: Files) -> None:
         with pytest.raises(Refused, match="outside this session's workspace"):
             await repository.listing("..", 1)
 

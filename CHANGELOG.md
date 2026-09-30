@@ -13,7 +13,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   repository, with its sessions, a **New session** press, a link to the repository on GitHub, and
   when this console last fetched it or that the fetch failed. The press opens the questions about a
   new session with that workspace already answered, where to start in a repository first.
-- **The session list and the rail can each be put away on a wide window**, from a chevron on the
+- **The session list and the rail can each be put away on a wide window**, from a button on the
   column's inner edge, leaving a strip to bring it back; the list's choice holds on the dashboard
   too. **And the conversation's width can be dragged** from its left edge, wider for a diff or
   narrower for prose, with the arrow keys as well and Home or a double press putting it back. Both
@@ -24,10 +24,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stage.
 - **`/push` sends a session's branch to its repository.** It takes nothing from the box, pushes the
   session's own branch, the one named above the box, under the same name with this console's
-  credentials, never forced, and draws what git said the way a command's result is drawn. What the
-  worktree has checked out does not change which branch moves. It reads nothing the session
-  configured: the commit crosses into the console's own clone of the repository and is pushed from
-  there.
+  credentials, never forced, and draws what git said the way a command's result is drawn, under the
+  branch it pushed rather than as a command somebody typed. Whichever branch the checkout is on does
+  not change which branch moves. It reads nothing the session configured: the commit crosses into
+  the console's own clone of the repository and is pushed from there.
 - **`/online` runs one command with the network on** in a session whose commands otherwise have it
   off, for the `npm install` or the fetch a confined session still needs now and then. Its panel
   says `online`. On exe.dev a command with the network can push to the repository without `/push`,
@@ -36,13 +36,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   made, as a `git diff` between the snapshots around it, so an `edit`, a `create` and a `bash` that
   ran at once read as one change rather than three or none. It stands under a rule saying how many
   files and lines it touched, which folds it, and one past 150 lines starts folded, so a merge does
-  not fill the page. The batch's calls above it are drawn as one box with a row each. An `edit`'s own diff and a `create`'s new file are still a press away inside their
-  calls, which are now drawn shut like every other. Nothing is drawn where the batch changed no
-  file, and a scratch-only session, with no worktree to snapshot, shows none, as before.
+  not fill the page. The batch's calls above it are drawn as one box with a row each, and an
+  `edit`'s own diff and a `create`'s new file are a press away inside their calls. Nothing is drawn
+  where the batch changed no file, and a scratch-only session, with no checkout to snapshot, shows
+  none.
 - **A diff, a file and a shell command scroll sideways rather than wrapping**, as a fence already
-  did, and a block whose lines do not fit gets a `focus` button that opens it on its own, as wide as
-  the window. Escape or a press outside puts it away. Not on a phone, where the window is barely
-  wider than the block.
+  did.
 - **A fence labelled `mermaid` or `svg` is drawn.** The picture it describes stands where the code
   would, SVG as it was written or the diagram as the mermaid library renders it in your theme, and a
   button to the left of `copy` puts the text back and takes it away again. The picture is an image,
@@ -58,22 +57,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A new mark.** A watch movement's mainplate, on the tab, the dashboard and the installed app's
   icon. On the tab and the dashboard its two holes are the person's blue and the assistant's orange,
   and the dashboard's follows the theme; the installed app's is one colour on the dark ground.
-- **Every session is told what the page draws.** One sentence of the console's own, composed beside
-  the note about what its tools reach, says that a `mermaid` or `svg` fence is drawn as a picture, so
-  a model with a flow or a figure to show writes one. The operator's standing instructions are left
+- **Every session is told what the page draws.** One sentence of the console's own, composed ahead
+  of everything else a session is told, says that a `mermaid` or `svg` fence is drawn as a picture,
+  so a model with a flow or a figure to show writes one. The operator's standing instructions are left
   alone, so rewriting those keeps it.
 - **A call opens on what it did rather than on JSON.** `bash` shows its command coloured as shell
   above what came back; `edit` shows the diff of the change, with line numbers, in place of its
   operations and its reply; `read` and `create` show the file coloured by its own grammar, with the
   anchors the model was sent left out, so what is drawn and what the copy button hands over are
   both the file, and a `create` that wrote its file shows the tool's reply alone rather than the
-  file twice. An `edit` and a `create` are drawn open, since what they did is what a reader
-  watching a turn is watching for; every other call is drawn shut as before, and the dock's
-  fold-all puts the open ones away at once. Every other tool, a plugin's included, shows its arguments one to
-  a row and its return as it was. The diff is recorded by the tool beside its reply, so an edit made
-  before this release opens as it always did.
+  file twice. Every other tool, a plugin's included, shows its arguments one to a row and its
+  return as it was. Every call is drawn shut, and what a batch changed shows by default as the
+  batch's diff under it. The diff is recorded by the tool beside its reply, so an edit made before
+  this release opens as it always did.
 
 ### Fixed
+- **A long session no longer holds up every other page while it redraws.** Its transcript is drawn
+  off the console's event loop, so a turn running in one session does not stall the pages and live
+  updates of the others each time it records something.
 - **A reasoning summary a gateway hands back as text is read as reasoning.** Some OpenAI-compatible
   gateways return one wrapped in `<think>` tags as an ordinary text part, which the console drew as
   an assistant panel saying `<think>` with a blank line above and below the title. The tags and
@@ -86,18 +87,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   after a send.
 
 ### Changed
-- **A session's worktree is a checkout of its own, and git works in it.** It has its own `.git`, so
+- **A session's checkout is a repository of its own, and git works in it.** It has its own `.git`, so
   `add`, `commit`, `rebase`, `stash` and the rest work from `bash` against that session's refs and
   nobody else's, and `git fetch` brings the repository's current branches with no network, since
   `origin` is the console's own clone, which is fetched every five minutes (`MAINPLATE_FETCH_EVERY`)
   while any session not archived works in it. Its objects are borrowed from that clone, read-only,
   rather than copied. Snapshots move into the clone under refs of the session's own, so a rebase in
-  the session rewrites nothing a fork plants from. Every git against a worktree, the console's own
-  snapshots and `list` included, now runs behind the same sandbox as `bash`, because a worktree's git
+  the session rewrites nothing a fork plants from. Every git against a checkout, the console's own
+  snapshots and `list` included, now runs behind the same sandbox as `bash`, because a checkout's git
   configuration is the session's to write; a command typed into the composer runs there too. A
   session that deletes its own `.git` keeps its files and stops at its next turn, saying why. A
   console without `bubblewrap` offers no repository at all. Sessions working in a repository from
   before this release are not carried over.
+- **A fork is its parent's git state as the forked turn began.** It stands on the commit the parent
+  was on, so the same history is under it and `git merge origin/main` works in it as it would in the
+  parent, with the parent's uncommitted edits, deletions and untracked files on top, unstaged. Its
+  branch is asked on the fork page, which starts out holding the parent's; emptied, the fork gets a
+  branch of its own. A fork used to be the parent's files as a single commit with no history, so the
+  first merge in one was refused as unrelated. A fork of a turn recorded before this release stands
+  on the repository's default branch with the parent's files laid over it.
+- **Rules no longer print a snapshot's hash.** A snapshot is how a fork gets its parent's repository
+  back, and no checkout's git names one, so the hash was nothing a reader could use.
 - **A command's status reads `exit 0` rather than `ok`**, one shape down the column with the colour
   alone picking out the statuses that are not zero, and a command with no output says `no output`
   where it said `said nothing`, folded, since its line, its time and its status are all there is.
@@ -127,11 +137,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   goes out. A 429 that names no moment is retried as it was before, and so is every other failure
   that carries a moment: what the provider knows about its own limit, it does not know about an
   outage.
-- **An anchored `grep` tool** searches Git-known repository text with a line-oriented regular
-  expression and returns bounded matching regions carrying the same anchors as `read`, so a match can
-  go straight to `edit` without a second call solely to acquire its address. An optional glob narrows
-  files, context and result counts are bounded, ignored trees stay out, and shell search remains for
-  multiline, structural and unusually configured queries.
+- **An anchored `grep` tool**, in every session with a checkout, searches Git-known repository text
+  with a line-oriented regular expression and returns bounded matching regions carrying the same
+  anchors as `read`, so a match can go straight to `edit` without a second call solely to acquire
+  its address. An optional glob narrows files, context and result counts are bounded, ignored trees
+  stay out, and shell search remains for multiline, structural and unusually configured queries.
+- **A session on the whole machine is no longer offered `list`**, which could only refuse there;
+  `ls` in `bash` answers it.
 - **A live pass renews its durability lease.** The lease is a short liveness window, so a session
   whose worker dies is available again quickly, while a separate one-hour budget still covers the
   longest model request and stops a live pass that never finishes.
@@ -161,11 +173,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   current the moment you come back to it.
 - **Archiving a session**, from a card in the rail, under the settings step, or from its row in the
   session list, where the control shows as the pointer or the focus reaches the row: nothing more is
-  said in it, the message box is gone from its page and the row is muted at once, and a reconciler
-  takes its worktree, scratch and plugins' scratches off the disk in the background, once no pass or
-  command holds it. The conversation stays, and the rule under its last turn forks from the end, so
-  an archived session comes back as a live one with every turn and a fresh worktree at the files it
-  ended with.
+  said in it, the message box is gone from its page, the row is muted at once and drops below every
+  session still active, and a reconciler takes its checkout, scratch and plugins' scratches off the
+  disk in the background, once no pass or command holds it. The conversation stays, and the rule
+  under its last turn forks from the end, so an archived session comes back as a live one with
+  every turn and a fresh checkout at the files it ended with, at the top of the list rather than
+  under the session it came from.
 - **What a session is on stands in the rail**, on the session's own card: the endpoint and model,
   the thinking level where one was chosen, the repository and the branch it is on, and what it takes
   on disk, a key and a value to a row, with a value that does not fit beside its key dropped whole
@@ -187,11 +200,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   page under the keyboard (`interactive-widget=resizes-content`), which Chrome and Firefox do, and on
   Safari, which does not, the script sizes the shell to the visual viewport when a keyboard is up, so
   the box and its Send button sit on the keys rather than under them. Untested on a device.
-- A fork from the end of a conversation plants at the newest tree the parent recorded, which for an
-  archived session is the worktree as the reconciler found it; it used to plant at the repository's
+- A fork from the end of a conversation plants at the newest state the parent recorded, which for an
+  archived session is the checkout as the reconciler found it; it used to plant at the repository's
   head, which is files the conversation never saw.
 - What a session takes on disk, on its row in the sidebar and on its card in the rail:
-  its worktree, `.git` included, its scratch and its plugins' scratches, counted as `du`
+  its checkout, `.git` included, its scratch and its plugins' scratches, counted as `du`
   counts them. Measured by a sweep on a timer (`measure_every`, five minutes by default) rather than
   when a page is drawn, since a session that fetched a toolchain holds tens of thousands of files;
   the figure's title says when it was measured. `Places.of` is the one list of which directories are
@@ -210,13 +223,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in. Handoff and the guidance below are both plugins, which is what makes the pair a test of the
   protocol rather than two examples of it - and what makes either replaceable.
 - A repository's own plugins, declared in `.mainplate/mainplate.yaml` and run behind the same mount
-  namespace `bash` uses, reaching the worktree they were handed and nothing else. Trusted by default,
+  namespace `bash` uses, reaching the checkout they were handed and nothing else. Trusted by default,
   per session, settled before the first message: choosing to work in a repository is already choosing
   to run its build, its tests and its hooks, so the control is the *refusal* - a session reading a
   stranger's pull request says so in the picker and none of that repository's code runs unattended.
 - A step between creating a session and typing into it, which is where somebody says which programs
   this console may run. Creating a session records the choices and asks for a pass; that pass plants
-  the worktree and reads what each tier *declares* out of files, running nothing; the step then lists
+  the checkout and reads what each tier *declares* out of files, running nothing; the step then lists
   every declared plugin with its path, grouped by where it came from, with a switch apiece and one on
   each group's heading. `Load plugins` records the switches and asks for another pass, and *that*
   pass runs `setup` on exactly the ones left on, all at once, before the conversation opens. So a
@@ -238,7 +251,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A plugin sets itself up**, in one event that both gets it ready and asks what it contributes. It
   is the one event with a network and the one with a directory of its own that survives the session,
   which together are what let a plugin install what it needs: a `uv run --script` shebang resolves an
-  interpreter and its dependencies there, and a plugin that wants a toolchain in the worktree fetches
+  interpreter and its dependencies there, and a plugin that wants a toolchain in the checkout fetches
   it there. That directory is one plugin's alone in one session, named on every payload as `scratch`
   and in the environment as `$MAINPLATE_PLUGIN_SCRATCH`, and it is `$HOME` inside the namespace at
   every event - never the session's own scratch, which the model writes, because a plugin must not
@@ -279,19 +292,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   again. The cost: a process per tool call, per plugin that asked.
 - Guidance a session is answered under, from two scopes. **Console guidance** is every `.md` under
   `<config home>/mainplate/guidance/`, the operator's own and true of every session; **repository
-  guidance** is the project's own Git-tracked `AGENTS.md`, read out of the worktree the session works
+  guidance** is the project's own Git-tracked `AGENTS.md`, read out of the checkout the session works
   in.
   The repository is concatenated last and so wins where the two disagree, because a repository is
   right about itself. `AGENTS.md` rather than a name this console invented, with `CLAUDE.md` as the
   fallback where a directory has no `AGENTS.md`: a file only mainplate can read is knowledge that
   does not survive turning mainplate off, which is the whole reason to write it in the repository
-  rather than in a prompt. A leading YAML block is taken off, so a `paths:` list never reaches a
-  context window.
+  rather than in a prompt. A leading YAML block is taken off, so frontmatter never reaches a context
+  window. An operator's file whose frontmatter names the files it is for with `paths:` is held back:
+  the instructions list it by name with its globs, read as a `.gitignore` reads them except that a
+  glob only ever matches a file (everything under `docs` is `docs/**`), and it is handed over the first time a file tool names a file it covers.
 - An index of the guidance elsewhere in the repository, one row per directory with the `description`
   from that file's own frontmatter, carried in the instructions on every request. That a directory
   *has* conventions is one line and what they are is a page, so the line rides in the prompt and the
-  page is read when it is wanted. The Git index is the ownership boundary: ignored and other
-  untracked files are never read as guidance. A directory holding both names is indexed once, under
+  page is read when it is wanted. Only what git tracks is listed, so ignored and other untracked
+  files are never read as guidance, and nothing read out of a checkout, its index included, is
+  reached through a link. A directory holding both names is indexed once, under
   the same first-name-wins rule that decides which one is read: a repository pairing an `AGENTS.md`
   with a `CLAUDE.md` importing it would otherwise get a second row pointing at a file whose whole
   content names the first.
@@ -306,7 +322,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   belongs to. It is read from what that stretch recorded rather than out of a turn's messages, so it
   is on the page while the first turn is still being answered rather than only once one has landed; a
   stretch nothing has composed for yet draws the working dots on the panel's row, which is where a
-  session sits for as long as its clone and its worktree take. Drawn as the Markdown it is, since
+  session sits for as long as its clone and its checkout take. Drawn as the Markdown it is, since
   what is in it is `.md` files and a wall of `##` is the one reading of them nobody meant; the source
   rides along as `data-markdown`, so the copy button still hands back exactly what was sent. The
   panel's row stands for it with its own opening line, clipped at the width of the panel. A console
@@ -318,7 +334,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and are two things the key can quiet apart. Shut, its row names the file it came from, which is the
   line it opens with.
 - Places reached by name rather than by path: `read`, `edit` and `create` take a `root`, and a
-  command finds `$MAINPLATE_WORKTREE` and `$MAINPLATE_SCRATCH` in its environment. A worktree sits
+  command finds `$MAINPLATE_CHECKOUT` and `$MAINPLATE_SCRATCH` in its environment. A checkout sits
   under 32 hex characters of session id, and a model reproducing those from memory eventually
   reproduces them wrong, which costs a refusal and a round trip to recover from. The names are one
   vocabulary both the tools and the sandbox read, so the two surfaces of one answer cannot drift.
@@ -344,7 +360,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   everything above it out of the model's context. The summariser is the session itself, with the
   tools it already had, so it checks the working tree rather than recalling it - which is the failure
   mode a summary has, and the one nothing else can catch. It happens in the session rather than in a
-  branch, so the cost lands on the session's own total, the worktree is the one the work is in, and
+  branch, so the cost lands on the session's own total, the checkout is the one the work is in, and
   the turn is answered on the prefix already cached. `hand_off` takes the document as an argument
   because a model asked for one in prose writes "Here is the handoff: ... what next?", and the
   framing then becomes durably part of what the next model is told. Neither the ask nor the tool
@@ -428,7 +444,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   redelivery that resumes the session once the fault is fixed is untouched. What made this visible was
   a bundled plugin raising on every request for two days with nothing anywhere on screen.
 - The bundled `guidance` plugin no longer walks past the repository root looking for nested
-  `AGENTS.md` files. A worktree planted under the clone it came from has the console's own guidance
+  `AGENTS.md` files. A checkout planted under the clone it came from has the console's own guidance
   one directory up, which was never given to the session and has no name relative to its root, so the
   plugin exited non-zero on every request after the model read anything nested - and a plugin that
   fails is a turn that never makes its next request.
@@ -439,10 +455,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   somewhere it can be forgotten. An hour's retention rather than the default five minutes, which is a
   stated bet: it is written at 2x base input against 1.25x, so it pays where a conversation is picked
   up again after a pause, and that is what a chat console is.
-- The instructions no longer print a session's own directories. They named the worktree and the
+- The instructions no longer print a session's own directories. They named the checkout and the
   scratch by absolute path, which is 32 hex characters of session id sitting in front of the entire
   cached prefix, so no two sessions could share one and a fork could never read its parent's. The
-  root names and `$MAINPLATE_WORKTREE` were already the way to reach both, so nothing was given up.
+  root names and `$MAINPLATE_CHECKOUT` were already the way to reach both, so nothing was given up.
 
 ### Changed
 
@@ -509,9 +525,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The session list is ordered by when a session was last written to**, so the conversation being
   worked in sits at the top however long ago it was started; it used to be ordered by when each was
   made. The row is dated by the same moment, and hovering the date says when the last message was
-  and when the session was made. The order is still the tree's: a branch sits under what it came
-  from, and the moment orders siblings. Nothing new is recorded for it, since the store already stamps
-  every message as it files it.
+  and when the session was made. The order is still the tree's where a branch and what it came from
+  are both active or both archived: the branch sits under it, and the moment orders siblings.
+  Nothing new is recorded for it, since the store already stamps every message as it files it.
 - On a phone the session list folds away off the left edge behind a clasp, the way the rail folds
   away off the right, and opening either shuts the other. Slid out it is the column a wide window
   draws, dates, repositories and the tree's indentation included; it used to be a strip of chips
@@ -547,8 +563,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   nothing was writing.
 - A rule's line stops where the panels' text does rather than crossing the whole column, so it no
   longer runs under the transcript's scrollbar - which matters more now that the line is a gauge.
-- The marker that opens a request's raw record names its turn as well as its request, `r3.1` rather
-  than `r1`. A rule inside a turn draws no `#N`, so the index alone said which request without saying
+- The marker on a request's rule names its turn as well as its request, `r3.1` rather than `r1`. A rule inside a turn draws no `#N`, so the index alone said which request without saying
   of what.
 - A forget's rule says `context cleared`, in the middle of the line, between the turn's own controls
   at one end and its figures at the other. On a phone those three parts stack, one to a row.
@@ -580,12 +595,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- The raw record behind a request. Its `r3.1` marker on the rule is a label now rather than a
+  disclosure, and the route that served the record is gone.
 - The composer's `fork` and `aside` answers, and the `/fork` and `/aside` leaders with them. Both
   forked the end of a live conversation, which is typing into it with extra steps, and what they
   planted the branch at depended on whether a turn was running at the time, where the `fork` link on
   a rule always plants at that turn's own tree. Forking is that link, at a turn boundary, and the
   one end worth forking, an archived session's, carries the same link on the rule under its last
   turn. `Parent` stays, from any fork. Sessions recorded as asides are still drawn as they were.
+- Picking a repository up in a fork of a session that had none. A fork works in its parent's files:
+  its repository, or with no repository the same reach of the machine, and the fork page draws no
+  checkout control for any session. The network may still change there. Going to work in a
+  repository after talking something through with none is a new session.
 
 ## [0.0.1]
 

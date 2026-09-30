@@ -70,7 +70,7 @@ class TestARound:
         self, service: Service, workspaces: Workspaces, origin: Path, working: str
     ) -> None:
         now = await moved_on(origin)
-        checkout = workspaces.worktree(working, FIXTURE)
+        checkout = workspaces.checkout(working, FIXTURE)
         await checkout.demand("fetch", "--quiet", "origin")
         stale = await checkout.demand("rev-parse", "refs/remotes/origin/main")
         assert stale != now, "the control: planting fetched before the origin moved"
@@ -79,6 +79,23 @@ class TestARound:
 
         await checkout.demand("fetch", "--quiet", "origin")
         assert await checkout.demand("rev-parse", "refs/remotes/origin/main") == now
+
+    async def test_a_store_cloned_without_the_setting_never_prunes_once_it_is_fetched(
+        self, service: Service, workspaces: Workspaces, working: str
+    ) -> None:
+        """
+        A checkout borrows the store's objects without the store knowing which, and a fetch that
+        drops a deleted branch's ref then runs git's own `gc`, so a store that may prune can take a
+        commit only a checkout still refers to. Set at the fetch, so a store that exists already -
+        cloned before the setting was written, which a store just cloned stands in for here - gets
+        it the first time it could need it.
+        """
+        store = workspaces.clones.store(FIXTURE)
+        assert not (await store.git("config", "gc.pruneExpire")).ok, "the control: cloning set nothing"
+
+        await fetched(workspaces, service.database)
+
+        assert await store.demand("config", "gc.pruneExpire") == "never"
 
     async def test_a_fetch_that_worked_is_held_as_when_it_happened(
         self, service: Service, workspaces: Workspaces, working: str

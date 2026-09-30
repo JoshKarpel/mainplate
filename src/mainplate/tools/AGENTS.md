@@ -13,7 +13,7 @@ editing here.
 One package per tool, as `tools/{name}/{module}.py`. **Only the constructor reaches the harness**:
 `tools/__init__.py` exports the constructors and the values they take and nothing else, so
 `agent.py` can ask for the tools a workspace affords without knowing that editing is anchored, that
-a worktree root has to be resolved against, or how a command is confined.
+a checkout root has to be resolved against, or how a command is confined.
 
 A further tool is a new package beside `files/` and `bash/` and one more name in that list. It is not
 an edit to anything that already imports them.
@@ -44,32 +44,34 @@ Read off `Choice.isolation`, not off whether the session picked a repository:
 
 | Filesystem | Over its files | `bash` |
 |---|---|---|
-| `WORKTREE` | `read`, `edit`, `create` over the worktree and scratch; `list`, `grep` over the worktree | where there is a sandbox |
-| `EVERYTHING` | `read`, `edit`, `create` over `/`; `list` and `grep` refuse | where there is a sandbox |
-| `NOTHING` | `read`, `edit`, `create` over the scratch, where there is a sandbox; `list` and `grep` refuse | where there is a sandbox |
+| `CHECKOUT` | `read`, `edit`, `create` over the checkout and scratch; `list`, `grep` over the checkout | where there is a sandbox |
+| `EVERYTHING` | `read`, `edit`, `create` over `/`, where there is a sandbox; no `list` or `grep` | where there is a sandbox |
+| `NOTHING` | `read`, `edit`, `create` over the scratch, where there is a sandbox; no `list` or `grep` | where there is a sandbox |
 
 `NOTHING` gets its file tools only beside `bash`, and nothing at all without one, because the scratch
 is made by the first command and a tool that cannot work still costs its description on every
-request. `reaching` in `agent.py` is the one place that table is decided, and `tests/test_agent.py`
-holds every arm of it.
+request. `list` and `grep` are offered only where a root is a checkout, `Files.has_repository`, for
+the same reason: both ask git, and over a scratch or `/` either could only refuse. `reaching` in
+`agent.py` decides the roots, `agent_for` builds the tools from them, and `tests/test_agent.py` holds
+every row of that table against the agent a pass builds.
 
 **A plugin's tools are outside that table**, and a session with `NOTHING` still gets them: what a
 plugin reaches is decided by its own tier rather than by what the *model* may touch. They are settled
 at `describe` and never added mid-conversation, because a tool definition sits above the cached
 prefix and introducing one late invalidates the whole conversation beneath it.
 
-**There is no git tool.** A worktree owns its `.git`, so git in `bash` does everything a session
+**There is no git tool.** A checkout owns its `.git`, so git in `bash` does everything a session
 needs, confined like every other command; a tool wrapping a subset of it would be a second git
 surface to keep safe for nothing the shell does not already do.
 
 ## `list` runs git, and only in the sandbox
 
-`GitTracked.entries` runs `git ls-files` over the worktree, which is the one directory a session may
+`GitTracked.entries` runs `git ls-files` over the checkout, which is the one directory a session may
 write, `.git` included. `ls-files` refreshes the index, so a call in this process would run whatever
-the worktree's configuration named. See [`docs/design/security.md`](../../../docs/design/security.md).
+the checkout's configuration named. See [`docs/design/security.md`](../../../docs/design/security.md).
 
-**So it holds a `Worktree` and goes through `Worktree.git`**, which runs git behind `bwrap`. Do not
-build a git subprocess here, or anywhere in the parent, against a worktree path: it would read the
+**So it holds a `Checkout` and goes through `Checkout.git`**, which runs git behind `bwrap`. Do not
+build a git subprocess here, or anywhere in the parent, against a checkout path: it would read the
 session's configuration with this process's authority, and nothing at the call site would say so.
 What `entries` needs beyond the default is `at=` and `Ran.stdout`, and anything else should be one
 more argument there rather than a subprocess of its own.

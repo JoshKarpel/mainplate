@@ -1,16 +1,21 @@
 # What a session is told
 
 The words a session is answered under, and there are two scopes. **Console guidance** is the
-operator's own, every `.md` file under `<config home>/mainplate/guidance/`, sorted by path and
-concatenated. **Repository guidance** is the project's own tracked `AGENTS.md`, read out of the
-worktree the session works in. Both go into the agent's `instructions`.
+operator's own, every `.md` file under `<config home>/mainplate/guidance/`, sorted by path.
+**Repository guidance** is the project's own tracked `AGENTS.md`, read out of the checkout the
+session works in. Each scope has a part that goes into the agent's `instructions` and a part held
+back until it applies: an operator's file whose frontmatter names the files it is for with `paths:`
+([below](#guidance-that-names-its-files)), and an `AGENTS.md` further down the repository's tree
+([further below](#guidance-elsewhere-in-the-repository)). Both held-back kinds are named in the
+instructions and handed over whole the first time a file tool names a file they cover.
 
 **All of it is a [plugin](../design/plugins.md)**, in `src/mainplate/plugins/bundled/guidance`, and it is the
 half of the protocol handoff does not exercise: `instructions` contributed at `setup`, and an
 `inject` at `before_request`. So what follows describes a script this console speaks to over a pipe,
 and everything below is that script's rather than the console's unless it says otherwise - what the
-console keeps is `instructing`, which is the one join that puts the operator's standing instructions,
-every running plugin's contribution and the note about this session's tools in that order.
+console keeps is `instructing`, which is the one join that puts the console's sentence on what the
+page draws, the operator's standing instructions, every running plugin's contribution and the note
+about this session's tools in that order.
 
 **Which means every word of it can be replaced.** Install your own `guidance` beside the bundled one
 and turn ours off with one switch on the settings step, or run both and let them sit alongside each
@@ -18,8 +23,9 @@ other, which is the coherent reading of two guidance loaders in one session.
 
 **Nothing in it imports `mainplate`.** A bundled plugin runs on exactly the path a third-party
 plugin runs on, so what ships is a worked example rather than a privileged one. The price is stated:
-the frontmatter reader is a `description:` line rather than a YAML parser, because a plugin with no
-dependencies is worth more here than the general case of a field nothing else reads.
+the frontmatter readers understand a `description:` line and the two shapes a `paths:` list is
+written in rather than YAML, and the globs are a small translator rather than a library, because a
+plugin with no dependencies is worth more here than the general case of fields nothing else reads.
 
 **The repository is last, so it wins.** That is not a claim about trust: a repository is right about
 itself, which is the local-conventions rule one layer out, and it is why escapement puts the gains
@@ -71,42 +77,75 @@ Five details there are decided:
   cannot be composed twice under one key in a pass, which is why a pass answering two turns of one
   stretch memoises what it composed and a pass crossing a forget composes a second time.
 - **It records exactly what the model is sent**, every running plugin's contribution and the notes
-  about this session's worktree and network included, and `agent_for` speaks it verbatim. Composed out there instead, those notes would be a
+  about this session's checkout and network included, and `agent_for` speaks it verbatim. Composed out there instead, those notes would be a
   sentence the model carried that no record held, so a page could report only what a *turn's*
   messages held, which is nothing until a turn has landed, and they would be recomposed on every
   turn from live state, in front of a cached prefix they are supposed to sit still behind. The
   reason they cannot simply be appended in `agent_for` on top of a record that already holds them is
   the replay: a second pass hands it back the recorded string and would get them twice.
 - **What decides the note and what decides the toolset is one function.** They are read off one
-  `Choice.isolation` and one worktree, and `agent.reaching` answers both at once, because in two
+  `Choice.isolation` and one checkout, and `agent.reaching` answers both at once, because in two
   `match` statements they would be two places to keep in step over one answer and the failure would
   be quiet: a session told it has a scratch directory whose tools cannot reach one.
 - **The key is not turn-prefixed**, deliberately. `before` copies turn-prefixed keys by shape, so a
-  turn-shaped name would carry a parent's instructions into a fork that may have attached a
-  repository the parent never had. Named this way a fork composes its own.
+  turn-shaped name would carry a parent's instructions into a fork that may have turned the network
+  the other way, or whose plugins say something else once set up again. Named this way a fork
+  composes its own.
 - **`working_note` names a session's places and never paths them**, which is `roots.py`'s whole
-  argument said one layer out and a fact about the cache besides. A worktree sits under 32 hex
+  argument said one layer out and a fact about the cache besides. A checkout sits under 32 hex
   characters of session id, so printing the path invites the failure the root names were built to
   prevent; and instructions are the per-request parameter Pydantic AI renders in front of the entire
   cached prefix, so a sentence naming one session's directories makes that session's prefix unlike
   every other's. With the paths out, the note is a pure function of the isolation: two sessions of
   the same shape compose byte-identical instructions, and a fork's first request reads its parent's
   prefix from cache rather than paying full price for the whole conversation again. A relative path
-  already lands in the worktree and `$MAINPLATE_WORKTREE` already names it in a command, so nothing
+  already lands in the checkout and `$MAINPLATE_CHECKOUT` already names it in a command, so nothing
   was given up. `test_what_a_stretch_records_is_exactly_what_its_requests_carried` asserts the path
   is absent beside its control that the note is present, so an emptied note cannot pass it.
 
-**Console guidance is read once at startup instead, and nothing watches it.** `just serve` watches
-`src/mainplate`, and this lives under the config home, so an edit there wants the process restarted
-by hand rather than arriving on the next save. That is the ordinary reloadable-configuration answer
-of "restart to apply", said out loud rather than left to be discovered: the failure it prevents is
-editing a rule, seeing the dev server reload for an unrelated reason, and believing the new rule is
-in force.
+**Console guidance is read when a session is set up, and nothing watches it.** What is always said
+is read at `setup` and recorded with the rest of the session's instructions, so an edited rule
+reaches the next session and the next fork, and never one already running: that is the same answer
+an edited `AGENTS.md` gets, for the same caching reason. A scoped file is read again at each
+`before_request`, since the plugin keeps nothing between events, so an edit reaches any running
+session that has not yet been handed it. Neither restarts anything, and neither needs to.
 
 **Frontmatter is taken off.** It is addressed to whatever loads the file rather than to the model,
-so passing a `paths:` list on spends a context window on it and invites an answer about it. Only a
-block that opens the file and closes counts, so a document whose first line is a rule of dashes is
-left as written.
+so passing a `paths:` list on spends a context window on a list the plugin has already acted on and
+invites an answer about it. Only a block that opens the file and closes counts, so a document whose
+first line is a rule of dashes is left as written.
+
+## Guidance that names its files
+
+**An operator's file with `paths:` in its frontmatter is held back until a file it covers is
+reached**, and one without is in every session's instructions. Most of what an operator writes about
+kinds of file is about kinds a given session never touches: a rule for `Cargo.toml` and one for a
+Helm chart spend every request's context in a Python repository, and a directory of them outweighs
+the repository's own `AGENTS.md` several times over. So the split is the frontmatter's to say, and
+the operator decides it per file.
+
+**The cost, stated: scoped guidance arrives after the call that needed it.** It rides the nested
+handover below, so it is delivered on the request *after* a file tool named a file it covers, and
+the model has read or written that one file without it. A file touched only through `bash` never
+brings it at all. Guidance that would change what the model does *before* it touches anything, how
+it plans, what it refuses, how it writes prose, belongs unscoped, and scoping is only for what is
+about a kind of file. The index is what narrows the gap: every scoped file is one line in the
+instructions, naming its globs, so the model knows the rules exist before reaching a file they cover.
+
+**The globs mean what they mean in a `.gitignore`**, because that is the reading a person writing
+them already has. One with no `/` names a file at any depth, so `*.py` is every Python file and `*`
+is every file; one with a `/` is anchored at the repository root, so `.github/dependabot.yml` is that
+file and no other. `**/` is any number of directories including none, `*` stops at a `/`, braces
+expand (`**/*.{py,rs}` is two globs), and a glob with `!` in front takes a path back out whatever
+order the lines are in. The one place the reading parts from `.gitignore` is a directory: a glob
+only ever matches a file's path, so `docs/` covers nothing beneath `docs`, and everything under it
+is `docs/**`. A `paths:` the reader cannot parse covers nothing rather than everything,
+because a scoping mistake should cost the operator a rule that is missing, which they can see, and
+not one that is present in every session, which is the thing scoping was for.
+
+**Only where there is a checkout.** A session reaching nothing has no file tool naming a file in a
+repository, so nothing would ever hand a scoped file over; the index is left out there rather than
+promising what never arrives.
 
 ## The system prompt is drawn as a panel
 
@@ -120,7 +159,7 @@ things there are decided:
   worth trusting for this is that `agent_for` speaks it verbatim: nothing is composed on top of it,
   so what a stretch records and what its requests carried are one string.
   `test_what_a_stretch_records_is_exactly_what_its_requests_carried` holds the two ends against each
-  other, with the worktree note as the control, since that is the part that used to be added after
+  other, with the checkout note as the control, since that is the part that used to be added after
   the record was written.
 - **One per stretch, under its own rule.** A forget composes again, so a single panel above
   everything would stand the newest instructions over turns answered under an older one. Under the
@@ -147,8 +186,7 @@ things there are decided:
   panel is `.md` files concatenated, the operator's guidance and the repository's `AGENTS.md`, so
   its headings, lists and fences are the structure their authors wrote, and a wall of `##` is the
   one reading of it nobody meant. The claim that this is what was *sent* is kept by the source
-  riding along in `data-markdown`, which is what the copy button hands back, and by the raw record
-  on the rule one step further out. The block is deliberately uncapped and does not scroll: a reader
+  riding along in `data-markdown`, which is what the copy button hands back. The block is deliberately uncapped and does not scroll: a reader
   who opened the panel asked for all of it, and a box that scrolls has no still corner for the copy
   button to pin to.
 
@@ -191,21 +229,33 @@ placement convention repositories already have, and two things carry it.
 Git: its path, and a `description` from its own frontmatter where it has one. That `apps/web` has
 conventions is one line and what they are is a page, so the line rides in the prefix and the page is
 read when it is wanted. It also serves the goal path scoping never did, which is knowing a part of
-the repository *has* rules before reaching in and breaking them. The Git index is the ownership
-boundary: an ignored virtual environment or other untracked directory may carry an `AGENTS.md`, but
-that file belongs to the environment rather than the repository and never becomes instructions.
-The cost is that a directory that is not a Git checkout contributes no repository guidance.
+the repository *has* rules before reaching in and breaking them. Only what git tracks is listed: an
+ignored virtual environment or other untracked directory may carry an `AGENTS.md`, but that file
+belongs to the environment rather than the repository and never becomes instructions. The cost is
+that a directory that is not a git repository contributes no repository guidance.
+
+**The index is a filter and not a boundary**, because it is the session's to write: a session can
+stage any path it likes, including one whose file on disk is a link to somewhere outside the
+checkout. What stands between that and the operator's files is how the plugin reads. **Nothing it
+reads out of a checkout follows a link**: each path is walked a directory at a time with
+`O_NOFOLLOW` from the checkout's own root, and read only where it ends at a regular file. So a
+committed `docs/AGENTS.md` that links to one of the operator's files, or a `docs` that links to one
+of the operator's directories, is no guidance rather than the operator's file read as the operator
+and handed to the model as instructions. Walking descriptors rather than checking a path and then
+reading it leaves no moment between the two for the session to swap a link in.
 
 **It reads the index without reading the checkout's configuration.** This plugin is console tier,
 so it runs as the operator outside every sandbox, and the checkout's `.git/config` is the session's
-to write and may name a program git runs. So it points `GIT_INDEX_FILE` at `<worktree>/.git/index`
-and runs `ls-files --cached` with `--git-dir` naming an empty bare repository it makes in a
-temporary directory: git reads the index as data and finds only a configuration nothing wrote. See
-[what runs, and as whom](../design/security.md#the-parent-never-runs-git-against-a-checkout).
+to write and may name a program git runs. So it copies `<checkout>/.git/index` out the same
+link-refusing way, points `GIT_INDEX_FILE` at the copy, and runs `ls-files --cached` with
+`--git-dir` naming an empty bare repository it makes in a temporary directory: git reads the index as
+data and finds only a configuration nothing wrote. See [what runs, and as
+whom](../design/security.md#the-parent-never-runs-git-against-a-checkout).
 
 **And the file itself, handed over on approach.** The plugin reads which paths the model has named to
-a file tool and asks for the guidance covering them to be injected, from the root down. Six things
-there are decided:
+a file tool and asks for the guidance covering them to be injected: the operator's scoped files
+first, then the repository's from the root down, so the repository keeps the last word here as it
+does in the instructions. Six things there are decided:
 
 - **It is delivered at `before_request`, not attached to a tool return.** A batch of calls and
   the reply to them are one exchange, so there is no earlier moment: a tool return and the next

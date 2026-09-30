@@ -86,7 +86,7 @@ and **model**; a **thinking level**; and, for a model the console has no output 
 output tokens override**. All of it is fixed for the session's life, and **forking is how it
 changes**.
 
-Creating one takes you to its page, where it plants its worktree and reads what each tier of plugins
+Creating one takes you to its page, where it plants its checkout and reads what each tier of plugins
 *declares* out of files. It runs none of them: a plugin is a program, so the step you pass through
 next is where you say which ones may be executed. Every declared plugin is listed with its path,
 grouped by where it came from, with a switch apiece; **Load plugins** hands exactly the ones left on
@@ -97,11 +97,11 @@ beneath it, and **forking is how it changes**. What each plugin is *set to* stay
 own card in the rail.
 
 On a repository the first two fields are **where in it to start** and **what branch to start
-there**, both optional. Left blank the worktree is checked out at the repository's default branch as
+there**, both optional. Left blank the checkout starts at the repository's default branch as
 it stands now, on a branch named after the session (`mainplate/349e2f1e`), so a `git commit` from
-the box under the conversation has somewhere to live and `/push` sends it under that name. The starting point is a search over the branches the repository actually has, read from the
-repository rather than from this console's copy, so it works on the very first session you start on
-one.
+the box under the conversation has somewhere to live and `/push` sends it under that name. The
+starting point is a search over the branches the repository actually has, read from the repository
+rather than from this console's copy, so it works on the very first session you start on one.
 
 This console's copy of a repository is fetched when a session is started on it and every few
 minutes while any session works in it, since a session's own `git fetch` reads that copy.
@@ -109,9 +109,8 @@ minutes while any session works in it, since a session's own `git fetch` reads t
 **Forking keeps the original readable.** Every turn opens with a rule carrying a `fork` link:
 following it makes a new session that inherits the turns before that one, on whatever endpoint,
 model and thinking level you pick, and asks that turn's own question again with the message editable.
-The sidebar draws the result as a tree. A fork inherits its parent's repository, because re-asking a
-turn against different files is a different question wearing the same words; a session working in
-*no* repository is the exception, and forking one is how you pick a repository up.
+The sidebar draws the result as a tree. A fork works in its parent's files, repository or none,
+because re-asking a turn against different files is a different question wearing the same words.
 
 A fork inherits no plugins, though, so it lands on that same **Load plugins** step before it answers
 anything, with the parent's switches already set the way you left them. The step stands where the
@@ -119,12 +118,12 @@ transcript will be, so a branch will not show you what its parent said until you
 That is the cost of forking being how a session changes its mind about them: a branch declares and
 sets up from scratch, so editing a repository's `.mainplate/` and forking is how you try the change.
 
-**Archiving keeps the conversation and gives the disk back.** Every session holds a worktree and a
+**Archiving keeps the conversation and gives the disk back.** Every session holds a checkout and a
 scratch, and its row says how much they come to. `Archive`, on a card in the rail, closes the
 session at once: nothing more can be said in it, and a loop in the background takes its directories
 off the disk once no turn is running in it. The conversation stays readable, and the rule under its
 last turn forks from the end, which is how an archived session comes back: a live one with every
-turn and a fresh worktree at the files it ended with.
+turn and a fresh checkout at the files it ended with.
 
 ## What a model costs
 
@@ -226,8 +225,8 @@ sees exactly what the first one did.
 
 A session is a durable workflow under
 [`without-durability`](https://without.help/without-durability/), over its
-[SQLite store](https://without.help/without-durability-sqlite/), and it has an **inbox**: everything
-you do to it from the page is an append, a message or a command to run in its worktree. The pass
+[SQLite database](https://without.help/without-durability-sqlite/), and it has an **inbox**: everything
+you do to it from the page is an append, a message or a command to run in its checkout. The pass
 answering it suspends until there is something there, so nothing polls, no pass is held open, and
 the wait outlives the process that was waiting.
 
@@ -252,12 +251,12 @@ days that is, and the page says which limit was reached and when the next attemp
 
 What a session's tools reach is one of the things it picks when it is created. A session working in
 a repository gets `read`, `edit` and `create` over its own checkout and a scratch directory
-beside it, and repository-only `list` and `grep` over the worktree. One working on the whole machine
+beside it, and repository-only `list` and `grep` over the checkout. One working on the whole machine
 gets the first three with no such boundary, while the repository-only pair refuse. One reaching
-nothing gets file tools over its scratch only when there is a sandbox to create it, and an artifact
-catalogue tool even without files. A session without a worktree is still a place to talk.
+nothing of the machine still gets a scratch directory of its own, the first three over it, and
+`bash` inside it; without `bubblewrap` it gets no tools at all, and is a place to talk.
 
-File tools come with `bash` wherever `bubblewrap` is installed to confine it.
+Anywhere there are tools there is also `bash`, wherever `bubblewrap` is installed to confine it.
 Every command runs in a mount namespace of its own holding exactly what that session reaches and a
 read-only system, so your home directory and the console's configuration are not in it, and the
 network is off unless the session asked for it. What a command does get as its home is the session's
@@ -266,10 +265,10 @@ needs to run its tests, once, before the first message.
 
 The checkout's git is the session's own: `add`, `commit`, `rebase`, `stash` and the rest work as
 they would anywhere, and `git fetch` brings the repository's current branches with no network,
-because `origin` is this console's own clone, which the console fetches every few minutes while a
-session works in it. With the network off nothing in there can push; on exe.dev a sandbox with the
-network on can, since there the network is the credential. Every snapshot the
-conversation keeps is taken out of the checkout into that clone, so a rebase in the session rewrites
+because `origin` is this console's own store of the repository, which the console fetches every few
+minutes while a session works in it. With the network off nothing in there can push; on exe.dev a
+sandbox with the network on can, since there the network is the credential. Every snapshot the
+conversation keeps is taken out of the checkout into that store, so a rebase in the session rewrites
 nothing a fork plants from. Without `bubblewrap` no repository is offered at all, since git in a
 checkout reads configuration the session can write and has to be confined as surely as a command.
 
@@ -359,7 +358,7 @@ folds, from its own row**, so the dock's fold-everything button turns a finished
 its own outline; shut, a row carries the front of what is in it.
 
 A **rule** stands at every round trip, carrying what is true of that request rather than of any
-panel in it: the worktree it was made against, when the answer came back, how long it took, what it
+panel in it: the checkout it was made against, when the answer came back, how long it took, what it
 spent in tokens and money, and a fold showing the JSON the checkpoint actually holds for it. Every
 moment the console prints is recorded in UTC and drawn against your own clock, which your browser
 tells it in a cookie, and written `2031-03-14 10:20` at everybody rather than in each reader's own
@@ -423,7 +422,7 @@ inferred from what you typed, so what you are about to press always says what it
 - **Keep** puts it on the shelf and clears the box. Pressing a kept note adds it back rather than
   replacing what is there, so several assemble into one message. It lives in your browser, so it
   does not follow you to another machine yet.
-- **Run** is the one that is not a message. It runs what is in the box in this session's worktree,
+- **Run** is the one that is not a message. It runs what is in the box in this session's checkout,
   in the session's own sandbox, and the model is never told, so committing at the end of a session
   costs it no context and reaches no provider. It is still recorded, so it draws as a `command`
   panel with what it exited with, survives a reload, and a fork carries it. `! ` into an empty box is
@@ -460,21 +459,23 @@ Named plainly, because they are the next things rather than omissions nobody not
   onto an endpoint that still exists is the way out. A model dropping out of the picker is *not* that
   case and does not stop a session, since an endpoint routes more ids than it advertises.
 - **Going back means forking, never rewinding.** A session that picked a repository works in a
-  worktree of its own, the tree is recorded before every model request, and a fork is checked out at
-  the tree the forked turn saw. There is deliberately no way to put an *existing* session's files
+  checkout of its own, its git state is recorded before every model request, and a fork stands on
+  the commit the forked turn saw, on the branch you pick, with that turn's uncommitted changes on
+  top. There is deliberately no way to put an *existing* session's files
   back: the branch gets the old files and the original stays readable beside it, where truncating a
   session in place would destroy history that its own branches point into.
 - **One forge, and it is exe.dev's.** `ExeDevGitHub` reads the GitHub integrations attached to a
   VM. Anywhere else it reaches nothing, so the picker does not appear and the console is a place to
   talk. Reaching GitHub through an App, so this works off exe.dev, is another class behind the same
   interface.
-- **Nothing prunes a clone.** Archiving a session takes its worktree away, but the repository's
-  clone keeps every tree any session snapshotted, so a fork can still plant at it, and it only grows.
+- **Nothing prunes a store.** Archiving a session takes its checkout away, but the repository's
+  store keeps every tree and commit any session snapshotted, so a fork can still plant at it, and it
+  only grows.
 - **No streaming.** A streamed model request inside a session raises rather than running
   unrecorded, so the refusal is loud rather than a silently unrecorded call. Closing it means
   recording the stream's events alongside its response.
-- **One machine.** SQLite means every process sharing this store shares a filesystem. That is the
-  deployment this is for rather than a defect; a second machine means another store.
+- **One machine.** SQLite means every process sharing this database shares a filesystem. That is the
+  deployment this is for rather than a defect; a second machine means another database.
 - **`install` is Linux only.** It renders a user systemd unit and knows no other service manager.
   `serve` itself is portable, so elsewhere it is a foreground process and whatever you already use
   to keep one running.

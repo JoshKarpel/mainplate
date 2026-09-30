@@ -762,7 +762,7 @@ class TestACallThatWentWrong:
 
     What is being pinned is durability rather than wording: whatever the model was sent about a call
     is in the checkpoint, so a resumed pass hands the loop the same words instead of running the tool
-    again to hear what it would say against a worktree the rest of the batch has since written to.
+    again to hear what it would say against a checkout the rest of the batch has since written to.
     """
 
     @pytest.mark.parametrize(("tool", "said"), [("refuse", "try something else"), ("fail", "there is no such thing")])

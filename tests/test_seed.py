@@ -8,8 +8,10 @@ from mainplate.app import open_store
 from mainplate.catalogue import Catalogues
 from mainplate.conversation import wrote_key
 from mainplate.sessions import read_sessions
+from scripts.gallery import CAPTIONS
 from scripts.gallery import CATALOGUE
 from scripts.gallery import FIXTURES
+from scripts.gallery import pages
 from scripts.seed import LEASE
 from scripts.seed import seed
 
@@ -54,3 +56,11 @@ async def test_a_seeded_session_with_a_repository_carries_its_batchs_diff(tmp_pa
     async with open_store(database, LEASE, Catalogues(current=CATALOGUE)) as service:
         held = await service.checkpointer.load(working.session.id)
     assert wrote_key(1, 1) in held
+
+
+def test_every_gallery_page_has_a_caption_and_nothing_else_does() -> None:
+    """
+    The documentation site lists the gallery from `CAPTIONS`, so a page without one would be listed
+    with nothing beside it and a caption without a page would name a link to nowhere.
+    """
+    assert set(CAPTIONS) == set(pages())

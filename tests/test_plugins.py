@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.machinery
+import importlib.util
 import os
 import subprocess
+import sys
+import types
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -96,7 +100,7 @@ from mainplate.sandbox import sandbox_command
 from mainplate.service import Service
 from mainplate.sessions import Session
 from mainplate.sessions import read_tending
-from mainplate.snapshots import Worktree
+from mainplate.snapshots import Checkout
 from mainplate.tending import TENDED
 from mainplate.tending import Tending
 
@@ -192,7 +196,7 @@ async def asked(plugin: Path, payload: Payload) -> Any:
 
     Unconfined, because these are the console's own tier and confinement is what
     `TestARepositorysOwnPlugin` is about - so there is no sandbox to build and no tree to build one
-    around, and the worktree such a plugin reads is the one named on the payload.
+    around, and the checkout such a plugin reads is the one named on the payload.
     """
     installed = Installed(tier=Tier.USER, name=plugin.name, path=plugin)
     return (await Spawned(environ={})(installed, payload, None)).said
@@ -669,8 +673,8 @@ class TestRunningOne:
         echoing.write_text("#!/bin/sh\ncat\n")
         echoing.chmod(0o755)
         assert (
-            await asked(echoing, spoken(event="setup", worktree="/somewhere"))
-            == spoken(event="setup", worktree="/somewhere").spoken()
+            await asked(echoing, spoken(event="setup", checkout="/somewhere"))
+            == spoken(event="setup", checkout="/somewhere").spoken()
         )
 
 
@@ -762,29 +766,30 @@ class TestWhereARepositorysPluginRuns:
         "action": {"control": "strict", "value": True},
     }
 
-    async def invocation(self, spawned: Spawned, event: str, worktree: Worktree) -> tuple[str, ...]:
-        payload = spoken(event=event, worktree=str(worktree.root), **self.ENOUGH.get(event, {}))
-        return (await spawned.invocation(self.installed(), payload, worktree)).argv
+    async def invocation(self, spawned: Spawned, event: str, checkout: Checkout) -> tuple[str, ...]:
+        payload = spoken(event=event, checkout=str(checkout.root), **self.ENOUGH.get(event, {}))
+        return (await spawned.invocation(self.installed(), payload, checkout)).argv
 
-    async def test_setting_up_reaches_the_network_and_nothing_else_does(self, spawned: Spawned, worktree: Any) -> None:
+    async def test_setting_up_reaches_the_network_and_nothing_else_does(self, spawned: Spawned, checkout: Any) -> None:
         """
         **Before the conversation, connected; during it, never.** A plugin that needs a program has to
-        fetch one, and `setup` runs before the first message: the worktree holds the commit the
-        repository supplied, and nothing the model wrote exists yet.
+        fetch one, and `setup` runs before the first message: the checkout holds the commit the
+        repository supplied in a new session, and a fork plants at a tree the model wrote, whose own
+        press is what licenses that.
         """
-        assert "--unshare-net" not in await self.invocation(spawned, "setup", worktree)
+        assert "--unshare-net" not in await self.invocation(spawned, "setup", checkout)
         for event in ("tool", "before_tool", "before_request", "before_turn_end", "after_turn", "compose", "action"):
-            assert "--unshare-net" in await self.invocation(spawned, event, worktree), event
+            assert "--unshare-net" in await self.invocation(spawned, event, checkout), event
 
     async def test_home_is_the_plugins_own_scratch_and_not_the_tmpfs_a_command_gets(
-        self, spawned: Spawned, worktree: Any, tmp_path: Path
+        self, spawned: Spawned, checkout: Any, tmp_path: Path
     ) -> None:
         """
         Which is the whole of what makes a plugin with dependencies possible: everything that fetches
         keeps what it fetched under `$HOME`, so on a tmpfs a `uv run --script` shebang would resolve
         an interpreter at setup and find none at the next event, with the network shut.
         """
-        argv = await self.invocation(spawned, "after_turn", worktree)
+        argv = await self.invocation(spawned, "after_turn", checkout)
         at = argv.index("HOME")
         assert argv[at + 1] == str(tmp_path / "plugins" / "a-session" / "repository" / "checks")
 
@@ -803,7 +808,7 @@ class TestWhereARepositorysPluginRuns:
         assert "scratch" not in mine.parts, "the session's own scratch is somewhere else entirely"
 
     async def test_it_is_named_in_the_payload_as_well_as_in_the_environment(
-        self, spawned: Spawned, worktree: Any, tmp_path: Path
+        self, spawned: Spawned, checkout: Any, tmp_path: Path
     ) -> None:
         """
         Both, because the two readers are different: the payload is what a plugin parses, and the
@@ -811,14 +816,14 @@ class TestWhereARepositorysPluginRuns:
         directory is the one that says where it is, so there is no second place computing the path.
         """
         own = str(tmp_path / "plugins" / "a-session" / "repository" / "checks")
-        payload = spoken(event="setup", worktree=str(worktree.root))
-        sending = await spawned.invocation(self.installed(), payload, worktree)
+        payload = spoken(event="setup", checkout=str(checkout.root))
+        sending = await spawned.invocation(self.installed(), payload, checkout)
 
         assert sending.payload["scratch"] == own
         assert sending.argv[sending.argv.index("MAINPLATE_PLUGIN_SCRATCH") + 1] == own
 
     async def test_it_is_not_called_what_the_model_calls_the_session_s_own(
-        self, spawned: Spawned, worktree: Any
+        self, spawned: Spawned, checkout: Any
     ) -> None:
         """
         A model's `bash` finds the *session's* scratch under `MAINPLATE_SCRATCH`, and a plugin's
@@ -827,51 +832,51 @@ class TestWhereARepositorysPluginRuns:
         place names exists to stop - and at `setup`, where both are bound, it would be one word for
         two binds in one namespace.
         """
-        argv = await self.invocation(spawned, "setup", worktree)
+        argv = await self.invocation(spawned, "setup", checkout)
         own = str(spawned.scratch_for(self.installed(), "a-session"))
 
         assert argv[argv.index("MAINPLATE_PLUGIN_SCRATCH") + 1] == own
         assert argv[argv.index("MAINPLATE_SCRATCH") + 1] != own
 
     async def test_the_sessions_own_scratch_is_reached_at_setup_and_at_no_other_event(
-        self, spawned: Spawned, worktree: Any, tmp_path: Path
+        self, spawned: Spawned, checkout: Any, tmp_path: Path
     ) -> None:
         """
         What a plugin getting the repository ready installs is *for* the session's commands, so it has
         to land in the directory they get as their `$HOME`. Every event after it is a plugin that has
         read whatever the model has been writing, and gets none of this.
         """
-        argv = await self.invocation(spawned, "setup", worktree)
+        argv = await self.invocation(spawned, "setup", checkout)
         assert argv[argv.index("MAINPLATE_SCRATCH") + 1] == str(tmp_path / "scratch" / "a-session")
         for event in ("tool", "before_tool", "before_request", "before_turn_end", "after_turn", "compose", "action"):
-            assert "MAINPLATE_SCRATCH" not in await self.invocation(spawned, event, worktree), event
+            assert "MAINPLATE_SCRATCH" not in await self.invocation(spawned, event, checkout), event
 
     async def test_home_is_the_plugins_own_even_where_the_sessions_is_bound(
-        self, spawned: Spawned, worktree: Any
+        self, spawned: Spawned, checkout: Any
     ) -> None:
         """
         The whole of why the grant is safe. A plugin *fills* the session's scratch and never *runs out
         of* it, so the thing this console executes at a turn boundary is never a path the model can
         rewrite - which is what a shared `$HOME` would have made it.
         """
-        argv = await self.invocation(spawned, "setup", worktree)
+        argv = await self.invocation(spawned, "setup", checkout)
 
         assert argv[argv.index("HOME") + 1] == str(spawned.scratch_for(self.installed(), "a-session"))
 
     async def test_an_environment_file_is_named_at_setup_and_at_no_other_event(
-        self, spawned: Spawned, worktree: Any
+        self, spawned: Spawned, checkout: Any
     ) -> None:
         """Under the plugin's own scratch, so what each of them asked for is attributed by itself."""
-        payload = spoken(event="setup", worktree=str(worktree.root))
-        sending = await spawned.invocation(self.installed(), payload, worktree)
+        payload = spoken(event="setup", checkout=str(checkout.root))
+        sending = await spawned.invocation(self.installed(), payload, checkout)
         own = spawned.scratch_for(self.installed(), "a-session")
 
         assert sending.environment_file == own / ENV_FILE
         assert sending.argv[sending.argv.index("MAINPLATE_ENV") + 1] == str(own / ENV_FILE)
         for event in ("tool", "after_turn", "compose", "action"):
-            assert "MAINPLATE_ENV" not in await self.invocation(spawned, event, worktree), event
+            assert "MAINPLATE_ENV" not in await self.invocation(spawned, event, checkout), event
 
-    async def test_a_plugin_outside_a_worktree_is_handed_no_scratch_at_all(self, tmp_path: Path) -> None:
+    async def test_a_plugin_outside_a_checkout_is_handed_no_scratch_at_all(self, tmp_path: Path) -> None:
         """
         It has the operator's own environment and a `$HOME`, and needs nothing from this console to
         find somewhere to write. It may also need the operator's other scripts and caches to do its
@@ -907,23 +912,23 @@ class TestWhatASetupActuallyReaches:
             environ={},
         )
 
-    async def setting_up(self, spawned: Spawned, worktree: Worktree, tmp_path: Path, script: str) -> Spoke:
+    async def setting_up(self, spawned: Spawned, checkout: Checkout, tmp_path: Path, script: str) -> Spoke:
         """
         One repository plugin, written into the tree and run at `setup` as the console runs one.
 
         In the tree because that is the only place a repository's plugin can be: the namespace binds
-        the worktree, its clone and two scratches, so a script anywhere else is one `bwrap` cannot
+        the checkout, its store and two scratches, so a script anywhere else is one `bwrap` cannot
         find - which is the first thing this arrangement proves.
         """
-        at = worktree.root / ".mainplate" / "setup"
+        at = checkout.root / ".mainplate" / "setup"
         at.parent.mkdir(exist_ok=True)
         at.write_text(script)
         at.chmod(0o755)
         installed = Installed(tier=Tier.REPOSITORY, name="setup", path=at)
-        return await spawned(installed, spoken(event="setup", worktree=str(worktree.root)), worktree)
+        return await spawned(installed, spoken(event="setup", checkout=str(checkout.root)), checkout)
 
     async def test_what_it_installs_lands_in_the_sessions_own_scratch(
-        self, spawned: Spawned, worktree: Worktree, tmp_path: Path
+        self, spawned: Spawned, checkout: Checkout, tmp_path: Path
     ) -> None:
         """
         Which is what a session's own commands get as their `$HOME`, so everything fetched under it is
@@ -931,7 +936,7 @@ class TestWhatASetupActuallyReaches:
         """
         await self.setting_up(
             spawned,
-            worktree,
+            checkout,
             tmp_path,
             '#!/bin/sh\nmkdir -p "$MAINPLATE_SCRATCH/.local/bin"\necho installed > "$MAINPLATE_SCRATCH/.local/bin/tool"\n',
         )
@@ -939,7 +944,7 @@ class TestWhatASetupActuallyReaches:
         assert (tmp_path / "scratch" / "a-session" / ".local" / "bin" / "tool").read_text() == "installed\n"
 
     async def test_only_what_it_writes_to_the_file_crosses_back(
-        self, spawned: Spawned, worktree: Worktree, tmp_path: Path
+        self, spawned: Spawned, checkout: Checkout, tmp_path: Path
     ) -> None:
         """
         An allowlist by construction: the plugin's own environment holds more than this, and none of
@@ -947,7 +952,7 @@ class TestWhatASetupActuallyReaches:
         """
         spoke = await self.setting_up(
             spawned,
-            worktree,
+            checkout,
             tmp_path,
             '#!/bin/sh\nexport SECRET=hidden\necho "PATH=$MAINPLATE_SCRATCH/bin:/usr/bin" >> "$MAINPLATE_ENV"\n',
         )
@@ -955,7 +960,7 @@ class TestWhatASetupActuallyReaches:
         assert spoke.environment == {"PATH": f"{tmp_path / 'scratch' / 'a-session'}/bin:/usr/bin"}
 
     async def test_one_that_writes_nothing_sets_nothing_and_registers_nothing(
-        self, spawned: Spawned, worktree: Worktree, tmp_path: Path
+        self, spawned: Spawned, checkout: Checkout, tmp_path: Path
     ) -> None:
         """
         The three-line shell script case, which is the one most repositories want.
@@ -965,39 +970,39 @@ class TestWhatASetupActuallyReaches:
         this console cannot read, which is why a script with nothing to say sends its noise the other
         way.
         """
-        spoke = await self.setting_up(spawned, worktree, tmp_path, "#!/bin/sh\necho getting ready >&2\n")
+        spoke = await self.setting_up(spawned, checkout, tmp_path, "#!/bin/sh\necho getting ready >&2\n")
 
         assert spoke.environment == {}
         assert parse_described("repository:setup", spoke.said).events == ()
 
     async def test_the_environment_file_is_gone_afterwards(
-        self, spawned: Spawned, worktree: Worktree, tmp_path: Path
+        self, spawned: Spawned, checkout: Checkout, tmp_path: Path
     ) -> None:
         """It is this console's bookkeeping, and a plugin's scratch is what it keeps between events."""
-        await self.setting_up(spawned, worktree, tmp_path, "#!/bin/sh\ntrue\n")
+        await self.setting_up(spawned, checkout, tmp_path, "#!/bin/sh\ntrue\n")
 
         assert not (tmp_path / "plugins" / "a-session" / "repository" / "setup" / ENV_FILE).exists()
 
     async def test_a_malformed_environment_line_fails_the_setup(
-        self, spawned: Spawned, worktree: Worktree, tmp_path: Path
+        self, spawned: Spawned, checkout: Checkout, tmp_path: Path
     ) -> None:
         with pytest.raises(PluginFailed, match="not KEY=value"):
             await self.setting_up(
-                spawned, worktree, tmp_path, '#!/bin/sh\necho "this is not a variable" >> "$MAINPLATE_ENV"\n'
+                spawned, checkout, tmp_path, '#!/bin/sh\necho "this is not a variable" >> "$MAINPLATE_ENV"\n'
             )
 
     async def test_the_store_is_still_read_only_in_there(
-        self, spawned: Spawned, worktree: Worktree, tmp_path: Path
+        self, spawned: Spawned, checkout: Checkout, tmp_path: Path
     ) -> None:
         """
         The same namespace every other event gets, so a setup cannot write what every session on the
         repository borrows its objects from. Asked by trying, with the control that the store is
         bound at all.
         """
-        store = worktree.store.path
+        store = checkout.store.path
         spoke = await self.setting_up(
             spawned,
-            worktree,
+            checkout,
             tmp_path,
             f'#!/bin/sh\nif [ -f "{store}/HEAD" ]; then echo SEEN=YES; else echo SEEN=NO; fi >> "$MAINPLATE_ENV"\n'
             f'if touch "{store}/planted" 2>/dev/null; then echo WROTE=YES; else echo WROTE=NO; fi '
@@ -1310,7 +1315,7 @@ class TestTheBundledGuidance:
         line and what they are is a page, which is what makes it affordable on every request.
         """
         described = parse_described(
-            "bundled:guidance", await asked(guidance, spoken(event="setup", worktree=str(repository)))
+            "bundled:guidance", await asked(guidance, spoken(event="setup", checkout=str(repository)))
         )
         assert described.events == ("before_request",)
         assert described.instructions is not None
@@ -1333,7 +1338,7 @@ class TestTheBundledGuidance:
         escaped.unlink()
 
         described = parse_described(
-            "bundled:guidance", await asked(guidance, spoken(event="setup", worktree=str(repository)))
+            "bundled:guidance", await asked(guidance, spoken(event="setup", checkout=str(repository)))
         )
 
         assert not escaped.exists()
@@ -1362,11 +1367,11 @@ class TestTheBundledGuidance:
         ]
 
         described = parse_described(
-            "bundled:guidance", await asked(guidance, spoken(event="setup", worktree=str(repository)))
+            "bundled:guidance", await asked(guidance, spoken(event="setup", checkout=str(repository)))
         )
         answered = parse_answer(
             "bundled:guidance",
-            await asked(guidance, spoken(event="before_request", worktree=str(repository), messages=messages)),
+            await asked(guidance, spoken(event="before_request", checkout=str(repository), messages=messages)),
         )
 
         assert described.instructions is not None
@@ -1380,7 +1385,7 @@ class TestTheBundledGuidance:
         """
         (repository / "AGENTS.md").write_text("---\ndescription: the root\n---\n\nThis project is a console.\n")
         described = parse_described(
-            "bundled:guidance", await asked(guidance, spoken(event="setup", worktree=str(repository)))
+            "bundled:guidance", await asked(guidance, spoken(event="setup", checkout=str(repository)))
         )
         assert described.instructions is not None
         assert "description:" not in described.instructions
@@ -1405,7 +1410,7 @@ class TestTheBundledGuidance:
         ]
         answered = parse_answer(
             "bundled:guidance",
-            await asked(guidance, spoken(event="before_request", worktree=str(repository), messages=messages)),
+            await asked(guidance, spoken(event="before_request", checkout=str(repository), messages=messages)),
         )
         assert len(answered.inject) == 1
         assert "Use the design tokens." in answered.inject[0]
@@ -1442,7 +1447,7 @@ class TestTheBundledGuidance:
         ]
         answered = parse_answer(
             "bundled:guidance",
-            await asked(guidance, spoken(event="before_request", worktree=str(repository), messages=messages)),
+            await asked(guidance, spoken(event="before_request", checkout=str(repository), messages=messages)),
         )
         assert answered.inject == ()
 
@@ -1468,7 +1473,7 @@ class TestTheBundledGuidance:
         ]
         answered = parse_answer(
             "bundled:guidance",
-            await asked(guidance, spoken(event="before_request", worktree=str(repository), messages=messages)),
+            await asked(guidance, spoken(event="before_request", checkout=str(repository), messages=messages)),
         )
         assert answered.inject == ()
 
@@ -1476,7 +1481,7 @@ class TestTheBundledGuidance:
         self, guidance: Path, repository: Path, tmp_path: Path
     ) -> None:
         """
-        A worktree planted under the clone it came from has this console's own `AGENTS.md` one
+        A checkout planted under the clone it came from has this console's own `AGENTS.md` one
         directory up, and that file was never given to the session and has no name relative to its
         root. A walk up the parents runs past the root and finds it, which is a plugin that fails on
         every request after the model reads anything nested - and a plugin that fails is a turn that
@@ -1498,11 +1503,315 @@ class TestTheBundledGuidance:
         ]
         answered = parse_answer(
             "bundled:guidance",
-            await asked(guidance, spoken(event="before_request", worktree=str(repository), messages=messages)),
+            await asked(guidance, spoken(event="before_request", checkout=str(repository), messages=messages)),
         )
         assert len(answered.inject) == 1
         assert "Use the design tokens." in answered.inject[0]
         assert "Somebody else's project" not in answered.inject[0]
+
+
+def reading(path: str) -> list[dict[str, object]]:
+    """The history of a model that has called `read` on one path, which is what hands guidance over."""
+    return [
+        {
+            "kind": "response",
+            "parts": [{"part_kind": "tool-call", "tool_name": "read", "args": {"path": path}, "tool_call_id": "c1"}],
+        }
+    ]
+
+
+class TestWhatTheBundledGuidanceWillNotFollow:
+    """
+    Everything in a checkout is the session's to write, its `.git` included, and the plugin reads as
+    the operator. So a link in the checkout is nothing, rather than a file somewhere the session could
+    never read for itself; each test here plants the link a session could commit.
+    """
+
+    @pytest.fixture
+    def guidance(self) -> Path:
+        return BUNDLED_ROOT / "guidance"
+
+    @pytest.fixture
+    def secret(self, tmp_path: Path) -> Path:
+        outside = tmp_path / "operator"
+        outside.mkdir()
+        written = outside / "AGENTS.md"
+        written.write_text("OPERATOR ONLY: a key the session must never see\n")
+        return written
+
+    @pytest.fixture
+    def repository(self, tmp_path: Path) -> Path:
+        root = tmp_path / "repo"
+        (root / "docs").mkdir(parents=True)
+        (root / "docs" / "page.md").write_text("a page\n")
+        subprocess.run(("git", "init", "-q", str(root)), check=True)
+        return root
+
+    async def test_a_nested_guidance_file_that_is_a_link_is_not_handed_over(
+        self, guidance: Path, repository: Path, secret: Path
+    ) -> None:
+        (repository / "docs" / "AGENTS.md").symlink_to(secret)
+        await run("git", "add", "-A", cwd=repository)
+
+        answered = parse_answer(
+            "bundled:guidance",
+            await asked(
+                guidance, spoken(event="before_request", checkout=str(repository), messages=reading("docs/page.md"))
+            ),
+        )
+
+        assert answered.inject == ()
+
+    async def test_the_root_guidance_file_that_is_a_link_is_not_read_into_the_instructions(
+        self, guidance: Path, repository: Path, secret: Path
+    ) -> None:
+        (repository / "AGENTS.md").symlink_to(secret)
+        await run("git", "add", "-A", cwd=repository)
+
+        described = parse_described(
+            "bundled:guidance", await asked(guidance, spoken(event="setup", checkout=str(repository)))
+        )
+
+        assert "OPERATOR ONLY" not in (described.instructions or "")
+
+    async def test_a_directory_that_is_a_link_is_not_walked_through_for_the_index(
+        self, guidance: Path, repository: Path, secret: Path
+    ) -> None:
+        """
+        The index of nested guidance reads each listed file's `description:`, so an entry under a
+        linked directory would put a line of the operator's file into every request. Git will not
+        stage a file under a linked directory, but the index is the session's to write, so the entry
+        is staged while the directory is real and the directory swapped for a link after.
+        """
+        secret.write_text("---\ndescription: OPERATOR ONLY\n---\n\nprose\n")
+        (repository / "docs" / "AGENTS.md").write_text("---\ndescription: the real one\n---\n\nprose\n")
+        await run("git", "add", "-A", cwd=repository)
+        (repository / "docs" / "AGENTS.md").unlink()
+        (repository / "docs" / "page.md").unlink()
+        (repository / "docs").rmdir()
+        (repository / "docs").symlink_to(secret.parent, target_is_directory=True)
+
+        described = parse_described(
+            "bundled:guidance", await asked(guidance, spoken(event="setup", checkout=str(repository)))
+        )
+
+        assert "OPERATOR ONLY" not in (described.instructions or "")
+
+    async def test_an_index_that_is_a_link_lists_nothing(
+        self, guidance: Path, repository: Path, tmp_path: Path
+    ) -> None:
+        """
+        The control is the same repository with its own index in place, which does list the file, so
+        what is under test is the link and not a repository that tracks nothing.
+        """
+        (repository / "AGENTS.md").write_text("This project is a console.\n")
+        await run("git", "add", "-A", cwd=repository)
+        control = parse_described(
+            "bundled:guidance", await asked(guidance, spoken(event="setup", checkout=str(repository)))
+        )
+        assert "This project is a console." in (control.instructions or ""), "the control"
+
+        index = repository / ".git" / "index"
+        moved = tmp_path / "elsewhere-index"
+        index.rename(moved)
+        index.symlink_to(moved)
+        described = parse_described(
+            "bundled:guidance", await asked(guidance, spoken(event="setup", checkout=str(repository)))
+        )
+
+        assert "This project is a console." not in (described.instructions or "")
+
+    async def test_a_guidance_file_that_is_a_fifo_is_passed_over_rather_than_waited_on(
+        self, guidance: Path, repository: Path
+    ) -> None:
+        """
+        Opening a FIFO to read waits for a writer, and here there would never be one. Git does not
+        stage a FIFO, so the file is staged while it is a file and swapped for one after, which the
+        session writing its own index can do.
+        """
+        (repository / "docs" / "AGENTS.md").write_text("the real one\n")
+        await run("git", "add", "-A", cwd=repository)
+        (repository / "docs" / "AGENTS.md").unlink()
+        os.mkfifo(repository / "docs" / "AGENTS.md")
+
+        answered = parse_answer(
+            "bundled:guidance",
+            await asked(
+                guidance, spoken(event="before_request", checkout=str(repository), messages=reading("docs/page.md"))
+            ),
+        )
+
+        assert answered.inject == ()
+
+
+def load_bundled(name: str) -> types.ModuleType:
+    """
+    A bundled plugin's script as a module, for the pure functions inside it and nothing else.
+
+    What a plugin *does* is asked of it over a real pipe everywhere else in this file, because a
+    plugin is a file this console runs. A table of globs is a different question: it is a function
+    of its arguments, and asking it a process at a time would be the same assertions made slowly.
+    The script has no `.py`, so the loader is named rather than inferred, and the module is put in
+    `sys.modules` under its own name because a dataclass looks its module up there while it is built.
+    """
+    loader = importlib.machinery.SourceFileLoader(f"bundled_{name}", str(BUNDLED_ROOT / name))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[loader.name] = module
+    loader.exec_module(module)
+    return module
+
+
+async def asked_under(plugin: Path, payload: Payload, config_home: Path) -> Any:
+    """`asked`, by a console that was told where the operator's own files are."""
+    installed = Installed(tier=Tier.USER, name=plugin.name, path=plugin)
+    return (await Spawned(environ={}, config_home=config_home)(installed, payload, None)).said
+
+
+class TestTheOperatorsScopedGuidance:
+    """
+    An operator's guidance file with `paths:` is held back until a file it covers is reached, where
+    one without is in every session's instructions. What the globs mean is `.gitignore`'s reading.
+    """
+
+    @pytest.fixture
+    def guidance(self) -> Path:
+        return BUNDLED_ROOT / "guidance"
+
+    @pytest.fixture
+    def config_home(self, tmp_path: Path) -> Path:
+        home = tmp_path / "config"
+        rules = home / "mainplate" / "guidance"
+        rules.mkdir(parents=True)
+        (rules / "always.md").write_text("Say what it costs.\n")
+        (rules / "python.md").write_text('---\npaths:\n  - "**/*.py"\n  - "**/pyproject.toml"\n---\n\nType it.\n')
+        return home
+
+    @pytest.fixture
+    def repository(self, tmp_path: Path) -> Path:
+        root = tmp_path / "repo"
+        root.mkdir()
+        subprocess.run(("git", "init", "-q", str(root)), check=True)
+        return root
+
+    async def test_a_scoped_file_is_not_in_the_instructions(
+        self, guidance: Path, config_home: Path, repository: Path
+    ) -> None:
+        described = parse_described(
+            "bundled:guidance",
+            await asked_under(guidance, spoken(event="setup", checkout=str(repository)), config_home),
+        )
+        assert described.instructions is not None
+        assert "Say what it costs." in described.instructions, "the control: an unscoped file is"
+        assert "Type it." not in described.instructions
+
+    async def test_a_scoped_file_is_named_in_the_index_with_what_it_covers(
+        self, guidance: Path, config_home: Path, repository: Path
+    ) -> None:
+        described = parse_described(
+            "bundled:guidance",
+            await asked_under(guidance, spoken(event="setup", checkout=str(repository)), config_home),
+        )
+        assert "- `python.md`: `**/*.py`, `**/pyproject.toml`" in (described.instructions or "")
+
+    async def test_a_session_with_no_checkout_is_not_promised_what_it_can_never_be_handed(
+        self, guidance: Path, config_home: Path
+    ) -> None:
+        described = parse_described("bundled:guidance", await asked_under(guidance, spoken(event="setup"), config_home))
+        assert "python.md" not in (described.instructions or "")
+
+    async def test_reaching_a_file_it_covers_hands_it_over(
+        self, guidance: Path, config_home: Path, repository: Path
+    ) -> None:
+        answered = parse_answer(
+            "bundled:guidance",
+            await asked_under(
+                guidance,
+                spoken(event="before_request", checkout=str(repository), messages=reading("src/app/main.py")),
+                config_home,
+            ),
+        )
+        assert answered.inject == ("`python.md`, the operator's guidance for the files it covers:\n\nType it.",)
+
+    async def test_reaching_a_file_it_does_not_cover_hands_over_nothing(
+        self, guidance: Path, config_home: Path, repository: Path
+    ) -> None:
+        answered = parse_answer(
+            "bundled:guidance",
+            await asked_under(
+                guidance,
+                spoken(event="before_request", checkout=str(repository), messages=reading("src/app/main.rs")),
+                config_home,
+            ),
+        )
+        assert answered.inject == ()
+
+    async def test_what_has_been_handed_over_is_not_handed_again(
+        self, guidance: Path, config_home: Path, repository: Path
+    ) -> None:
+        messages = [
+            *reading("main.py"),
+            {
+                "kind": "request",
+                "parts": [
+                    {
+                        "part_kind": "system-prompt",
+                        "content": "`python.md`, the operator's guidance for the files it covers:\n\nType it.",
+                    }
+                ],
+            },
+            *reading("other.py"),
+        ]
+        answered = parse_answer(
+            "bundled:guidance",
+            await asked_under(
+                guidance, spoken(event="before_request", checkout=str(repository), messages=messages), config_home
+            ),
+        )
+        assert answered.inject == ()
+
+
+@pytest.mark.parametrize(
+    ("patterns", "path", "expected"),
+    [
+        pytest.param(("*.py",), "deep/in/it.py", True, id="no slash names a file at any depth"),
+        pytest.param(("*",), "any/file.txt", True, id="a bare star is every file"),
+        pytest.param((".github/dependabot.yml",), ".github/dependabot.yml", True, id="a slash anchors"),
+        pytest.param((".github/dependabot.yml",), "vendor/.github/dependabot.yml", False, id="anchored elsewhere"),
+        pytest.param(("**/Cargo.toml",), "Cargo.toml", True, id="leading doublestar includes the root"),
+        pytest.param(("**/Cargo.toml",), "crates/core/Cargo.toml", True, id="leading doublestar at depth"),
+        pytest.param(("src/*.py",), "src/deep/it.py", False, id="a star stops at a slash"),
+        pytest.param(("docs/**",), "docs/a/b.md", True, id="trailing doublestar is everything under"),
+        pytest.param(("docs/",), "docs/guide.md", False, id="a directory's name covers nothing under it"),
+        pytest.param(("**/*.{py,rs}",), "lib.rs", True, id="braces expand"),
+        pytest.param(("**/*.{py,rs}",), "lib.go", False, id="braces expand to only what they list"),
+        pytest.param(("**/*", "!**/*.md"), "README.md", False, id="a negation takes a path back out"),
+        pytest.param(("!**/*.md", "**/*"), "main.py", True, id="negation is not order-sensitive"),
+        pytest.param(("f?o.py",), "fxo.py", True, id="a question mark is one character"),
+        pytest.param(("a.b",), "axb", False, id="everything else is itself"),
+    ],
+)
+def test_what_a_scoped_files_globs_cover(patterns: tuple[str, ...], path: str, expected: bool) -> None:
+    covers = load_bundled("guidance").covers
+    assert covers(patterns, path) is expected
+
+
+@pytest.mark.parametrize(
+    ("block", "expected"),
+    [
+        pytest.param("paths:\n  - \"**/*.py\"\n  - '*.md'\n  - bare", ("**/*.py", "*.md", "bare"), id="block list"),
+        pytest.param('paths: ["**/*.py", "*.md"]', ("**/*.py", "*.md"), id="flow list"),
+        pytest.param(
+            'paths: ["**/*.{py,rs}", *.md]', ("**/*.{py,rs}", "*.md"), id="a comma inside braces is the glob's own"
+        ),
+        pytest.param('paths: "**/*.py"', ("**/*.py",), id="one scalar"),
+        pytest.param("description: unscoped", None, id="no paths key is not scoped"),
+        pytest.param("paths:\n  nested: mapping", (), id="a shape it cannot read covers nothing"),
+    ],
+)
+def test_what_a_paths_list_is_read_as(block: str, expected: tuple[str, ...] | None) -> None:
+    assert load_bundled("guidance").paths_of(block) == expected
 
 
 class TestWhatTheBundledSetIs:
@@ -1524,7 +1833,7 @@ async def set_up(
     """
     A session past its settings step, which is the three moments the console actually has.
 
-    A pass, to plant the worktree and read what each tier *declares*; the press, which is the only
+    A pass, to plant the checkout and read what each tier *declares*; the press, which is the only
     thing that lets a plugin be run at all; and a second pass, which is where running one now
     happens. Written here rather than in `conftest.py` because it is what this suite is about:
     everywhere else a session with plugins in it is incidental, and here the order is the claim.
@@ -1599,7 +1908,7 @@ class TestASessionsPlugins:
         """
         Which is what makes an empty declaration mean "this session has looked" rather than "nobody
         has looked": without the write there is no way to tell a console with none from a session
-        whose worktree is still being planted.
+        whose checkout is still being planted.
         """
         session = await service.start(DEFAULT_CHOICE)
         await passing(service, session.id, conversing(Provider().endpoints(), INSTRUCTIONS))
@@ -2105,7 +2414,7 @@ class TestARepositorysOwnPlugin:
         self, service: Service, workspaces: Workspaces, declaring_repository: Declaring
     ) -> None:
         """
-        The whole path in one: the worktree is planted, the declaration is read out of it, the script
+        The whole path in one: the checkout is planted, the declaration is read out of it, the script
         runs behind the sandbox, and what it says lands in the session's instructions.
         """
         planting = replace(service, workspaces=workspaces)
@@ -2339,7 +2648,7 @@ def test_this_repository_declares_its_setup_plugin_at_the_path_it_is_actually_at
     """
     The declaration and the file are two places, so a rename otherwise breaks silently.
 
-    The executable bit matters one moment later. A worktree is planted from the clone, so a file has
+    The executable bit matters one moment later. A checkout is planted from the clone, so a file has
     exactly the mode git recorded, and one committed without it is a plugin every session's `bwrap`
     refuses with a permission error.
     """

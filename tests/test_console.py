@@ -97,7 +97,7 @@ from mainplate.sessions import Session
 from mainplate.sessions import enrol
 from mainplate.sessions import prepare
 from mainplate.sessions import read_tending
-from mainplate.snapshots import Worktree
+from mainplate.snapshots import Checkout
 from mainplate.tending import AGAIN
 from mainplate.tending import SETTLE_FIELD
 from mainplate.tending import SETTLED
@@ -143,8 +143,8 @@ async def answered(service: Service, session: str, *said: object) -> int:
 async def said_to_at(service: Service, session: str, when: datetime) -> None:
     """
     Stamp everything in a session's inbox as said at `when`, which is the one moment the suite's
-    clock does not set: the store stamps an inbox row as it files it, off its own clock, and the list
-    is ordered by that stamp. A test about the order says the stamps rather than racing them.
+    clock does not set: the database stamps an inbox row as it files it, off its own clock, and the
+    list is ordered by that stamp. A test about the order says the stamps rather than racing them.
     """
     await service.database.run(
         lambda connection: connection.execute(
@@ -165,7 +165,7 @@ async def a_session(
     A session started the way a browser starts one, with its first message in it.
 
     **Two posts, because creating one and saying the first thing in it are separate requests**: a
-    repository's plugins cannot be named until its worktree is planted, so creation records the
+    repository's plugins cannot be named until its checkout is planted, so creation records the
     choice and the message box is on the session's own page. Written once here rather than at every
     call site, and a test that is about the split posts to `/sessions` itself.
 
@@ -377,7 +377,7 @@ class TestTheConsole:
         **No message box here**, which is the visible half of the two-step creation.
 
         A plugin's settings are the controls on its card, its card comes back from `describe`, and a
-        repository's plugin cannot be described until its worktree is planted - which a pass does. So
+        repository's plugin cannot be described until its checkout is planted - which a pass does. So
         this page decides what a session *is* and the box is on the session's own page.
         """
         async with calling(app) as caller:
@@ -404,7 +404,7 @@ class TestTheConsole:
         assert answered.status == 303
         assert answered.location == "/"
 
-    @pytest.mark.parametrize(("workspace", "status"), [("somewhere", 422), ("worktree", 422), ("test:gone", 404)])
+    @pytest.mark.parametrize(("workspace", "status"), [("somewhere", 422), ("checkout", 422), ("test:gone", 404)])
     async def test_new_session_in_a_workspace_nothing_offers_is_refused(
         self, app: ASGIApp, workspace: str, status: int
     ) -> None:
@@ -534,7 +534,7 @@ class TestTheConsole:
     ) -> None:
         """
         A session's first message is queued before the pass that composes for it has planted a
-        worktree to read, so the panel is there from the moment the message is and fills in on the
+        checkout to read, so the panel is there from the moment the message is and fills in on the
         swap the first answer arrives on. Asserted against the *fold*, because the panel is drawn
         either way and what tells the two apart is whether there is anything to unfold.
         """
@@ -989,19 +989,19 @@ class TestWhatIsNewInTheList:
         assert answered.text.index("the older one") < answered.text.index("the newer one")
         assert [each.last_said_at for each in await service.listed()] == [WHEN + timedelta(hours=1), WHEN]
 
-    async def test_archived_sessions_follow_active_sessions_regardless_of_message_time(
+    async def test_an_archived_session_follows_an_active_one_written_to_less_recently(
         self, app: ASGIApp, service: Service
     ) -> None:
+        """
+        The index makes the split and `arrange` keeps it, so the index is where it is asserted; how
+        the tree draws over that order is `TestArrangingTheTree`'s.
+        """
         archived = await a_session(app, service, "archived one")
         active = await a_session(app, service, "active one")
         await said_to_at(service, archived, WHEN + timedelta(days=3))
         await said_to_at(service, active, WHEN + timedelta(days=1))
         await service.archive(archived)
         assert [session.id for session in await service.listed()] == [active, archived]
-        async with calling(app) as caller:
-            answered = await caller.get("/")
-        rows = answered.text
-        assert rows.index(f'id="listed-{active}"') < rows.index(f'id="listed-{archived}"')
 
     async def test_a_session_nobody_has_written_to_is_dated_from_its_making(
         self, app: ASGIApp, service: Service
@@ -1125,23 +1125,51 @@ class TestWhatIsNewInTheList:
         assert found is not None
         assert len(found.session.title) <= TITLE_LENGTH
 
-    async def test_a_session_can_be_renamed_without_changing_its_conversation(
+    async def test_a_rename_is_the_name_the_list_shows_settled_as_every_name_is(
         self, app: ASGIApp, service: Service
     ) -> None:
         session = await a_session(app, service, "the first thing said")
+        async with calling(app) as caller:
+            await caller.post(f"/sessions/{session}/rename", {TITLE_FIELD: "  Another   name "})
+        assert (await service.listed())[0].title == "Another name"
+
+    async def test_a_rename_leaves_the_conversation_as_it_was(self, app: ASGIApp, service: Service) -> None:
+        session = await a_session(app, service, "the first thing said")
         before = await service.checkpointer.load(session)
         async with calling(app) as caller:
-            page = await caller.get(f"/sessions/{session}")
-            assert f'action="/sessions/{session}/rename"' in page.text
-            token = await service.listing_token()
-            changed = await caller.post(f"/sessions/{session}/rename", {TITLE_FIELD: "  Another   name "})
-            assert changed.status == 303
-            assert changed.location == f"/sessions/{session}"
-            page = await caller.get(f"/sessions/{session}")
-        assert "<title>Another name</title>" in page.text
+            await caller.post(f"/sessions/{session}/rename", {TITLE_FIELD: "Another name"})
         assert await service.checkpointer.load(session) == before
+
+    async def test_a_rename_moves_the_lists_token_so_every_open_list_redraws(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        session = await a_session(app, service, "the first thing said")
+        token = await service.listing_token()
+        async with calling(app) as caller:
+            await caller.post(f"/sessions/{session}/rename", {TITLE_FIELD: "Another name"})
         assert await service.listing_token() != token
-        assert (await service.listed())[0].title == "Another name"
+
+    async def test_a_rename_to_the_name_it_already_has_leaves_the_token_alone(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        session = await a_session(app, service, title="Keep this name")
+        token = await service.listing_token()
+        async with calling(app) as caller:
+            await caller.post(f"/sessions/{session}/rename", {TITLE_FIELD: "Keep this name"})
+        assert await service.listing_token() == token
+
+    async def test_a_rename_answers_with_the_row_holding_the_settled_name(self, app: ASGIApp, service: Service) -> None:
+        session = await a_session(app, service, "the first thing said")
+        async with calling(app) as caller:
+            answered = await caller.post(f"/sessions/{session}/rename", {TITLE_FIELD: "  Another   name "})
+        assert answered.status == 200
+        assert 'value="Another name"' in answered.text
+
+    async def test_a_rename_answers_with_the_tabs_new_title(self, app: ASGIApp, service: Service) -> None:
+        session = await a_session(app, service, "the first thing said")
+        async with calling(app) as caller:
+            answered = await caller.post(f"/sessions/{session}/rename", {TITLE_FIELD: "Another name"})
+        assert "<title>Another name</title>" in answered.text
 
     @pytest.mark.parametrize("given", ["", "  "])
     async def test_a_blank_rename_is_refused(self, app: ASGIApp, service: Service, given: str) -> None:
@@ -2059,11 +2087,10 @@ class TestTheClockAPageIsDrawnAgainst:
         """
         session = await a_session(app, service)
         await answered(service, session, *ANSWERED)
-        await service.checkpointer.supply(session, model_key(0, 0), answered_with(ANSWERED[0]))
 
         async with calling(app) as caller:
             page = await caller.get(f"/sessions/{session}")
-            swap = await caller.get(f"/fragments/sessions/{session}/requests/0/0")
+            swap = await caller.post(f"/sessions/{session}/messages", {"prompt": "and another thing"})
 
         assert page.status == 200
         assert swap.status == 200, "the control: a refusal would carry the header too"
@@ -2319,24 +2346,8 @@ class TestWhatARuleSays:
         assert 'id="waiting"' in region
 
 
-class TestShowingWhatWasRecorded:
-    """
-    The rule at each model request's boundary, and the fragment behind it.
-
-    A request is a thing the checkpoint has a key for, unlike a panel, so what these pin is a lookup
-    rather than an agreement between two walks.
-    """
-
-    async def answered_session(self, app: ASGIApp, service: Service) -> str:
-        session = await a_session(app, service)
-        await answered(service, session, *ANSWERED)
-        await service.checkpointer.supply(session, model_key(0, 0), answered_with(ANSWERED[0]))
-        return session
-
-    async def test_a_rule_is_pointed_at_the_request_it_stands_at(self, app: ASGIApp, service: Service) -> None:
-        session = await self.answered_session(app, service)
-        region = await watched(app, session)
-        assert f'hx-get="/fragments/sessions/{session}/requests/0/0"' in region
+class TestTheRuleAtARequest:
+    """The rule at each model request's boundary, and what it says about that request."""
 
     async def test_every_request_of_a_turn_gets_its_own_rule_and_the_turn_gets_one(
         self, app: ASGIApp, service: Service
@@ -2348,100 +2359,36 @@ class TestShowingWhatWasRecorded:
         requests, and it is why the modifier exists rather than the selector being every rule.
         """
         session = await a_session(app, service)
-        await service.checkpointer.supply(session, tree_key(0, 1), snapshotted("b" * 40))
         await answered(service, session, *ANSWERED, *ANSWERED)
         region = await watched(app, session)
         assert region.count('class="rule rule--turn"') == 1
         assert region.count('class="rule"') == 1, "the second request, which opens no turn"
-        assert '/requests/0/1"' in region
-        assert "bbbbbbbb" in region, "the tree the second request was made against"
+        assert ">r0.1<" in region
 
-    async def test_a_rule_carries_what_the_request_cost_and_the_tree_it_saw(
-        self, app: ASGIApp, service: Service
-    ) -> None:
-        """The three things that are true of a request, which were previously homeless or on a panel."""
+    async def test_a_rule_carries_what_the_request_cost(self, app: ASGIApp, service: Service) -> None:
+        """What is true of a request and was previously homeless or on a panel."""
         session = await a_session(app, service)
-        await service.checkpointer.supply(session, tree_key(0, 0), snapshotted("a" * 40))
         await answered(service, session, *ANSWERED)
         region = await watched(app, session)
-        assert "aaaaaaaa" in region, "the tree taken before the ask"
-        assert "\N{UPWARDS ARROW}5K" in region, "and what the answer cost"
-        assert 'class="tag__at">r0.0<' in region, "and the record behind it, named turn and request"
+        assert "\N{UPWARDS ARROW}5K" in region, "what the answer cost"
+        assert 'class="rule__request"' in region, "and which request it was, named turn and request"
+        assert ">r0.0<" in region
 
-    async def test_the_record_is_not_carried_by_the_transcript_itself(self, app: ASGIApp, service: Service) -> None:
+    @pytest.mark.parametrize("at", [0, 1])
+    async def test_a_rule_prints_no_snapshot_hash(self, app: ASGIApp, service: Service, at: int) -> None:
         """
-        Fetched rather than rendered, which is the whole reason it is an endpoint: the transcript
-        is re-rendered whenever the turn in flight records anything, and this is several times the
-        size of the reading of it.
-        """
-        session = await self.answered_session(app, service)
-        region = await watched(app, session)
-        assert "the trigger fires once" in region, "the reading of the response is on the page"
-        assert '"part_kind"' not in region, "the record behind it is not"
+        A snapshot is how a fork gets its files back, and nothing a reader handles.
 
-    async def test_the_disclosure_survives_the_poll_that_replaces_the_conversation(
-        self, app: ASGIApp, service: Service
-    ) -> None:
+        Recorded at both boundaries a two-request turn has, the turn's own rule and the request's, so
+        each is checked against the tree recorded where it stands. The prefix is what a rule used to
+        print, and the whole hash is what its title used to hold.
         """
-        `hx-preserve` is load-bearing and invisible to a reader of the markup, so it is pinned here.
-
-        The region morphs, and the server renders this closed. Without the attribute a morph takes
-        the `open` attribute back off and shuts the disclosure under the reader's hand once a
-        second, which a driven Chromium confirms and no string assertion can. htmx reads it off the
-        incoming markup, so this response is where it has to be.
-        """
-        session = await self.answered_session(app, service)
-        region = await watched(app, session)
-        assert "hx-preserve" in region
-        assert 'hx-trigger="toggle once"' in region, "settled for good, so asked for once"
-
-    async def test_a_request_answers_with_the_whole_response_the_step_holds(
-        self, app: ASGIApp, service: Service
-    ) -> None:
-        """
-        The step and not a slice of the turn's messages, which is the simplification the tag bought:
-        `turn:{n}:model:{i}` is what the provider answered, and a request has a key of its own.
-        """
-        session = await self.answered_session(app, service)
-        async with calling(app) as caller:
-            answered = await caller.get(f"/fragments/sessions/{session}/requests/0/0")
-        assert answered.status == 200
-        assert '"part_kind": "thinking"' in answered.text
-        assert '"the trigger fires once"' in answered.text
-        assert "it is a plate" in answered.text, "the whole response, not one panel's worth of it"
-
-    async def test_a_request_nobody_made_is_refused_rather_than_rendered_empty(
-        self, app: ASGIApp, service: Service
-    ) -> None:
-        session = await self.answered_session(app, service)
-        async with calling(app) as caller:
-            answered = await caller.get(f"/fragments/sessions/{session}/requests/0/9")
-        assert answered.status == 404
-        assert "Nothing is recorded" in answered.text
-
-    async def test_a_session_nobody_started_is_refused(self, app: ASGIApp) -> None:
-        async with calling(app) as caller:
-            answered = await caller.get("/fragments/sessions/deadbeef/requests/0/0")
-        assert answered.status == 404
-
-    async def test_markup_inside_a_record_does_not_become_markup(self, app: ASGIApp, service: Service) -> None:
-        """
-        The raw record carries whatever the model said, which is shaped by whatever reached the box.
-
-        Shown as text and not as rendered Markdown, so the sanitiser this page uses elsewhere is not
-        in the path at all: what stands in for it is that a node tree escapes a text child.
-        """
+        tree = "cd"[at] * 40
         session = await a_session(app, service)
-        await service.checkpointer.supply(
-            session,
-            model_key(0, 0),
-            {"kind": "response", "parts": [{"part_kind": "text", "content": "<script>alert(1)</script>"}]},
-        )
-        async with calling(app) as caller:
-            answered = await caller.get(f"/fragments/sessions/{session}/requests/0/0")
-        assert answered.status == 200
-        assert "<script" not in answered.text
-        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in answered.text
+        await service.checkpointer.supply(session, tree_key(0, at), snapshotted(tree))
+        await answered(service, session, *ANSWERED, *ANSWERED)
+        region = await watched(app, session)
+        assert tree[:8] not in region
 
 
 class TestWhatTheIsolationControlsPost:
@@ -2509,7 +2456,7 @@ class TestOneQuestionAboutFiles:
     """
 
     def test_a_repository_settles_both(self) -> None:
-        assert posted_workspace({"workspace": ["exe-github:blog"]}) == ("exe-github:blog", Filesystem.WORKTREE)
+        assert posted_workspace({"workspace": ["exe-github:blog"]}) == ("exe-github:blog", Filesystem.CHECKOUT)
 
     def test_the_two_that_are_not_a_repository_settle_both(self) -> None:
         assert posted_workspace({"workspace": ["nothing"]}) == (None, Filesystem.NOTHING)
@@ -2525,7 +2472,7 @@ class TestOneQuestionAboutFiles:
         found, level = posted_workspace({"workspace": ["test:nothing"]})
 
         assert found == "test:nothing", "a repository whose key spells a level is still a repository"
-        assert level is Filesystem.WORKTREE
+        assert level is Filesystem.CHECKOUT
 
     def test_an_absent_field_is_the_tightest_answer(self) -> None:
         assert posted_workspace({}) == (None, Filesystem.NOTHING)
@@ -2553,7 +2500,7 @@ class Answering:
     refusing: str | None = None
     asked: list[str] = field(default_factory=list)
 
-    async def __call__(self, plugin: Installed, payload: Payload, worktree: Worktree | None) -> Spoke:
+    async def __call__(self, plugin: Installed, payload: Payload, checkout: Checkout | None) -> Spoke:
         self.asked.append(plugin.qualified)
         if self.refusing == plugin.qualified:
             raise PluginFailed(f"{plugin.qualified} exited 1: saying nothing")

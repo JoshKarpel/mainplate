@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import timedelta
 
@@ -44,8 +46,51 @@ from mainplate.sessions import Session
 from mainplate.sessions import enrol
 
 NOW = 1_000_000.0
-"""An arbitrary moment for the pure reading, in the store's own unit. Not zero, so a field left
+"""An arbitrary moment for the pure reading, in the database's own unit. Not zero, so a field left
 unset would read as `now` rather than as something distinguishable from it."""
+
+
+@asynccontextmanager
+async def in_state(service: Service, state: str) -> AsyncIterator[str]:
+    """
+    A session the store holds in one of the four states, named by its id, for as long as the block.
+
+    Put there the ways the worker would put it there, short of a worker: a message queues it, a
+    claim taken as a pass takes one holds it, and a delivery pushed into the future is the one a
+    fallen pass leaves held back. A session with no rows in either table is the idle one.
+    """
+    match state:
+        case "idle":
+            settled = Session(id="ab" * 16, created_at=WHEN, title="nothing queued, ever")
+            await enrol(service.database, settled)
+            yield settled.id
+        case "queued":
+            yield (await started(service, "waiting its turn")).id
+        case "delayed":
+            session = await started(service, "held back")
+            await service.database.run(
+                lambda connection: connection.execute(
+                    "UPDATE workflow_queue SET visible_at = unixepoch('now', 'subsec') + 600 WHERE workflow = :workflow",
+                    {"workflow": session.id},
+                )
+            )
+            yield session.id
+        case "claimed":
+            session = await started(service, "being answered")
+            holder = await claimed(service.checkpointer, session.id)
+            try:
+                yield session.id
+            finally:
+                await service.checkpointer.release(holder)
+        case _:
+            raise ValueError(f"no such state as {state!r}")
+
+
+def to_the_minute(attention: object) -> object:
+    """An answer with a wait's remainder rounded to the minute, and every other answer as it was."""
+    if isinstance(attention, Delayed):
+        return replace(attention, until=timedelta(minutes=round(attention.until / timedelta(minutes=1))))
+    return attention
 
 
 class TestReadingWhatTheWorkerIsDoing:
@@ -89,7 +134,7 @@ class TestReadingItOutOfTheStore:
     The same four, against `without-durability-sqlite`'s own rows rather than against a value written
     down here.
 
-    Worth a real store because the query is the half that can drift: it names three tables this
+    Worth a real database because the query is the half that can drift: it names three tables this
     console does not own, and a rename upstream is a wrong answer rather than a failure to compile.
     """
 
@@ -152,6 +197,23 @@ class TestReadingItOutOfTheStore:
             await service.checkpointer.release(holder)
         assert listed == {answering.id: Claimed(), waiting.id: Queued(), settled.id: Idle()}
 
+    @pytest.mark.parametrize(
+        ("state", "arm"), [("claimed", Claimed), ("queued", Queued), ("delayed", Delayed), ("idle", Idle)]
+    )
+    async def test_the_list_reads_a_session_as_its_own_reading_does(
+        self, service: Service, state: str, arm: type[object]
+    ) -> None:
+        """
+        `ATTENDING` is `ATTENDED` written a second time, for every session at once, so what holds the
+        two together is that they answer alike in every arm. A wait is compared to the minute, since
+        each statement reads the store's clock at its own moment and the wait shortens in between.
+        """
+        async with in_state(service, state) as session:
+            alone = await service.attention(session)
+            listed = {each.id: each.attention for each in await service.listed()}[session]
+        assert isinstance(alone, arm), "the store was put in the state this arm is about"
+        assert to_the_minute(listed) == to_the_minute(alone)
+
     async def test_the_list_s_token_moves_when_a_pass_takes_a_session_and_when_it_lets_go(
         self, service: Service
     ) -> None:
@@ -204,9 +266,10 @@ class TestTheTokenAPageWatchesOn:
         than when it is due, shrinks between two reads with nothing having happened, so the page
         re-renders for ever.
 
-        Written against two readings that differ only in when they were taken, rather than against two
-        reads of a real store a moment apart: the store's clock has millisecond resolution, so two
-        consecutive reads land in the same millisecond often enough that the bug passes such a test.
+        Written against two readings that differ only in when they were taken, rather than against
+        two reads of a real database a moment apart: the database's clock has millisecond resolution,
+        so two consecutive reads land in the same millisecond often enough that the bug passes such a
+        test.
         """
         earlier = Attended(recorded=4, claimed_until=NOW - 30, due_at=NOW + 600, asked_at=NOW)
         later = Attended(recorded=4, claimed_until=NOW - 30, due_at=NOW + 600, asked_at=NOW + 90)

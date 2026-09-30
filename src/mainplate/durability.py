@@ -52,7 +52,8 @@ from without_durability.stepwise import StepKey
 
 from mainplate import records
 from mainplate.records import StepKind
-from mainplate.snapshots import Worktree
+from mainplate.snapshots import Checkout
+from mainplate.snapshots import Snapshot
 
 ModelResponseTypeAdapter: TypeAdapter[ModelResponse] = TypeAdapter(ModelResponse)
 
@@ -77,16 +78,30 @@ def parse_tree(recorded: object) -> str | None:
     A recorded tree hash, or nothing at all for a turn taken with no workspace configured.
 
     Absent reads the same as recorded-with-no-hash, which is what every caller wants: they all reach
-    this through `recorded.get(...)`, and a request nobody has made yet and one made with no worktree
+    this through `recorded.get(...)`, and a request nobody has made yet and one made with no checkout
     are both drawn as no tree. The two are still *told apart in the store*, which is what the record
     is for - a `Tree` holding nothing says a snapshot was taken and there was nothing to take.
     """
     return None if recorded is None else records.Tree.model_validate(recorded).tree
 
 
+def parse_snapshot(recorded: object) -> Snapshot | None:
+    """
+    A recorded checkout state as the value a fork is planted from, or nothing where there is none.
+
+    Nothing both where no record is and where the record says no checkout was configured, for
+    `parse_tree`'s reason: a fork of either has no files of its parent's to plant, and plants the way
+    a new session does.
+    """
+    if recorded is None:
+        return None
+    held = records.Tree.model_validate(recorded)
+    return None if held.tree is None else Snapshot(tree=held.tree, head=held.head, branch=held.branch)
+
+
 def parse_wrote(recorded: object) -> str:
     """
-    The net change one batch of tool calls made to the worktree, as the diff the pass computed it.
+    The net change one batch of tool calls made to the checkout, as the diff the pass computed it.
 
     Empty is a batch that changed nothing, which is an ordinary answer and not a missing record: the
     record's presence is what says a batch ran and its diff was taken, where absence says the turn
@@ -164,21 +179,28 @@ def parse_refused(recorded: object) -> records.Refused:
     return records.Refused.model_validate(recorded)
 
 
-def snapshotting(worktree: Worktree | None, why: str) -> Callable[[], Awaitable[object]]:
+def recorded_snapshot(snapshot: Snapshot) -> object:
+    """A captured checkout state as the record a checkpoint holds; `parse_snapshot` is the way back."""
+    return records.Tree(tree=snapshot.tree, head=snapshot.head, branch=snapshot.branch).recorded()
+
+
+def snapshotting(checkout: Checkout | None, why: str) -> Callable[[], Awaitable[object]]:
     """
-    What the worktree looked like at one model request, as the effect `Run.step` takes.
+    What the checkout looked like at one model request, as the effect `Run.step` takes.
 
     A step rather than a plain read, and that is the rule the mechanism asks for rather than a
-    preference: reading a worktree returns a different answer every time it is asked, so a pass
+    preference: reading a checkout returns a different answer every time it is asked, so a pass
     that re-read it would resume a conversation against a directory that has moved since. Recorded
     once, every later pass is handed the hash the first one saw and runs no git at all.
 
-    No worktree records `None` rather than nothing at all, so a turn taken before one was
+    No checkout records `None` rather than nothing at all, so a turn taken before one was
     configured is distinguishable from a turn nobody has reached yet.
     """
 
     async def capture() -> object:
-        return records.Tree(tree=None if worktree is None else await worktree.capture(why)).recorded()
+        if checkout is None:
+            return records.Tree(tree=None).recorded()
+        return recorded_snapshot(await checkout.capture(why))
 
     return capture
 
@@ -463,7 +485,7 @@ class Stepping:
     across passes for free where a counter is not.
 
     Fresh per turn, so nothing it counts survives the scope for another turn to see. Two things on
-    it belong to something wider and are handed in rather than made here: `worktree` is the
+    it belong to something wider and are handed in rather than made here: `checkout` is the
     session's, and is here because the point where a snapshot may be taken is a model request and
     this is what stands at one; `allowance` is the *pass's*, and is shared by every scope in it,
     since what it bounds is how long one pass runs rather than how much one turn does.
@@ -471,7 +493,7 @@ class Stepping:
 
     run: Run
     prefix: str
-    worktree: Worktree | None = None
+    checkout: Checkout | None = None
     pricer: Pricer | None = None
     draining: Draining | None = None
     injecting: Injecting | None = None
@@ -553,7 +575,7 @@ class Stepping:
 
     async def snapshot(self) -> str | None:
         """
-        Record what the worktree holds right now, at a point where nothing is writing to it.
+        Record what the checkout holds right now, at a point where nothing is writing to it.
 
         Called from `Stepping.request`, which is the only place that can honestly call it.
         A model request is the boundary at which every tool of the previous batch has returned by
@@ -565,30 +587,33 @@ class Stepping:
         request of which turn it was taken before without a second naming scheme to keep in step.
         """
         key = self.key("tree")
-        return await self.step(key, snapshotting(self.worktree, key), parse_tree)
+        return await self.step(key, snapshotting(self.checkout, key), parse_tree)
 
-    async def wrote(self, before: str | None, after: str | None) -> None:
+    async def wrote(self, at: int, before: str | None, after: str | None) -> None:
         """
         Record the net change the tool batch that just ran made, from the tree it started from to the
         one it ended at.
 
-        Called from `request` after the snapshot of the *current* request, because that is the moment
-        both halves are in hand: the current request's tree was just captured and the previous one has
-        been in the store since its own request. It rides under `wrote:{at-1}`, the request whose
-        response produced the batch, so a reader of that request finds the diff its tools wrote.
+        Called from `request` after the snapshot of the *next* request, because that is the moment
+        both halves are in hand: that request's tree was just captured and the batch's own request's
+        has been in the store since it was made. It rides under `wrote:{at}`, where `at` is the
+        request whose response produced the batch, so a reader of that request finds the diff its
+        tools wrote. Named by that position through `identified` rather than counted by a `wrote`
+        counter of its own, for the reason `at` gives: a second counter beside `model`'s would be
+        one more thing to keep in step with it, and would say nothing that position does not.
 
         An unchanged pair records an empty diff rather than running git, and a session with no
-        worktree records one too: either is "the batch's net change is nothing to show", which the
+        checkout records one too: either is "the batch's net change is nothing to show", which the
         page reads as no figure rather than as a missing record. The `git diff` itself is an effect,
         so it happens inside the step and a replay is handed the recorded text instead of running it
         again.
         """
-        key = self.key("wrote")
+        key = self.identified("wrote", str(at))
 
         async def diffing() -> object:
-            if self.worktree is None or before is None or after is None or before == after:
+            if self.checkout is None or before is None or after is None or before == after:
                 return records.Wrote(diff="").recorded()
-            return records.Wrote(diff=await self.worktree.diff(before, after)).recorded()
+            return records.Wrote(diff=await self.checkout.diff(before, after)).recorded()
 
         await self.step(key, diffing, parse_wrote)
 
@@ -681,7 +706,7 @@ class Stepping:
         `price` and `stamp`, both of which have to run here because everything further out happens
         after the record is written.
 
-        The worktree is snapshotted first, because this is the moment it is worth snapshotting: no
+        The checkout is snapshotted first, because this is the moment it is worth snapshotting: no
         tool is running, so the tree is a coherent thing to read, and what is recorded is the state
         the model is about to be asked to reason about. A pass that replays this request replays the
         snapshot too and runs no git, so the pair stay in step whatever happens between them.
@@ -713,8 +738,8 @@ class Stepping:
         self.allow(key)
         after = await self.snapshot()
         if at > 0:
-            before = parse_tree(self.run.recorded.get(f"{self.prefix}:tree:{at - 1}"))
-            await self.wrote(before, after)
+            before = parse_tree(self.run.recorded.get(self.identified("tree", str(at - 1))))
+            await self.wrote(at - 1, before, after)
 
         async def ask() -> object:
             started = monotonic()
@@ -766,7 +791,7 @@ class Stepping:
         outcome saying which, and that is the half of this that is easy to get wrong. A `ModelRetry`
         and a `ToolFailed` are both a result the model is sent, so both have to be in the checkpoint
         for the same reason a return is: a replay that ran the tool again to find out what it would
-        say would be asking a live question, against a worktree the rest of the batch has since
+        say would be asking a live question, against a checkout the rest of the batch has since
         written to, and pairing whatever it said with a recorded response the model made believing
         the first answer. Under the graph the retry prompt was built outside anything this could wrap,
         which is why they were once left unrecorded; the loop builds it now, from this record.
@@ -892,7 +917,7 @@ def ending_turn() -> None:
 def stepping(
     run: Run,
     prefix: str,
-    worktree: Worktree | None = None,
+    checkout: Checkout | None = None,
     pricer: Pricer | None = None,
     draining: Draining | None = None,
     allowance: Allowance | None = None,
@@ -903,7 +928,7 @@ def stepping(
     yield Stepping(
         run=run,
         prefix=prefix,
-        worktree=worktree,
+        checkout=checkout,
         pricer=pricer,
         draining=draining,
         injecting=injecting,

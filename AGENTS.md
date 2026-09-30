@@ -11,21 +11,54 @@ carry their own pair of the same shape, listed below.
 
 ## Start here
 
-Read [`PHILOSOPHY.md`](PHILOSOPHY.md) before changing anything. It rests on one idea: **the
-checkpoint is the conversation.** There is no messages table, no session state in the server, and no
-cache; a page renders `checkpointer.load(session)`, a crash resumes from the same rows, and two tabs
-agree because they are reading the same thing. **Anything that would keep a second copy of what was
-said is the change to push back on**, and the rule is the narrow one: a copy that has to be kept in
-step with something that *changes*. The session index, the model catalogue, `localStorage`, a fork,
-and a recorded cost all look like exceptions and are not, and the doc says why each one is not,
-because a sixth will be proposed and its argument has to look like one of theirs.
+[`PHILOSOPHY.md`](PHILOSOPHY.md) is the standard new work here is measured against, and it argues
+each of the rules below at length. They are stated here as well because a change that breaks one is
+the change that gets sent back, whether or not its author opened the file:
 
-It also carries who the console is for (a centaur: the person drives, the model carries), the
-vocabulary this console names things with, and the cross-cutting rules the design notes cite rather
-than restate: when a component refuses at startup against when it promises not to raise, how
-configuration that changes under a reader is handled, what "a page is a pure function of
-already-answered questions" rules out, and what to do about one fact that has to be written in two
-places.
+- **The checkpoint is the conversation.** There is no messages table, no session state in the
+  server, and no cache; a page renders `checkpointer.load(session)`, a crash resumes from the same
+  rows, and two tabs agree because they are reading the same thing. **Anything that would keep a
+  second copy of what was said is the change to push back on**, and the rule is the narrow one: a
+  copy that has to be kept in step with something that *changes*. The session index, the model
+  catalogue, `localStorage`, a fork, and a recorded cost all look like exceptions and are not; a new
+  one has to argue the way theirs do, in `PHILOSOPHY.md`, before it is built.
+- **The person drives and the model carries.** Nothing in the console decides anything: a recorded
+  number is crossed and a message is delivered. Name the trigger, never an actor.
+- **One name per thing, and the same name in the code and on the page.** A second word for one
+  operation is a synonym to keep in step for ever. Say what it is: a tool `refuses`, a session is
+  `stalled`, never "unavailable".
+- **A page is a pure function of already-answered questions.** Rendering asks nothing, the clock
+  included, which is what lets `scripts/gallery.py` draw every page from fixtures.
+- **A component either refuses at startup or promises not to raise**, and which is decided by
+  whether a failure could leave somebody holding a choice they cannot use.
+- **Configuration that changes under a reader is read before ready, refreshed off the request path,
+  and swapped whole**, and a failed refresh keeps the last good value.
+- **One fact that has to be written in two places is named where both halves are, and tested** so a
+  drift fails. A third place is never the answer.
+- **Controls:** two controls kept in step are one question; a control that toggles may not move; a
+  control says what it does and never remembers what it did last; everything `mainplate.js` does is
+  an enhancement.
+- **Say what a choice costs, in the sentence that makes the choice.**
+
+## How a change is made here
+
+This repository writes down more than most, and the writing is part of the design. **Where your
+standing guidance says otherwise, such as to write few comments or keep docstrings short, this
+section wins for work in this repository.**
+
+- **Reasoning beside the code is load-bearing.** A docstring or comment here says why, and what the
+  choice costs. Never delete one for being long. Where a change makes one false, rewrite it into
+  reasoning that holds, in the same voice; a one-line assertion where an argument was is a deletion.
+  A function written beside documented ones gets a docstring of the same kind.
+- **When a change contradicts something written down, stop and say so before rewriting it.** A
+  sentence saying "nothing ever renames it", or a design note saying a thing is not a copy, is
+  usually the design, and whether the design moves is the person's to decide. Once it does, the
+  prose is rewritten to read as if it were always so, with the argument whole.
+- **Reuse before adding.** Find the control, helper, fixture or test already doing the same kind of
+  job and build on it; a second one of a kind is a second thing to keep in step. For the page, the
+  kinds of control are listed in [`src/mainplate/AGENTS.md`](src/mainplate/AGENTS.md).
+- **A feature is looked at, not argued about:** a demo in the seed (below), `just shots`, and a
+  section of the design note covering it, written in that note's voice.
 
 ## Commands
 
@@ -102,35 +135,35 @@ the session on the cheapest model the endpoint lists and say the shortest thing 
 Reach for a frontier model only when the change is about what a frontier model does differently, and
 say so.
 
-## A worktree is a session's to write, so the parent must not run git against it
+## A checkout is a session's to write, so the parent must not run git against it
 
 The console process holds the credential, the store and the service user's whole filesystem; the
-sandbox holds a session's worktree, bound read-write because a session has to work in it. **Anything
-the parent runs against that worktree is running with one side's authority over the other side's
+sandbox holds a session's checkout, bound read-write because a session has to work in it. **Anything
+the parent runs against that checkout is running with one side's authority over the other side's
 input**, and the mistake is never a missing check, it is a program that goes and *finds* something
 rather than being handed it.
 
-Git is the standing example and the reason this has a section. A session's worktree is a complete
-checkout with a `.git` of its own, so its configuration and hooks are the session's to write, and
+Git is the standing example and the reason this has a section. A session's checkout is a complete
+repository with a `.git` of its own, so its configuration and hooks are the session's to write, and
 several configuration keys name programs git runs (`core.fsmonitor` fires inside `git add`, and the
 list is open-ended). A failing monitor makes git scan normally, so a capture run in the parent would
-succeed and nothing would report that a program ran. So the parent runs no git against a worktree at
-all: `Worktree.git` runs it behind `bwrap`, and what comes back is a listing or a bundle.
+succeed and nothing would report that a program ran. So the parent runs no git against a checkout at
+all: `Checkout.git` runs it behind `bwrap`, and what comes back is a listing or a bundle.
 
 What must hold when adding to the parent:
 
-- **Never run git against a session's worktree in the parent.** Not `git -C <worktree>`, not
-  `--git-dir <worktree>/.git`, not in `snapshots.py`, a tool, a page, a plugin or a script. Reach a
-  worktree through `Worktree.git`, which confines it.
+- **Never run git against a session's checkout in the parent.** Not `git -C <checkout>`, not
+  `--git-dir <checkout>/.git`, not in `snapshots.py`, a tool, a page, a plugin or a script. Reach a
+  checkout through `Checkout.git`, which confines it.
 - **Git in the parent is for the `Store` and nothing else.** `Store.git` names the bare clone with
   `--git-dir`; `git_at` is for the directory clones are made under and for a checkout still being
   built, before any session has written to it.
 - **What crosses from a sandbox is data.** A bundle is fetched by the store, refused if it is a link
   or not a regular file, and the tree it carries is read back out of the store rather than taken on
-  the worktree's word. Never take a path out of a worktree and act on it in the parent.
-- **Never carry a session's worktree as a path and rebuild a `Worktree` from it** somewhere that then
+  the checkout's word. Never take a path out of a checkout and act on it in the parent.
+- **Never carry a session's checkout as a path and rebuild a `Checkout` from it** somewhere that then
   runs git with it the ordinary way. Pass the value, which knows its store and its sandbox.
-- **A console-tier plugin runs unconfined**, and is handed the worktree's path. The bundled guidance
+- **A console-tier plugin runs unconfined**, and is handed the checkout's path. The bundled guidance
   plugin reads the index through `GIT_INDEX_FILE` against an empty repository of its own; anything
   else there that runs git has to do the same.
 - **Prefer the sandbox** where the parent has no reason to be the one running it at all. That is the
@@ -156,7 +189,7 @@ change:
   is no rewind.
 - [`docs/design/composer.md`](docs/design/composer.md): dispositions, leaders, the shelf, `forget`,
   handoff, steering, running a command, and pushing.
-- [`docs/design/workspace.md`](docs/design/workspace.md): forges, clones, a session's worktree,
+- [`docs/design/workspace.md`](docs/design/workspace.md): forges, clones, a session's checkout,
   where in it and on what branch, snapshots, where everything a session keeps on disk is and what it
   takes, and archiving, which takes it away while keeping the conversation.
 - [`docs/design/tools.md`](docs/design/tools.md): which tools a session gets, and the
@@ -165,7 +198,7 @@ change:
   the two isolation axes a session picks.
 - [`docs/design/security.md`](docs/design/security.md): the boundary between the parent and the
   sandbox, what is untrusted, and what is deliberately left undefended. **Read it before adding
-  anything to the parent that runs a program against a session's worktree.**
+  anything to the parent that runs a program against a session's checkout.**
 - [`docs/design/durability.md`](docs/design/durability.md): the model-and-tool loop, the steps it
   records, what one pass does, what a session does when a provider says to come back later, and what
   replaying a turn costs, which `just replay` measures rather than asserts.
@@ -188,178 +221,17 @@ The toolchain around the source rather than any part of the console is
 [`docs/maintaining.md`](docs/maintaining.md): the dependency choices, the checks, the documentation
 site, and where the prose in this repository goes.
 
-Five directories carry an `AGENTS.md` of their own, which you are handed on reaching into one rather
-than having to go and find: `src/mainplate/tools/` and `src/mainplate/tools/files/` for what a
-change to a tool must not break, `src/mainplate/plugins/` for what a change to the protocol or a
-bundled plugin must not break, `tests/` for how the suite is driven and what has to be a browser,
-and `scripts/` for the gallery and the seeder.
+Six directories carry an `AGENTS.md` of their own, which you are handed on reaching into one rather
+than having to go and find: `src/mainplate/` for the stylesheet, the script and everything else
+under `assets/`, which cannot carry one of its own because every file there is served;
+`src/mainplate/tools/` and `src/mainplate/tools/files/` for what a change to a tool must not break,
+`src/mainplate/plugins/` for what a change to the protocol or a bundled plugin must not break,
+`tests/` for how the suite is driven and what has to be a browser, and `scripts/` for the gallery
+and the seeder.
 
 **Those say what must hold; the design notes say why.** A page argues for four lowercase letters and
 the file beside `anchors.py` says do not make it three, so write a new constraint beside the code
 and its reasoning on the page, rather than either in both.
-
-## The assets
-
-`src/mainplate/assets/` is the one directory whose constraints are written here rather than beside
-it, because every file in it is served: the inventory walks the whole tree, so a guidance file there
-is a page anybody can fetch and a representation every process start compresses. **Put nothing in
-`assets/` that a browser should not have.**
-
-Why any of this is the way it is, including every number below, is [The stylesheet, the script, and
-the grid](https://joshkarpel.github.io/mainplate/design/assets/). What follows is what must hold
-while editing there.
-
-An edit is only visible to a *new* process, since the assets are inventoried once at startup. `just
-serve` restarts on any change under `src/mainplate`; `just shots` is how a styling change gets
-looked at rather than argued about.
-
-### A narrow rule goes in the block at the end of `mainplate.css`
-
-There are two shapes and one width between them, 78rem, and every rule for the narrow shape is in
-the one `max-width` block at the end of the file. **Do not add a second top-level width.** There
-used to be a shape between, with the rail folded and the list not, and its query overlapped the
-narrow one so that whichever came later won: a shape rule written beside the thing it is about,
-above the narrow block, was silently overridden, which is how the 17rem sidebar column came back on
-every phone and left the conversation a hundred pixels wide. One block has no order to get wrong.
-
-**What a phone needs beyond the fold goes in the `48rem` query nested at the end of that block**:
-room on a line, a pointer that hovers, a height a whole picker fits in, a thumb to press with. The
-fold is about columns and fires on half a laptop; a rule that stacks a line or hides half of it
-fires there too if it is written in the outer block, which is how a 1200px window came to draw its
-rules the way a phone does. Nested, it comes after everything it refines and needs no ordering.
-
-`TestTheShapeOfANarrowWindow` is what fails when this goes, and it also pins that the narrow shape
-begins exactly where three columns stop fitting.
-
-### `--mono-size` and `--mono-line` are measured, in pixels, and do not scale
-
-The pitch must be no more than the `│` glyph's own ink **and** a whole number of pixels, or box
-drawing draws as a dashed line. At size 14 a run joins at 23 and breaks at 24, so the pitch is 22.
-
-- **Do not put them in `rem`.** `html { font-size }` scales everything else on the page; these are
-  the one thing it must not reach, because the whole numbers either side of the answer are a pixel
-  apart.
-- **Do not move either alone.** They move together, and moving them is a *measurement* against a
-  real rendering, not a multiplication.
-- **Both belong to every monospace block**, `.text pre` and `.tool__body pre` alike. The latter
-  restates the font family deliberately: a browser's own sheet sets `pre` to `monospace`, and a rule
-  on the element beats a value inherited from an ancestor.
-
-### The gutter in front of a line is `data-gutter`, painted by `::before`
-
-A diff's line numbers are an attribute the stylesheet draws, not text, so that copying the block
-copies the diff; `mainplate.js` reads `textContent` and never sees them. A read's anchors are not
-drawn at all, and a line the tool wrote itself is `data-said`, which is the only thing that sets it
-apart from the file's lines. **Do not move the gutter into the text, and do not draw the anchors**;
-do not put a newline *between* `.line` spans either: each carries its own as its last character,
-which is what lets a line be `display: block` and paint its whole row while the block's text still
-reads as lines. `TestWhatAnOpenCallShows` and the read-copies-the-file browser test are what fail
-when any of that goes. The Pygments token colours are on any `pre` rather than `.text pre`, because
-a call's body is coloured by the same tokens.
-
-`TestTheGridMonospaceIsDrawnOn` draws a run into a canvas and reads the pixels back, because the
-failure is a hairline no screenshot shows.
-
-### Anything somebody else wrote comes through `just vendor`
-
-`htmax.min.js`, `mermaid.min.js`, the two faces and the licence beside each are rows in
-`scripts/vendored.toml`, and the copy in `assets/` is the bytes that row's digest names. **Do not
-edit one, and do not drop a script into `assets/` by hand**: `tests/test_vendored.py` hashes every
-row's copy and refuses a `.js` or `.woff2` no row names. Bumping one is editing the version in its
-`url`, running `just vendor`, and recording the digest it refuses on once the file has been looked
-at. The pre-commit hooks are told to leave these files alone, which is why a vendored file may end
-without a newline while nothing else there does, and `.gitattributes` tells git to store them
-verbatim, so a licence published with CRLF is CRLF in every checkout and not only on the machine
-that vendored it.
-
-**The `.br`, `.zst` and `.gz` beside a vendored file are `just vendor`'s too**, written after the file
-at each coding's highest level so the server reads them rather than compressing at every start.
-Commit them with the file they encode, and never write one for `mainplate.css` or `mainplate.js`: a
-sidecar older than its file is silently ignored, and those two change too often for one to stay
-current. `tests/test_vendored.py` decodes each against its row's digest and asks the inventory
-whether it serves them.
-
-`mermaid.min.js` is fetched by the script the first time a `mermaid` fence is on the page and by
-nothing else. **Do not put it in a `<script>` tag**, which is three and a half megabytes on every
-page for the pages with no diagram. What a drawing is put on the page as is an `<img>` with a
-`data:` URL, for SVG written by hand and the library's output alike: an image runs no script and
-fetches nothing, and inlining the markup instead would rest the page on the library's own
-sanitising of text a model wrote. `TestDrawingAFence` is what fails when either goes.
-
-### The faces are upstream, unmodified, and there are two of them
-
-`JuliaMono-Regular.woff2` and its bold, under the OFL beside them. Two static weights rather than
-one variable file, so the 600 a panel role asks for resolves to the bold instead of being
-synthesised by smearing the regular. No italic face is vendored, which is why code inside a
-reasoning panel must not be slanted: an oblique is synthesised by shearing every glyph, and it leans
-a gutter while leaving the horizontals flat.
-
-Before swapping the face for a smaller one, read the coverage numbers on the design page. The
-megabyte is buying every symbol block on the cell, and a fallback filling a gap does it one
-character at a time at the wrong advance.
-
-### The installed app stays online-only
-
-`service-worker.js` is network-only. It may register and control `/`, but it must not write Cache
-Storage entries or supply an offline response: the server's checkpoint is the conversation, and a
-cached page would be an empty shell or a stale second copy. The `Service-Worker-Allowed` header in
-`app.py` is what lets a script under `/assets/` take that root scope.
-
-The manifest's `192x192` and `512x512` PNGs and the `180x180` Apple touch icon are raster forms of
-`icon-mono-on-dark.svg` on the console's dark ground. Keep the mark inside the central safe circle
-so a platform's mask does not cut it.
-
-### `icon.svg` takes its colours from whoever draws it
-
-The dashboard draws it as a `<use>` of `#plate`, and `.home__mark` sets `--plate`, `--person` and
-`--assistant` for it. **Keep the `#plate` id, keep every fill a `style` attribute reading one of
-those properties**, and keep the file's own `<style>` setting them on `svg` for when it is the
-favicon. A fill written as a colour ignores the theme toggle; one written in the file's stylesheet
-instead of on the element may not reach a `<use>` at all. The three icons share one geometry, so a
-change to the plate is a change to all three and to the PNGs.
-
-### More that is easy to undo
-
-- **Do not replace `htmax.min.js` with core plus separately vendored extensions.** One file cannot
-  drift from itself; two have to be kept on one version, and the failure when they are not is a swap
-  that silently misbehaves. Which extensions register is `EXTENSIONS` in `pages.py`.
-- **Everything `mainplate.js` does stays an enhancement.** With the file absent the page must still
-  render, still post, and still fold. What it holds is what cannot live in the markup, reapplied
-  after every swap through one idempotent `repaint()`.
-- **`soon` in `mainplate.js` words a duration exactly as `elapsed` in `pages.py` does, including the
-  unit that is zero.** The server draws the first figure and the script repaints it a second later,
-  into the same element, so dropping a `0m` there is a countdown that changes shape while a reader is
-  looking at it. Two units at every width above a minute, on both sides. The widths the two owe each
-  other are `WORDED` in `tests/conftest.py`, which both suites are parametrised from, so a width
-  added to either goes in that table rather than in either test. See
-  [the format is canonical, and the zone is the only thing that varies](https://joshkarpel.github.io/mainplate/design/console/#the-format-is-canonical-and-the-zone-is-the-only-thing-that-varies).
-- **Do not format a moment in `mainplate.js`.** `paintClock` writes the reader's zone into a cookie
-  and asks for the page again where the one it got was drawn against another; every date and time
-  on the page is rendered by `pages.py`. Rewriting `<time>` elements instead looks like the smaller
-  change and is the larger one: half the moments on this page are inside sentences a tooltip holds,
-  so it buys a second implementation of what a date looks like, in a language that cannot see the
-  first. See
-  [which clock a moment is printed against](https://joshkarpel.github.io/mainplate/design/console/#which-clock-a-moment-is-printed-against).
-  There is also nothing in the script to localise: the format is canonical `%Y-%m-%d %H:%M` at
-  every reader, so only *which instant* follows the browser and never how it is written.
-- **`paintClock` runs beside `applyTheme`, before the document exists, and needs to.** It reads the
-  zone the page was drawn against off `<html>`, whose open tag the parser has already passed; moved
-  into `start` with the rest of the wiring it would read `document.body`, which is `null` there, so
-  a reader in another zone would paint a whole page of wrong times before asking for the right ones.
-  Move the attribute to `<body>` and the check stops firing at all rather than firing late, which is
-  what `TestTheClockAPageIsDrawnAgainst`'s browser tests fail on.
-- **Nothing that runs before `start` may throw**, because it all sits in one block: an exception
-  there takes the rest of the file with it, leaving a page with no folds, no copy buttons, no live
-  connection and no composer, which is worse than the script being absent. That is why `held`, `hold`
-  and `sameClock` catch, and why `cookieValue` treats a value it cannot decode as nothing: a cookie
-  is arbitrary text and `decodeURIComponent` raises on a malformed escape.
-- **`start` returns where there is no `<body>`, and that case is reachable.** `paintClock` can ask
-  for the page again from the head, which abandons the parse where it stands, and
-  `DOMContentLoaded` still fires on what was abandoned. The document is already being replaced, so
-  there is nothing to wire; without the guard every first visit from another zone raises.
-- **The reload is worth doing once and never twice.** `paintClock` reads its own cookie back before
-  reloading, because a browser blocking this origin's cookies makes the write a silent no-op, and a
-  guard that trusted it would ask for the page again on every load for ever.
 
 ## This repository runs a plugin of its own
 

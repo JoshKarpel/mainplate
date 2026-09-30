@@ -8,9 +8,11 @@
 # the session's own network answer and the environment its setup recorded, exactly as the model's
 # would; what differs is who typed it and that no model is told.
 #
-# What that takes away is the person's credentials, so `git push` in here has nothing to push with.
-# Pushing is `Commands.push`'s instead: the branch crosses into the store as a bundle and the store
-# pushes it, as this console, reading no configuration the session wrote.
+# What that takes away is the person's credentials, so `git push` in here has nothing of theirs to
+# push with; with the network off it reaches nothing, and on exe.dev with it on it reaches the
+# repository as this console does. Pushing is `Commands.push`'s instead: the branch crosses into the
+# store as a bundle and the store pushes it, as this console, reading no configuration the session
+# wrote.
 #
 # Nothing here is ever told to a model. The record exists so the page can draw a run and a reload
 # can find it again; putting it in the history is a message somebody writes. See the key scheme in
@@ -29,7 +31,6 @@ from dataclasses import dataclass
 from dataclasses import field
 from datetime import timedelta
 from pathlib import Path
-from typing import Final
 
 from without_durability.interfaces import Checkpointer
 
@@ -37,17 +38,17 @@ from mainplate.conversation import Result
 from mainplate.conversation import recorded_result
 from mainplate.conversation import result_key
 from mainplate.processes import reaped
-from mainplate.sandbox import InAWorktree
+from mainplate.sandbox import InACheckout
 from mainplate.sandbox import Venue
 from mainplate.sandbox import confined_by
 from mainplate.settings import DEFAULT_PATIENCE
+from mainplate.snapshots import Checkout
 from mainplate.snapshots import SnapshotFailed
-from mainplate.snapshots import Worktree
 
 logger = logging.getLogger(__name__)
 
 # How much of what a command said is kept. Enough for a test run's failures and small enough that a
-# runaway loop cannot put a megabyte a second into the store.
+# runaway loop cannot put a megabyte a second into the database.
 MOST_OUTPUT = 200_000
 
 # Read in blocks rather than lines, so a command that writes a progress bar with no newline in it
@@ -55,10 +56,6 @@ MOST_OUTPUT = 200_000
 BLOCK = 64 * 1024
 
 CUT = "[…output above this point was dropped]\n"
-
-# What a push is recorded as, where a command records what was typed: the word the composer answers
-# to, so the panel says what somebody asked for.
-PUSHED: Final = "push"
 
 # What a command that was killed before it could exit is recorded as. Outside the range a process
 # can exit with (0-255) and outside the negatives a signal produces, so it is not mistakable for
@@ -68,7 +65,7 @@ UNFINISHED = 1000
 
 def trimmed(said: bytes) -> str:
     """
-    What a command said, cut to what the store will hold, keeping the **end**.
+    What a command said, cut to what the database will hold, keeping the **end**.
 
     The end rather than the beginning, because the reason to cap at all is a command that ran away
     and what is worth reading about one of those is where it got to. The cost is real and is the
@@ -105,7 +102,7 @@ def kill(process: asyncio.subprocess.Process) -> None:
     The command and everything it started, which is why the group and not the process.
 
     A shell command is a shell, and what takes the time is almost always something it spawned: `just
-    test` killed on its own leaves the `pytest` under it running, holding the worktree and the port
+    test` killed on its own leaves the `pytest` under it running, holding the checkout and the port
     it bound. `start_new_session` is what makes the process its own group leader, so one signal
     reaches the whole tree.
 
@@ -127,13 +124,14 @@ class Running:
     repository's plugin installed, as it would for the model.
     """
 
-    confinement: InAWorktree
+    confinement: InACheckout
     venue: Venue
     environment: Mapping[str, str]
 
     @property
     def where(self) -> Path:
-        return self.confinement.worktree.root
+        """Where a command starts, which is the checkout's root, as it is for the model's `bash`."""
+        return self.confinement.checkout.root
 
 
 async def ran(said: str, running: Running, patience: timedelta, into: bytearray) -> Result:
@@ -159,7 +157,7 @@ async def ran(said: str, running: Running, patience: timedelta, into: bytearray)
     confinement = running.confinement
     await asyncio.to_thread(confinement.scratch.mkdir, parents=True, exist_ok=True)
     process = await asyncio.create_subprocess_exec(
-        confinement.worktree.bwrap,
+        confinement.checkout.bwrap,
         *confined_by(confinement).argv(
             at=str(running.where),
             venue=running.venue,
@@ -210,10 +208,10 @@ async def ran(said: str, running: Running, patience: timedelta, into: bytearray)
     )
 
 
-async def pushing(worktree: Worktree, url: str, branch: str, into: bytearray) -> Result:
+async def pushing(checkout: Checkout, url: str, branch: str, into: bytearray) -> Result:
     """One push of the session's branch, as a result the page draws the way it draws a command's."""
     began = asyncio.get_running_loop().time()
-    came = await worktree.push(url, branch)
+    came = await checkout.push(url, branch)
     into.extend(came.stdout + came.stderr)
     return Result(
         status=came.code,
@@ -250,7 +248,7 @@ class Commands:
     The commands this process currently has running, which is the one place it holds work in flight.
 
     That is a genuine exception to what `Service` otherwise is, and it is stated rather than hidden.
-    Everything else the console does is a read of the store or a write to it, so two processes over
+    Everything else the console does is a read of the database or a write to it, so two processes over
     one file agree by construction. A running command is a *place*: it belongs to this process, it
     does not survive a restart, and nothing else can see it.
 
@@ -261,7 +259,7 @@ class Commands:
     Deliberately **not** a worker. The session's own workflow is the conversation and is parked on
     `run.awaiting`, so a command cannot be a step of it; and a queue of its own would be a second
     durable mechanism to justify for something that is over in seconds and pinned to this machine
-    anyway, since the worktree is on this disk.
+    anyway, since the checkout is on this disk.
     """
 
     checkpointer: Checkpointer
@@ -282,18 +280,24 @@ class Commands:
         """
         self.scheduled(slot, lambda holding: ran(said, running, self.patience, holding))
 
-    def push(self, slot: Slot, worktree: Worktree, url: str, branch: str) -> None:
+    def push(self, slot: Slot, checkout: Checkout, url: str, branch: str) -> None:
         """
         Push the session's branch to the repository, and record what came of it like a command.
 
         Its own arm rather than a command somebody types, because the one thing a command in the
         sandbox cannot do is the one thing this is: reach the repository as the person. The branch
         crosses into the store and the store pushes it, so no configuration the session wrote is read
-        by anything holding a credential. See `Worktree.push`.
+        by anything holding a credential. See `Checkout.push`.
         """
-        self.scheduled(slot, lambda holding: pushing(worktree, url, branch, holding))
+        self.scheduled(slot, lambda holding: pushing(checkout, url, branch, holding))
 
     def scheduled(self, slot: Slot, work: Callable[[bytearray], Awaitable[Result]]) -> None:
+        """
+        Start one run as a task this holds until it ends, which is what `start` and `push` share.
+
+        Held by slot so `aclose` can say what became of a task that never started, and dropped by the
+        task's own callback so what is held is only ever what is still running.
+        """
         task = asyncio.create_task(self.record(slot, work), name=f"command {slot.session} {slot.entry}")
         self.running[task] = slot
         task.add_done_callback(lambda done: self.running.pop(done, None))
@@ -307,10 +311,10 @@ class Commands:
         output even when the call that was filling it never returned - which is the only reason this
         catches cancellation at all, since `aclose` would otherwise record the same thing without it.
 
-        `shield`, because the write is the point and the store is still open at that moment: the
+        `shield`, because the write is the point and the database is still open at that moment: the
         tasks are cancelled inside `open_store`'s own `finally`, before the connection is closed.
 
-        A failure to *run* the command at all - a worktree that is not there, a shell that cannot be
+        A failure to *run* the command at all - a checkout that is not there, a shell that cannot be
         started - is recorded as the result rather than raised. Nothing is watching this task, so an
         exception here would be a log line and a panel that never resolves.
         """
@@ -321,18 +325,18 @@ class Commands:
             await asyncio.shield(self.result(slot, self.stopped(holding)))
             raise
         # Named apart from the `OSError` below, because it is the common case rather than an odd one:
-        # a session's worktree is planted by its *first pass*, so between creating one and its first
+        # a session's checkout is planted by its *first pass*, so between creating one and its first
         # reply there is a repository, a `Run` on offer, and nowhere yet to run in. A bare repr says
         # none of that, and what a reader needs is what to do about it.
         #
         # Caught rather than checked for with an `is_dir` beforehand, which is both a syscall on the
         # event loop and a race: the answer could change between the look and the run. `strerror`
         # rides along so a `FileNotFoundError` that is *not* this - a machine with no shell - is not
-        # quietly reported as a missing worktree.
+        # quietly reported as a missing checkout.
         except FileNotFoundError as missing:
             came = self.stopped(
                 holding,
-                f"there is nothing at {missing.filename} to run in: a session's worktree is made on its"
+                f"there is nothing at {missing.filename} to run in: a session's checkout is made on its"
                 f" first turn, so a command sent before that has nowhere to go ({missing.strerror})",
             )
         except SnapshotFailed as failed:

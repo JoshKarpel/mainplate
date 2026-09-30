@@ -33,11 +33,11 @@ from mainplate.plugins.protocol import Payload
 from mainplate.processes import reaped
 from mainplate.roots import RootName
 from mainplate.roots import environment_named
-from mainplate.sandbox import InAWorktree
+from mainplate.sandbox import InACheckout
 from mainplate.sandbox import Venue
 from mainplate.sandbox import confined_by
 from mainplate.sandbox import starting_at
-from mainplate.snapshots import Worktree
+from mainplate.snapshots import Checkout
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ to keep a worker slot for. It is paid once per session, since the answer is reco
 
 CONFIG_HOME: Final = "MAINPLATE_CONFIG_HOME"
 """
-Where a plugin outside a worktree finds the operator's own files, said in the environment.
+Where a plugin outside a checkout finds the operator's own files, said in the environment.
 
 The bundled guidance plugin is what needs it: what a session is told includes the operator's own
 guidance directory, which sits beside `config.yaml` and not in any repository. Passed rather than
@@ -77,7 +77,7 @@ assumed, so a console started with a config home of its own is one whose plugins
 A repository's plugin never sees it, because a repository's plugin runs behind `--clearenv`.
 """
 
-WORKTREE: Final = environment_named("worktree")
+CHECKOUT: Final = environment_named("checkout")
 """
 Where this session's files are, said in the environment as well as in the payload.
 
@@ -141,7 +141,7 @@ class PluginFailed(RuntimeError):
 
     **A failure at `setup` ends the pass with no registration written**, so the settings step is
     drawn again with this sentence above the switches and pressing the button is a fresh attempt.
-    That is forced rather than chosen: the store keeps the value a key was first given, so a
+    That is forced rather than chosen: the database keeps the value a key was first given, so a
     registration written with one plugin missing could never be corrected.
     """
 
@@ -188,7 +188,7 @@ def environment_of(plugin: str, text: str) -> dict[str, str]:
     return found
 
 
-type Speaking = Callable[[Installed, Payload, Worktree | None], Awaitable[Spoke]]
+type Speaking = Callable[[Installed, Payload, Checkout | None], Awaitable[Spoke]]
 """
 How this console says one thing to one plugin, injected rather than reached for.
 
@@ -197,23 +197,27 @@ and knows about sandboxes, and injecting the one question keeps everything above
 service, the routes - ignorant of how a plugin is run. It is also what lets a test drive the whole
 mechanism with a mapping of answers and no subprocess at all.
 
-The worktree is passed beside the payload rather than reconstructed from the wire value. The payload
-is untrusted data a plugin parses; this value carries the checkout together with the trusted snapshot
-store it belongs to and the confinement used for any Git it runs.
+**The checkout is passed beside the payload rather than read out of it**, and the two are not the
+same thing: the payload's is a string a plugin parses, and this is the checkout as this console
+knows it, with the store it borrows from and the `bwrap` every git against it runs behind. A
+`Checkout` rebuilt from the wire string would have to find those again from a path, and a path is
+what a caller that has lost track of the sandbox runs git against the ordinary way, in the parent,
+with nothing at the call site saying so. See [what runs, and as
+whom](../../docs/design/security.md).
 """
 
 
-async def planted_at(worktree: str | None) -> str | None:
+async def planted_at(checkout: str | None) -> str | None:
     """
-    Where a plugin starts, which is its session's worktree once there is one on disk.
+    Where a plugin starts, which is its session's checkout once there is one on disk.
 
-    `None` for a session with no repository and for one whose worktree is not planted yet, which are
+    `None` for a session with no repository and for one whose checkout is not planted yet, which are
     two states with one answer: start where the console is. The second is ordinary rather than a
     fault, since the first pass is what plants one and no plugin has run by then.
     """
-    if worktree is None:
+    if checkout is None:
         return None
-    return worktree if await asyncio.to_thread(Path(worktree).is_dir) else None
+    return checkout if await asyncio.to_thread(Path(checkout).is_dir) else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,8 +310,8 @@ class Spawned:
         The same question `venue` asks and the same answer, written separately because what turns on
         it is different: that one decides a network, and this decides whether the session's own
         scratch is bound and an environment file is named. Three consequences of one rule rather than
-        three rules, and keyed on the event for the reason the network is - before the conversation,
-        over the commit the repository supplied, with nothing the model wrote anywhere yet.
+        three rules, and keyed on the event for the reason the network is: before the conversation,
+        after a person pressed the button that runs it, and never at a turn boundary. See `venue`.
         """
         return event == SETUP
 
@@ -320,12 +324,16 @@ class Spawned:
         chose - so without this a setup is a plugin asked to install something with nothing to install
         from, and the whole stage is one that can only fail.
 
-        What makes it safe to offer is *when* it is, rather than a check on what is fetched. `setup`
-        runs before the first message: the worktree holds the commit the repository supplied and
-        nothing else, no credential of this console's is inside the namespace, and nothing the model
-        wrote exists yet. So what a connected run there can carry out is the repository's own code, to
-        its own author. Every event after it is confined, which is the half that matters, because a
-        turn boundary is where a plugin has read whatever the model has been writing.
+        What makes it safe to offer is *when* it is and *who said so*, rather than a check on what is
+        fetched. `setup` runs before the first message and only after somebody pressed the button on
+        the settings step. In a new session the checkout holds the commit the repository supplied and
+        nothing the model wrote exists yet, so what a connected run there can carry out is the
+        repository's own code, to its own author. **A fork is the case where that is not so**: it
+        plants at a tree a model wrote, so its `setup` runs over the model's work, and what licenses
+        that is the press in the branch - which on exe.dev, where the network is the credential,
+        includes letting that code push. Every event after it is confined, which is the half that
+        matters, because a turn boundary is where a plugin has read whatever the model has been
+        writing.
 
         **Read off the event and never off the session.** `Filesystem.EVERYTHING` and a session with
         the network shut are both decisions about what the *model* may reach, and a plugin is not the
@@ -333,7 +341,7 @@ class Spawned:
         """
         return Venue.CONNECTED if event == SETUP else Venue.CONFINED
 
-    async def __call__(self, plugin: Installed, payload: Payload, worktree: Worktree | None) -> Spoke:
+    async def __call__(self, plugin: Installed, payload: Payload, checkout: Checkout | None) -> Spoke:
         """
         Say one thing to one plugin and read its answer, or fail naming the plugin.
 
@@ -349,7 +357,7 @@ class Spawned:
         At `setup` the environment file is read back beside that answer and removed, whatever the
         plugin wrote or did not.
         """
-        sending = await self.invocation(plugin, payload, worktree)
+        sending = await self.invocation(plugin, payload, checkout)
         allowed = self.allowed(payload.event)
         try:
             process = await asyncio.create_subprocess_exec(
@@ -379,9 +387,9 @@ class Spawned:
             # them is what the timeout above does and is exactly what cannot be done here, since an
             # `await` inside a cancelled task is cancelled again the moment it is reached.
             #
-            # So the transport is closed instead, which is what asyncio itself does when it collects
-            # one - only here it happens while somebody is still holding the reference, rather than
-            # at an arbitrary later moment as a `ResourceWarning` raised into whatever is running.
+            # So the pipes are closed instead, synchronously, while somebody is still holding the
+            # process, rather than at an arbitrary later moment as a `ResourceWarning` raised into
+            # whatever is running; the transport is left to close itself. See `reaped`.
             reaped(process)
             raise
         said = err.decode(errors="replace").strip()
@@ -409,19 +417,19 @@ class Spawned:
         await asyncio.to_thread(lambda: file.unlink(missing_ok=True))
         return environment_of(plugin.qualified, text)
 
-    async def invocation(self, plugin: Installed, payload: Payload, worktree: Worktree | None) -> Invocation:
+    async def invocation(self, plugin: Installed, payload: Payload, checkout: Checkout | None) -> Invocation:
         """
         What to run, in what environment, where, and with what: the one place the tiers stop being
         alike.
 
-        A plugin outside a worktree is the operator's own and runs as this process does, with the
+        A plugin outside a checkout is the operator's own and runs as this process does, with the
         environment it has and two variables added saying where the operator's files are and where
         this session's are. It is handed no scratch, because it has the operator's own `$HOME` and a
         whole filesystem: what a scratch answers is having nowhere to write, which is a problem only
         the namespace creates, and such a plugin may reach the operator's other scripts and caches to
         do its job. Something to remember per session it already has, in the payload's `state`.
 
-        A repository's runs behind `--clearenv` inside a namespace that reaches the worktree it was
+        A repository's runs behind `--clearenv` inside a namespace that reaches the checkout it was
         handed, its store read-only, a directory of its own, and nothing else - so it is handed no
         environment here at all, because `bwrap` has already taken this process's away. The scratch
         is named on the payload as well as in the environment, so a plugin parsing JSON and a line of
@@ -436,16 +444,16 @@ class Spawned:
         should run under. `$HOME` stays its own scratch throughout, so the directory it may *fill* and
         the directory it *runs out of* are never the same one. See `preparing`.
         """
-        where = None if worktree is None else str(worktree.root)
+        where = None if checkout is None else str(checkout.root)
         if not plugin.confined:
             environment = dict(self.environ)
             if self.config_home is not None:
                 environment[CONFIG_HOME] = str(self.config_home)
             if where is not None:
-                environment[WORKTREE] = where
-            # Started *in* the worktree where there is one on disk, so a plugin reaches its
+                environment[CHECKOUT] = where
+            # Started *in* the checkout where there is one on disk, so a plugin reaches its
             # session's files the way a command does and needs no path parsed out of the payload.
-            # A worktree named and not yet planted is an ordinary state - the first pass plants one -
+            # A checkout named and not yet planted is an ordinary state - the first pass plants one -
             # so this falls back to wherever the console is rather than refusing to run at all.
             #
             # Off the loop, like the `mkdir` below: a stat is a syscall that blocks, and a pass is
@@ -458,8 +466,8 @@ class Spawned:
             )
         if self.bwrap is None or self.scratch is None:
             raise PluginFailed(f"{plugin.qualified} is a repository's, and this console has no sandbox to run it in")
-        if worktree is None:
-            raise PluginFailed(f"{plugin.qualified} is a repository's, and this session has no worktree")
+        if checkout is None:
+            raise PluginFailed(f"{plugin.qualified} is a repository's, and this session has no checkout")
         scratch = self.scratch_for(plugin, payload.session)
         await asyncio.to_thread(lambda: scratch.mkdir(parents=True, exist_ok=True))
         prepares = self.preparing(payload.event)
@@ -470,15 +478,15 @@ class Spawned:
             # run wrote: a setup that failed part-way through leaves its lines behind, and the
             # attempt after it must not inherit them.
             await asyncio.to_thread(lambda: (scratch / ENV_FILE).write_text("", encoding="utf-8"))
-        # The checkout value rather than a path reconstructed from the payload, so confinement and
-        # snapshot storage remain attached to the session value.
+        # The checkout as this console knows it, store and sandbox and all, rather than one rebuilt
+        # from the path on the payload, which is a string the plugin was sent. See `Speaking`.
         #
         # `plugin_scratch` and not `scratch`, which is the name a model's own `bash` finds the
         # *session's* directory under. One word for two places would have a repository's plugin and
         # the model it is running beside reading the same variable and reaching different disks - and
         # at `setup`, where both are bound, it would be one word for two binds in one namespace.
-        confinement = InAWorktree(
-            worktree=worktree, scratch=scratch, scratch_named=SCRATCH_NAMED, session_scratch=session_scratch
+        confinement = InACheckout(
+            checkout=checkout, scratch=scratch, scratch_named=SCRATCH_NAMED, session_scratch=session_scratch
         )
         sandbox = confined_by(confinement)
         argv = (

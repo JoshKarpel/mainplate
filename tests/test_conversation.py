@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable
 from collections.abc import Callable
+from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import replace
 from datetime import UTC
@@ -97,7 +98,6 @@ from mainplate.conversation import recorded_choice
 from mainplate.conversation import recorded_instructions
 from mainplate.conversation import refusal_in
 from mainplate.conversation import refused_key
-from mainplate.conversation import requested_at
 from mainplate.conversation import responded
 from mainplate.conversation import so_far
 from mainplate.conversation import spent_on
@@ -114,11 +114,13 @@ from mainplate.durability import TOOK
 from mainplate.durability import ModelResponseTypeAdapter
 from mainplate.durability import deferred_until
 from mainplate.durability import parse_refused
+from mainplate.durability import parse_snapshot
 from mainplate.durability import stepping
 from mainplate.durability import terminally
 from mainplate.forge import Workspaces
 from mainplate.sandbox import Filesystem
 from mainplate.service import Service
+from mainplate.snapshots import Store
 
 SESSION = "a-session"
 
@@ -369,12 +371,14 @@ class TestReadingABatchsDiff:
         assert got_tool.diff == "--- a\n+++ a"
         assert got_other.diff is None
 
-    def test_a_batch_that_changed_nothing_is_drawn_same_as_one_that_never_differed(self) -> None:
+    @pytest.mark.parametrize("wrote", [{0: ""}, {}], ids=["changed-nothing", "never-diffed"])
+    def test_a_batch_with_no_change_to_draw_carries_none(self, wrote: dict[int, str]) -> None:
+        """A batch that changed nothing and one never diffed are one state, so they are one value."""
         tool = Panel(turn=1, at=1, kind="tool", blocks=(), asked=0)
 
-        (got,) = with_diffs((tool,), {0: ""})
+        (got,) = with_diffs((tool,), wrote)
 
-        assert got.diff == "", "an empty diff is a diff, and the page draws nothing for either"
+        assert got.diff is None
 
 
 class TestForgettingWhatCameBefore:
@@ -505,7 +509,7 @@ class TestForgettingWhatCameBefore:
             # An answered turn always has a spend, even where every count on it is zero: what makes
             # it absent is a turn that has recorded no response at all, not one that cost nothing.
             spent={0: Spent(asked=0, answered=0, cost=None)},
-            requests={0: (Request(at=0, tree=None, spent=Spent(asked=0, answered=0, cost=None), when=WHEN),)},
+            requests={0: (Request(at=0, spent=Spent(asked=0, answered=0, cost=None), when=WHEN),)},
             # When the last response landed, which is what the composer reads to say whether the
             # provider still holds this conversation's prefix.
             answered_at=WHEN,
@@ -670,7 +674,7 @@ class TestWhatASessionIsAnsweredUnder:
 
     def test_a_stretch_nothing_has_composed_for_yet_is_pending_rather_than_absent(self) -> None:
         """
-        A message is queued before the pass that composes for it has planted a worktree to read, so
+        A message is queued before the pass that composes for it has planted a checkout to read, so
         the page draws the panel with nothing in it rather than nothing at all.
         """
         assert transcript(said_at(0, "what is it")).system_prompts == {0: None}
@@ -717,27 +721,13 @@ class TestWhatASessionIsAnsweredUnder:
         assert transcript(recorded).system_prompts == {0: "told this to begin with"}
 
 
-class TestWhereARequestBeganAndWhatItHeld:
+class TestWhereARequestBegan:
     """
-    Which round trip each panel came out of, and what that round trip came back with.
+    Which round trip each panel came out of.
 
-    A request is the unit the checkpoint has keys for, where a panel is a reading. That is the whole
-    point of hanging the record on the rule at a request's boundary rather than under a panel - it is
-    a lookup rather than a slice of a stored value reached by indices one walk had to hand to another.
+    A request is the unit the checkpoint has keys for, where a panel is a reading, and one response
+    becomes as many panels as it has kinds of part, so the two have to be told apart.
     """
-
-    def test_a_request_is_the_step_the_checkpoint_holds_for_it(self) -> None:
-        recorded = {
-            **FOUR_PANELS,
-            model_key(0, 0): answered_with(THINKING_AND_CALL),
-            model_key(0, 1): answered_with(THE_ANSWER),
-        }
-        assert requested_at(recorded, 0, 0) == answered_with(THINKING_AND_CALL)
-        assert requested_at(recorded, 0, 1) == answered_with(THE_ANSWER)
-
-    def test_a_request_nobody_made_is_nothing(self) -> None:
-        assert requested_at(FOUR_PANELS, 0, 0) is None
-        assert requested_at(FOUR_PANELS, 7, 0) is None
 
     def test_each_panel_says_which_request_it_came_out_of(self) -> None:
         """
@@ -1029,7 +1019,7 @@ class TestWatchingATurnHappen:
 
     def test_a_turn_is_priced_while_it_is_still_being_answered(self) -> None:
         """
-        The half of the pricing decision that is visible on the page rather than in the store.
+        The half of the pricing decision that is visible on the page rather than in the database.
 
         A response is priced before the step records it, so what a turn has spent is readable from
         the same steps its blocks are, and a rule fills in as the turn runs instead of appearing
@@ -1447,7 +1437,7 @@ class TestWhatOnePassDoes:
     passes as it has requests. What has to hold across that is everything: the provider is asked
     once per request whatever the cut, and the conversation the store ends up holding is the same
     one either way. The fixture repository is here because a turn needs a *tool* to be worth more
-    than one request, and a tool needs a worktree to run in.
+    than one request, and a tool needs a checkout to run in.
     """
 
     def scripted(self) -> Scripted:
@@ -1530,19 +1520,33 @@ class TestWhatOnePassDoes:
         self, service: Service, workspaces: Workspaces
     ) -> None:
         """
-        The console's to say rather than the operator's, so it is composed beside the note about the
-        session's places and reaches the record the same way: an operator who rewrites the standing
+        The console's to say rather than the operator's, so it is composed into the record beside
+        the operator's instructions rather than inside them: an operator who rewrites the standing
         instructions keeps the one sentence saying what the page can show.
         """
+        told = await self.told_in_a_session(service, workspaces)
+        assert "labelled `mermaid` or `svg` is drawn as a picture" in told
+
+    async def test_what_the_page_draws_is_said_before_anything_more_specific(
+        self, service: Service, workspaces: Workspaces
+    ) -> None:
+        """
+        First, as the least specific block: it is the same in every session on every console, so
+        the operator's standing instructions, a plugin's and the note about the session's places
+        all come after it and have the later word.
+        """
+        told = await self.told_in_a_session(service, workspaces)
+        assert told.startswith("A fenced code block labelled `mermaid`")
+        assert told.index("`mermaid`") < told.index(INSTRUCTIONS)
+
+    async def told_in_a_session(self, service: Service, workspaces: Workspaces) -> str:
+        """What a session on the fixture repository recorded it was answered under, after one pass."""
         planting = replace(service, workspaces=workspaces)
         session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
         scripted = Scripted(script=(ModelResponse(parts=[TextPart("one")]),))
         await pass_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces), session.id)
-
         recorded = await planting.checkpointer.load(session.id)
-        told = parse_instructions(recorded[instructions_key(0)])
-        assert "labelled `mermaid` or `svg` is drawn as a picture" in told
-        assert told.index(INSTRUCTIONS) < told.index("`mermaid`"), "after the operator's own, whose word it never takes"
+        return parse_instructions(recorded[instructions_key(0)])
 
     async def test_the_system_prompt_is_settled_before_the_first_answer_and_never_recomposed(
         self, service: Service, workspaces: Workspaces
@@ -1620,6 +1624,59 @@ class TestWhatOnePassDoes:
 
         assert scripted.asked == 2, "two requests, one per pass, and neither asked twice"
 
+    async def test_what_a_batch_wrote_is_recorded_under_the_request_that_asked_for_it(
+        self, service: Service, workspaces: Workspaces
+    ) -> None:
+        """
+        `wrote_key` here and `Stepping.wrote` in the loop build one key from opposite ends, so this
+        is the assertion that turns a drift between them into a failure: the batch behind request 0
+        wrote a file, and the diff naming it has to be where the page will look for request 0's.
+        """
+        planting = replace(service, workspaces=workspaces)
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+
+        await passes_at(planting, conversing(self.scripted().endpoints(), INSTRUCTIONS, workspaces), session.id)
+
+        recorded = await planting.checkpointer.load(session.id)
+        assert "+++ b/src/added.txt" in wrote_in(recorded, 0)[0]
+
+    async def test_a_pass_that_replays_a_batchs_diff_runs_no_git_for_it(
+        self, service: Service, workspaces: Workspaces, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """
+        Three requests cut one to a pass, so the third pass replays the request whose snapshot
+        recorded the first batch's diff. A replay that ran `git diff` again would make three diffs
+        of two batches.
+        """
+        planting = replace(service, workspaces=workspaces)
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        creating = (
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="create", args={"path": f"src/{name}.txt", "content": f"{name}\n"}, tool_call_id=name
+                    )
+                ]
+            )
+            for name in ("added", "also")
+        )
+        scripted = Scripted(script=(*creating, ModelResponse(parts=[TextPart("made both")])))
+        diffed: list[tuple[str, str]] = []
+        diff = Store.diff
+
+        async def counted(store: Store, before: str, after: str) -> str:
+            diffed.append((before, after))
+            return await diff(store, before, after)
+
+        monkeypatch.setattr(Store, "diff", counted)
+
+        made = await passes_at(
+            planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces, allowance=1), session.id
+        )
+
+        assert len(made) == 3, "the control: a turn in fewer passes replays no diff to run twice"
+        assert len(diffed) == 2
+
     async def test_a_turn_is_recorded_the_same_however_the_passes_fall(
         self, service: Service, workspaces: Workspaces
     ) -> None:
@@ -1649,11 +1706,19 @@ class TestWhatOnePassDoes:
         ]
         assert spoken(transcript(one)) == spoken(transcript(other))
         assert [panel.kind for panel in transcript(one).panels] == [panel.kind for panel in transcript(other).panels]
-        # The trees are the values that can be compared outright, holding neither a duration nor a
-        # timestamp nor a key from the store's own space. A tool that ran again and wrote something
-        # else shows here; so does a snapshot taken at a different point.
+        # The trees and the commits under them are the values that can be compared outright, holding
+        # neither a duration nor a timestamp nor a key from the store's own space. A tool that ran again
+        # and wrote something else shows here; so does a snapshot taken at a different point. The
+        # branch is left out, since each session is on one named after its own id.
         settled = (tree_key(0, 0), tree_key(0, 1))
-        assert {key: one[key] for key in settled} == {key: other[key] for key in settled}
+
+        def standing(recorded: Mapping[str, object]) -> dict[str, tuple[str, str | None] | None]:
+            return {
+                key: None if (held := parse_snapshot(recorded[key])) is None else (held.tree, held.head)
+                for key in settled
+            }
+
+        assert standing(one) == standing(other)
         # And the cursors say the same thing in each session's own terms: nothing was steered into
         # either turn, so every request read no further than the message the turn opened on.
         for held in (one, other):
@@ -1673,7 +1738,7 @@ class TestReadingBackWhatWasAlreadyRecorded:
         with_repository = parse_choice({"endpoint": "here", "model": "ripe/fast", "repository": "test:fixture"})
         without = parse_choice({"endpoint": "here", "model": "ripe/fast"})
 
-        assert with_repository.isolation.filesystem is Filesystem.WORKTREE
+        assert with_repository.isolation.filesystem is Filesystem.CHECKOUT
         assert without.isolation.filesystem is Filesystem.NOTHING
         assert not without.isolation.network, "there was no way to reach a network then, so it reads as off"
 
@@ -1710,7 +1775,7 @@ class TestAPassThatFellOver:
     def test_a_failure_is_why_the_session_is_stopped_only_while_nothing_has_happened_since(self) -> None:
         """
         `refusal_in`'s rule against a count rather than against a turn, and it has to be a count
-        because a pass can fall over somewhere no turn names: planting a worktree, reading a
+        because a pass can fall over somewhere no turn names: planting a checkout, reading a
         declaration, running a setup.
         """
         fell = records.Failed(why="PluginFailed('checks exited 1')", at=2).recorded()

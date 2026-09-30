@@ -18,10 +18,10 @@
 # config line underneath git's locking.
 #
 # There are *two* places a session may reach, and they are not symmetric. A relative path is inside
-# the worktree unless a call names another root, because what a conversation is about is the
+# the checkout unless a call names another root, because what a conversation is about is the
 # repository; anywhere else is reached by naming it rather than by writing a session id out. `list`
 # is the exception to both and
-# stays on the worktree alone: it answers by asking git, and the scratch is deliberately not in git,
+# stays on the checkout alone: it answers by asking git, and the scratch is deliberately not in git,
 # so extending it would mean a second implementation that walks a directory instead. What `list`
 # earns its keep for is bounding a large repository tree, which a scratch directory does not have,
 # and `ls` under `bash` answers that question there perfectly well.
@@ -59,7 +59,7 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from mainplate.roots import RootName
 from mainplate.snapshots import POINTER
-from mainplate.snapshots import Worktree
+from mainplate.snapshots import Checkout
 from mainplate.tools.files.anchors import CONTEXT
 from mainplate.tools.files.anchors import Anchored
 from mainplate.tools.files.anchors import EditRefused
@@ -93,9 +93,9 @@ class ListingFailed(RuntimeError):
     """
     git could not say what is in a directory.
 
-    Not a `Refused`, because it is not something a model can retry its way out of: every worktree
-    these tools are built against is a checkout, so this is a broken environment rather than
-    a badly-aimed call.
+    Not a `Refused`, because it is not something a model can retry its way out of: every root these
+    tools list is a checkout git made, so this is a broken environment rather than a badly-aimed
+    call.
     """
 
 
@@ -104,7 +104,7 @@ class Refused(ValueError):
     A tool was asked for something about the file *itself* that it will not do.
 
     Separate from `EditRefused`, which is about an edit not resolving, because these are the
-    questions asked before any edit is considered: a path outside the worktree, a file that is not
+    questions asked before any edit is considered: a path outside the checkout, a file that is not
     text, one too large to read. Both reach the model the same way and the split is for whoever
     reads this code rather than for whoever reads the message.
     """
@@ -151,27 +151,31 @@ class Text:
 @dataclass(frozen=True, slots=True)
 class GitTracked:
     """
-    A git worktree: files a conversation is *about*, and the only kind of root git can be asked about.
+    A git checkout: files a conversation is *about*, and the only kind of root git can be asked about.
 
     It owns how to enumerate itself rather than leaving that to whoever holds it, because "ask git"
-    is the one thing that is true of this root and false of every other. A second worktree is one
+    is the one thing that is true of this root and false of every other. A second checkout is one
     more of these in `Files.roots` and nothing else.
 
-    It holds the `Worktree` rather than only its path because enumeration runs Git, and Git against
-    model-writable configuration must run through the worktree's confinement.
+    It holds the `Checkout` rather than its path, because enumerating it means running git against a
+    directory a session may write, and *how* to do that safely is one answer this console has
+    already worked out: in the checkout's sandbox, through `Checkout.git`. Holding the path would be
+    holding half of it, and the other half would be reassembled here as a git in the parent, reading
+    the session's configuration with this process's authority and nothing at the call site saying
+    so.
     """
 
-    worktree: Worktree
+    checkout: Checkout
 
     @property
     def path(self) -> Path:
         """Where this root is, which is what every other kind of root carries as a field."""
-        return self.worktree.root
+        return self.checkout.root
 
     @property
     def name(self) -> RootName:
         """What a model calls this place, which is what it is rather than where it is."""
-        return "worktree"
+        return "checkout"
 
     @property
     def sealed(self) -> tuple[str, ...]:
@@ -189,7 +193,7 @@ class GitTracked:
 
         Asked of git rather than walked, because the alternative is a hand-kept list of names to
         skip that is wrong the moment a repository uses a build directory nobody thought of. A
-        worktree here has a `.venv` or a `node_modules` more often than not, and one of those walked
+        checkout here has a `.venv` or a `node_modules` more often than not, and one of those walked
         in full is tens of thousands of paths through a context window. `--cached --others` is the
         pair that also shows a file the agent itself just created, which is untracked and is exactly
         what it will want to look for.
@@ -198,17 +202,20 @@ class GitTracked:
         never directories, so there is no tree to ask it for and none to be had - an empty directory
         does not exist as far as this is concerned. `catalogue` is what turns those paths into one.
 
-        A failure is a fault rather than a `Refused`: this root is a git worktree by construction,
+        A failure is a fault rather than a `Refused`: this root is a git checkout by construction,
         so git failing here is not something a model can retry its way out of, and returning nothing
         would be a silent wrong answer.
 
-        Through `Worktree.git`, which runs the fixed `ls-files` argv inside the checkout's sandbox.
-        Git may read model-writable configuration there, but every program it launches has only the
-        session checkout and no network or parent credentials.
+        **Through `Checkout.git` rather than a subprocess of its own**, which is what runs this
+        behind `bwrap`: `ls-files` reads the checkout's configuration, which the session writes and
+        which can name a program git runs, so a git here in the parent would run it as the service
+        user, and a second copy of how to confine one would be a second thing to keep in step. What
+        a poisoned configuration can do in there is what the session's own `bash` could already do.
+        `at` is where git runs, so a listing of a subdirectory comes back relative to it.
 
         `stdout` rather than `out` because `-z` separates paths with NUL, which is not text to strip.
         """
-        listed = await self.worktree.git("ls-files", "--cached", "--others", "--exclude-standard", "-z", at=here)
+        listed = await self.checkout.git("ls-files", "--cached", "--others", "--exclude-standard", "-z", at=here)
         if not listed.ok:
             raise ListingFailed(f"git ls-files failed ({listed.code}): {listed.err}")
         return tuple(sorted(found for found in listed.stdout.decode().split("\0") if found))
@@ -241,8 +248,9 @@ class System:
     """
     The whole machine, for a session that chose to work on it rather than in a repository.
 
-    Like `Scratch` it answers no question git answers, so `list` refuses it for the same reason and
-    points at `bash`. Unlike `Scratch` it is not somewhere to *keep* things, it is everywhere: a
+    Like `Scratch` it answers no question git answers, so a session reaching only this is offered
+    neither `list` nor `grep`, and `bash` answers what they would. Unlike `Scratch` it is not
+    somewhere to *keep* things, it is everywhere: a
     relative path lands here only because it is the session's first and only root.
     """
 
@@ -291,7 +299,7 @@ class Files:
     there are. The asymmetry is deliberate: a bare `notes.md` is about the repository, because that
     is what a conversation is about.
 
-    Anywhere else is reached by naming the root rather than by writing its path out, since a worktree
+    Anywhere else is reached by naming the root rather than by writing its path out, since a checkout
     sits under 32 hex characters of session id and a model reproducing those from memory eventually
     reproduces them wrong. A root owns its own name, so a kind of place added here brings one with it.
     """
@@ -317,6 +325,18 @@ class Files:
     thrown away with the pass. It does not reach `bash`, whose paths are not knowable in advance:
     a command that rewrites a file under an `edit` is outside what this can see.
     """
+
+    @property
+    def has_repository(self) -> bool:
+        """
+        Whether any of these roots is a git checkout, which is what `list` and `grep` are offered on.
+
+        Both answer by asking git, so over a scratch or the whole machine either can only refuse, and
+        a tool that can only refuse still spends its description on every request. Read off the roots
+        rather than off the isolation, because the roots are what the tools act on and `reaching` has
+        already turned the isolation into them.
+        """
+        return any(isinstance(root, GitTracked) for root in self.roots)
 
     def exclusively(self, here: Path) -> asyncio.Lock:
         """
@@ -586,11 +606,15 @@ async def guarded[T](work: Awaitable[T]) -> T:
 
 def file_tools(files: Files) -> FunctionToolset[None]:
     """
-    The four tools, bound to one session's worktree.
+    `read`, `edit` and `create` over every root a session reaches, and `list` where one of them is a
+    checkout.
 
-    Built per session rather than declared once, because the root is what makes a path safe and
-    every session has its own. A session with no repository gets no toolset at all, which is the
-    honest answer rather than a tool that refuses every call: there are no files.
+    Built per session rather than declared once, because the roots are what make a path safe and
+    every session has its own. `list` asks git, so it is offered only where `Files.has_repository`
+    says there is something to ask, rather than as a tool that refuses every call over a scratch or
+    the whole machine. A session that reaches nothing gets no toolset from here at all, and that is
+    `reaching`'s to decide: a session on `NOTHING` reaches its scratch where there is a sandbox to
+    make it in, and nothing without one.
     """
     toolset = FunctionToolset[None]()
 
@@ -752,6 +776,8 @@ def file_tools(files: Files) -> FunctionToolset[None]:
 
     for tool in (read, edit, create):
         toolset.add_function(tool)
+    if not files.has_repository:
+        return toolset
     # Asked for as `list`, which is the word a model reaches for, and defined as `listing`, because
     # `list` is a builtin and shadowing one inside this scope is a lint error rather than a style
     # question. The name the model sees is the only one that matters, so it is set here explicitly.

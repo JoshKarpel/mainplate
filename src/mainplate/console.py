@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Callable
 from collections.abc import Mapping
@@ -24,7 +25,6 @@ from without_asgi import Response
 from without_asgi import html_content
 from without_asgi.sse import event_stream
 from without_asgi.sse import with_heartbeat
-from without_web import INT
 from without_web import STR
 from without_web import ExtractionError
 from without_web import Reply
@@ -60,12 +60,11 @@ from mainplate.pages import Shape
 from mainplate.pages import dashboard_page
 from mainplate.pages import fork_page
 from mainplate.pages import fragment
-from mainplate.pages import missing_record
 from mainplate.pages import model_cards
 from mainplate.pages import new_session_page
 from mainplate.pages import plugin_card
-from mainplate.pages import record_json
 from mainplate.pages import refusal_page
+from mainplate.pages import renamed
 from mainplate.pages import session_page
 from mainplate.pages import settling
 from mainplate.pages import stalled_by
@@ -233,11 +232,6 @@ shaped = query_param(
 )
 # Which turn a fork would start at, which is the first turn the branch does not inherit.
 at_turn = query_param("at", once(int), schema={"type": "integer"})
-# The two halves of a panel's identity, in the path because that is what they are: a panel is named
-# by its turn and its position within it, which is the same pair its anchor and its label are built
-# from. A query string would say these narrow something down, where they pick one thing out.
-of_turn = path_param("turn", INT)
-at_panel = path_param("at", INT)
 
 
 class NotAMessage(ValueError):
@@ -280,6 +274,14 @@ prompt = body(parse_form_prompt, schema={"type": "string"}, media_type="applicat
 
 
 def parse_form_title(raw: bytes) -> str:
+    """
+    The name a rename carried, refused if there is not one.
+
+    Refused rather than taken as "untitled", unlike the box on the new-session page, where an empty
+    one means "name it after the first message". A session being renamed has usually had that first
+    message already, so an empty name here could only ever mean a session called `Untitled` by
+    accident.
+    """
     title = fields_in(raw).get(TITLE_FIELD, [""])[0].strip()
     if not title:
         raise NotAMessage("a session name cannot be empty")
@@ -562,7 +564,7 @@ def posted_workspace(fields: Mapping[str, list[str]]) -> tuple[str | None, Files
     if not named:
         return None, Filesystem.NOTHING
     if ":" in named:
-        return named, Filesystem.WORKTREE
+        return named, Filesystem.CHECKOUT
     try:
         return None, Filesystem(named)
     except ValueError:
@@ -573,16 +575,23 @@ def posted_isolation(fields: Mapping[str, list[str]]) -> Isolation:
     """
     How confined a form asked for, as the two axes together.
 
+    Nothing here reconciles the filesystem with the repository, and after the merge nothing needs to:
+    they come out of one posted value. `Isolation.settled` is still what the service applies, because
+    a form is not the only way in.
+    """
+    _, reaching = posted_workspace(fields)
+    return Isolation(filesystem=reaching, network=posted_network(fields))
+
+
+def posted_network(fields: Mapping[str, list[str]]) -> bool:
+    """
+    Whether a form asked for the network, which is the half of the isolation a fork may change.
+
     The network is a closed set, so this layer settles it the way it settles the thinking level and
     for the same reason: unlike an endpoint it is not discovered. A radio that is not checked posts
     no field at all, so an absent one has to mean off, which is also the safe answer.
-
-    Nothing here reconciles the filesystem with the repository, and after the merge nothing needs to:
-    they come out of one posted value. `Isolation.settled` is still what the service applies, because
-    a fork's repository is inherited rather than posted and a form is not the only way in.
     """
-    _, reaching = posted_workspace(fields)
-    return Isolation(filesystem=reaching, network=fields.get(NETWORK_FIELD, [""])[0].strip() == "on")
+    return fields.get(NETWORK_FIELD, [""])[0].strip() == "on"
 
 
 def posted_thinking(fields: Mapping[str, list[str]]) -> ThinkingLevel | None:
@@ -631,6 +640,11 @@ def parse_form_fork(raw: bytes) -> Forking:
     message back for asking again. An empty box is the first of those rather than a refusal, so a
     fork that is only meant to carry a past is a form somebody can submit.
 
+    The files are not asked at all: a fork works in what its parent worked in, and `Service.fork`
+    is what says so, whatever arrives. So the branch is the one ref a fork posts, and the network
+    the one half of the isolation. There is no base, because a fork starts at the commit its parent
+    recorded; `Choice.settled` drops one whatever arrives.
+
     The turn is refused rather than defaulted, because a fork that silently branched at turn zero
     would throw away the conversation somebody meant to keep.
     """
@@ -649,10 +663,10 @@ def parse_form_fork(raw: bytes) -> Forking:
         chosen=Choice(
             endpoint=endpoint,
             model=model,
-            # Only meaningful for a fork of a session that has no repository, and the service is
-            # what decides that: one already in a repository keeps it whatever arrives here.
-            repository=posted_workspace(fields)[0],
-            isolation=posted_isolation(fields),
+            # Refused rather than dropped where it is not a branch name, for `parse_form_start`'s
+            # reason; empty is a branch of the fork's own.
+            branch=posted_ref(fields, BRANCH_FIELD, parse_branch, "a branch name"),
+            isolation=Isolation(network=posted_network(fields)),
             thinking=posted_thinking(fields),
             output_override=posted_output_override(fields),
         ),
@@ -739,7 +753,7 @@ async def redrawn(service: Service, session: str, reader: Reader) -> Response:
     asked = await service.read(session)
     if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    return page_response(200, fragment(transcript_region(LINKS, reader, asked)))
+    return page_response(200, await asyncio.to_thread(lambda: fragment(transcript_region(LINKS, reader, asked))))
 
 
 @get("/", reading, summary="The dashboard: what wants attention, and where a session can work")
@@ -763,8 +777,8 @@ async def new_session(service: Service, workspace: str | None, reader: Reader) -
         repository, filesystem = posted_workspace({WORKSPACE_FIELD: [workspace]})
     except NotAMessage as unknown:
         return page_response(422, refusal_page(LINKS, 422, str(unknown)))
-    if repository is None and filesystem is Filesystem.WORKTREE:
-        return page_response(422, refusal_page(LINKS, 422, "a worktree is a repository's, so name the repository"))
+    if repository is None and filesystem is Filesystem.CHECKOUT:
+        return page_response(422, refusal_page(LINKS, 422, "a checkout is a repository's, so name the repository"))
     if repository is not None and not service.reaches(repository):
         return page_response(404, refusal_page(LINKS, 404, f"no forge reaches {repository}"))
     return page_response(
@@ -789,7 +803,7 @@ async def start(service: Service, started: Started) -> Response:
     Mint a session on the chosen endpoint, and go to it so it can be set up.
 
     **Nothing is said in it here**, which is the change the plugin protocol forced: a repository's
-    plugin cannot be *named* until its worktree is planted, the worker plants it, and a session's
+    plugin cannot be *named* until its checkout is planted, the worker plants it, and a session's
     settings step is drawn from what those files declared. So this records the choice and asks for a
     pass, and the message box is on the session's own page once there is a session to type into.
 
@@ -829,24 +843,26 @@ async def fork_form(service: Service, session: str, at: int, reader: Reader) -> 
     be one per turn. Here the question is asked once, on a page that is not swapping, and the answer
     arrives as an ordinary form post that a browser with no script can make.
     """
-    found = await service.read(session)
-    if found is None:
+    forkable = await service.forkable(session, at)
+    if forkable is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    found, carrying = forkable
     if not 0 <= at <= found.said.turns:
         return page_response(404, refusal_page(LINKS, 404, f"session {session} has no turn {at}"))
-    return page_response(
-        200,
-        fork_page(
-            LINKS,
-            reader,
-            await service.listed(),
-            found,
-            at,
-            service.catalogues.current,
-            service.reachable,
-            service.references.current,
-        ),
+    listed = await service.listed()
+    markup = await asyncio.to_thread(
+        fork_page,
+        LINKS,
+        reader,
+        listed,
+        found,
+        at,
+        service.catalogues.current,
+        service.reachable,
+        service.references.current,
+        carrying,
     )
+    return page_response(200, markup)
 
 
 @post(t"/sessions/{session_id}/forks", session_id, forking, summary="Fork a session at one of its turns")
@@ -863,11 +879,6 @@ async def fork(service: Service, session: str, branch: Forking) -> Response:
     """
     if not service.catalogues.current.offers(branch.chosen.endpoint, branch.chosen.model):
         return page_response(422, refusal_page(LINKS, 422, f"no endpoint on offer serves {branch.chosen.model}"))
-    # A repository is only ever *attached* here, so it is checked on the same terms a new session's
-    # is. Whether it may be attached at all is the service's, since only it knows what the parent
-    # is already in; a posted repository for a session that has one is ignored rather than refused.
-    if branch.chosen.repository is not None and not service.reaches(branch.chosen.repository):
-        return page_response(422, refusal_page(LINKS, 422, f"no forge reaches {branch.chosen.repository}"))
     forked = await service.fork(session, at=branch.at, chosen=branch.chosen, said=branch.said)
     if forked is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
@@ -897,10 +908,9 @@ async def workspace_branches(service: Service, workspace: str) -> Response:
     """
     The branches a repository has, as the completions beside the field that asks where to start.
 
-    Asked when a workspace card is picked, so the list is that repository's rather than the one that
-    happened to be checked when the page was drawn. On demand rather than serialized into the page
-    for every repository at once: a console reaching six repositories would make six network calls to
-    render a page on which five of the lists are never looked at.
+    Asked by the new-session page once it has arrived, rather than before the page is drawn, so the
+    page never waits on the forge: the list is a round trip to the remote, and the rest of the page
+    is not.
 
     **Nothing about a repository makes this refuse.** One no forge reaches and one whose host is not
     answering are the same block with nothing to complete, which is exactly the field as it was
@@ -908,12 +918,11 @@ async def workspace_branches(service: Service, workspace: str) -> Response:
     refusal, and the difference is the usual one - the field takes free text either way, so having no
     completions costs a suggestion and not an ability. A workspace value this console does not
     recognise is the one refusal, because that is a malformed request rather than an answer about an
-    environment, and the card's own `hx-status:4xx` leaves the block standing.
+    environment, and the asking block's own `hx-status:4xx` leaves it standing.
 
-    A workspace that is not a repository is answered with the empty block, which takes the fields
-    themselves off the page: a base and a branch are answers *about* a repository, and `only scratch` has
-    none for them to be about. Answered rather than left alone, because the previous repository's
-    fields and completions are on the page until this swap replaces them.
+    A workspace that is not a repository is answered with the empty block: a base and a branch are
+    answers *about* a repository, and `only scratch` has none for them to be about. No page asks for
+    one, but the route takes whatever workspace a form does.
 
     The values it renders are *not* trusted on the way back in: `parse_form_start` re-parses whatever
     was posted, since a completion menu is a suggestion a browser was given rather than a constraint
@@ -937,7 +946,11 @@ async def show_session(service: Service, session: str, reader: Reader) -> Respon
     # Serving the page is showing it to somebody, which is what the mark means; before the list is
     # read, so the row for this session is drawn as looked at. See `Service.saw`.
     await service.saw(session)
-    return page_response(200, session_page(LINKS, reader, await service.listed(), found, service.reachable))
+    listed = await service.listed()
+    # Every page that draws a whole transcript renders it on a worker thread, for the reason the
+    # stream does; see `streaming.watching`.
+    markup = await asyncio.to_thread(session_page, LINKS, reader, listed, found, service.reachable)
+    return page_response(200, markup)
 
 
 @get("/fragments/stream", watched, shaped, reading, summary="What a page is watching, sent as it changes")
@@ -987,31 +1000,6 @@ async def seen(service: Service, session: str) -> Response:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
     await service.saw(session)
     return Response(status=204)
-
-
-@get(
-    t"/fragments/sessions/{session_id}/requests/{of_turn}/{at_panel}",
-    session_id,
-    of_turn,
-    at_panel,
-    summary="What the checkpoint holds for one model request",
-)
-async def request_record(service: Service, session: str, turn: int, at: int) -> Response:
-    """
-    What one model request of a turn came back with, fetched only when somebody opens its tag.
-
-    On demand rather than rendered into the transcript, because the transcript is swapped whenever a
-    running turn records anything: the raw record of every request is several times the size of the
-    reading of it, and it would be carried by every message for something almost always closed.
-
-    Settled for good the moment it exists, which is what lets the page fetch it once and keep it. A
-    step's key is written once and never rewritten, so unlike a panel's record this is answerable
-    while the turn is still running - the response is there as soon as the provider gave it.
-    """
-    held = await service.requested_at(session, turn, at)
-    if held is None:
-        return page_response(404, fragment(missing_record(turn, at)))
-    return page_response(200, fragment(record_json(held)))
 
 
 @post(t"/sessions/{session_id}/messages", session_id, sending, reading, summary="Say something to a session")
@@ -1066,7 +1054,9 @@ async def say(service: Service, session: str, sending: Sending, reader: Reader) 
         # `set` and nothing else left the checkpoint exactly as it is above, and the conversation is
         # what a full decode of it costs.
         if not delivered:
-            return page_response(200, fragment(transcript_region(LINKS, reader, found)))
+            return page_response(
+                200, await asyncio.to_thread(lambda: fragment(transcript_region(LINKS, reader, found)))
+            )
         return await redrawn(service, session, reader)
     match sending.where:
         case Disposition.HERE:
@@ -1130,7 +1120,7 @@ async def setup(service: Service, session: str, wanted: SettingUp) -> Response:
     Answer the settings step: record the switches, say somebody pressed, and ask for a pass.
 
     **This is the request that lets a plugin be executed at all, and that is what the step is for.**
-    Nothing before it has run one: the pass that planted the worktree read what each tier *declares*
+    Nothing before it has run one: the pass that planted the checkout read what each tier *declares*
     out of files, and the switches on this form are drawn from that. So the press is the
     confirmation, and the pass that follows is what it confirms.
 
@@ -1144,7 +1134,7 @@ async def setup(service: Service, session: str, wanted: SettingUp) -> Response:
 
     Two buttons and one route, told apart by a field rather than by the shape of the post. `Try
     again` asks for another *declaring* pass, which is the whole of what retrying a session whose
-    worktree or whose `.mainplate/mainplate.yaml` refused is. Anything else asks for the setup.
+    checkout or whose `.mainplate/mainplate.yaml` refused is. Anything else asks for the setup.
 
     **One answer now, where there used to be two.** Both buttons end in a `303` to the session,
     because the press no longer decides anything: what it does is record the switches and queue a
@@ -1199,10 +1189,25 @@ async def press(service: Service, session: str, pressed: Pressed) -> Response:
 
 @post(t"/sessions/{session_id}/rename", session_id, title, summary="Rename a session")
 async def rename_session(service: Service, session: str, title: str) -> Response:
+    """
+    Give a session the name somebody typed, and answer with the name row as it now stands.
+
+    Answered with the row, as a plugin's press is answered with its card, and not with a `303` as
+    archiving is: archiving changes four regions and the live connection carries one, where a rename
+    changes the row, the tab and the list's row, and the other two follow by themselves. See
+    `renamed` for the tab and `Service.listing_token` for the list.
+
+    The row is drawn from the name `Service.rename` wrote rather than from what was posted, so what
+    it shows is the name as `name_from` settled it, collapsed and cut, and not the text somebody
+    typed.
+
+    Taken whatever the session's state, archived included: a name is how somebody finds a session in
+    the list, which is as true of one that is closed as of one that is running.
+    """
     if await service.read(session) is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    await service.rename(session, title)
-    return seeing(LINKS.to_session(session))
+    named = await service.rename(session, title)
+    return page_response(200, renamed(LINKS, session, named))
 
 
 @post(t"/sessions/{session_id}/archive", session_id, summary="Archive a session, keeping its conversation")
@@ -1369,7 +1374,6 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     press,
     rename_session,
     archive,
-    request_record,
 )
 
 LINKS = Links(
@@ -1380,7 +1384,6 @@ LINKS = Links(
     say=say,
     stream=stream,
     seen=seen,
-    request_record=request_record,
     endpoint_models=endpoint_models,
     workspace_branches=workspace_branches,
     fork_form=fork_form,

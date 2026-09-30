@@ -121,7 +121,7 @@ by accident:
 
 The agent itself is built **per turn** rather than held in a startup mapping, because the model set
 is discovered and changes while the process runs, and because what a session is told includes the
-repository's own guidance and the worktree holding it is planted inside the loop. That costs tens of
+repository's own guidance and the checkout holding it is planted inside the loop. That costs tens of
 microseconds against a turn that costs seconds, and the connection pool, the expensive part, belongs
 to the endpoint and is shared by every model over it.
 
@@ -129,7 +129,7 @@ The endpoint is still asked for *before* the loop, and that split is the point r
 leftover: `endpoints.for_endpoint` raising `UnknownChoice` there is what keeps a missing endpoint a
 failure the console can explain rather than one discovered mid-turn. Built any earlier than the
 loop, a session's first turn would be answered having been told nothing the project says about
-itself, since the clone and the worktree do not exist until `planting` has run.
+itself, since the clone and the checkout do not exist until `planting` has run.
 
 ## Advertised is narrower than routable
 
@@ -165,7 +165,7 @@ suite does not behave differently depending on which machine it runs on.
 
 `catalogue.py` is [configuration that changes under a
 reader](../philosophy.md#configuration-that-changes-under-a-reader) and takes the whole of that
-stance: `open_console` calls `discover` before the store is opened, a background task re-asks on
+stance: `open_console` calls `discover` before the database is opened, a background task re-asks on
 `Settings.refresh`, `Catalogues.current` is rebound rather than edited, and a failed refresh keeps
 the last good value with no staleness bound.
 

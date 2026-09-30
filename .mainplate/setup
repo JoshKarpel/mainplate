@@ -19,8 +19,9 @@
 # is no shell rc to `mise activate` in, and a shims directory works in a `sh -c`.
 #
 # **`just dependencies` and not `just setup`**, because the other half of `setup` installs a git
-# hook, and git's hooks live in the clone's common directory, shared by every worktree of it and
-# bound read-only here. That line is a person's to run, once per clone, from the composer's `Run`.
+# hook, and whether a session's commits run pre-commit is that session's to decide, with `pre-commit
+# install` in its own checkout from `bash` or the composer's `Run`, rather than something a setup
+# plugin does to every session.
 #
 # **What crosses back to the session is what is appended to `$MAINPLATE_ENV`**, one `KEY=value` per
 # line, and nothing else in this environment does. `PATH` is set whole: the shims first, so a `uv`
@@ -45,7 +46,7 @@ if ! command -v mise >/dev/null; then
   curl -fsSL https://mise.run | MISE_INSTALL_PATH="$HOME/.local/bin/mise" sh
 fi
 
-# `mise install` reads `mise.toml` from the working directory, which is the worktree root. The
+# `mise install` reads `mise.toml` from the working directory, which is the checkout root. The
 # config is this repository's own and the session already chose to run its code, so trusting it is
 # stating what has been decided rather than deciding anything.
 mise trust --quiet
