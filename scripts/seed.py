@@ -23,7 +23,9 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import sys
+from collections.abc import Sequence
 from datetime import timedelta
 from pathlib import Path
 
@@ -47,7 +49,9 @@ from scripts.gallery import CATALOGUE
 from scripts.gallery import DECLARED
 from scripts.gallery import ENROLLED
 from scripts.gallery import FIXTURES
+from scripts.gallery import KEPT_VERSIONS
 from scripts.gallery import Fixture
+from scripts.gallery import Kept
 
 DEFAULT_DATABASE = Path("mainplate-demo.db")
 
@@ -97,11 +101,42 @@ async def plant(service: Service, fixture: Fixture) -> None:
         await service.checkpointer.supply(fixture.session.id, key, value)
 
 
-DEMO_HTML = (
-    b'<!doctype html><html><head><meta charset="utf-8">'
-    b"<style>body{font:2rem system-ui;margin:4rem;background:#151b2a;color:#f4e2a0}</style>"
-    b"</head><body><h1>Independent artifact</h1><p>Previewed without a model call.</p></body></html>"
-)
+# The console never deletes an artifact, for the reason it never deletes a session, so this is written
+# here rather than beside `keep`: replacing a fixture's artifact means taking out every version of it.
+FORGET_VERSIONS = "DELETE FROM artifact_versions WHERE artifact = ?"
+FORGET_ARTIFACT = "DELETE FROM artifacts WHERE id = ?"
+
+
+async def replant(service: Service, kept: Sequence[Kept]) -> None:
+    """
+    The gallery's artifacts, from nothing, through the store's own `keep`.
+
+    Through `keep` rather than written as rows, so a seeded version is one the store would have
+    written: each after the first onto its artifact names the version before it, as a session's call
+    would. Every fixture artifact is taken out first, so a changed fixture is a replaced one.
+    """
+
+    def forget(connection: sqlite3.Connection) -> None:
+        for artifact in {each.artifact for each in kept}:
+            connection.execute(FORGET_VERSIONS, (artifact,))
+            connection.execute(FORGET_ARTIFACT, (artifact,))
+
+    await service.database.run(forget)
+    counted: dict[str, int] = {}
+    for each in kept:
+        before = counted.get(each.artifact)
+        onto = None if before is None else artifacts.Updating(artifact=each.artifact, expected=before)
+        saved = await artifacts.keep(
+            service.database,
+            artifacts.Html.parse(each.html.encode()),
+            each.made_by,
+            each.made_at,
+            onto,
+            each.title,
+            mint=each.named,
+        )
+        counted[each.artifact] = saved.version
+        print(f"  kept     {saved.artifact[:12]}… {saved.title} v{saved.version}")
 
 
 async def seed(database: Path) -> None:
@@ -112,9 +147,7 @@ async def seed(database: Path) -> None:
             session = fixture.session
             origin = f" (forked from turn {session.forked.turn})" if session.forked else ""
             print(f"  {'replaced' if replaced else 'wrote   '} {session.id[:12]}… {session.title}{origin}")
-        if await artifacts.completed(service.database, "demo-artifact") is None:
-            saved = await artifacts.import_html(service.database, DEMO_HTML, "demo-artifact", title="Demo artifact")
-            print(f"  artifact {saved.id} version {saved.version}: {saved.title}")
+        await replant(service, KEPT_VERSIONS)
     print(f"\n{database} is ready. `just demo` serves it; the fixtures are on {CATALOGUE.default.endpoint}.")
 
 

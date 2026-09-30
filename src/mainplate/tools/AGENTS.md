@@ -60,6 +60,13 @@ plugin reaches is decided by its own tier rather than by what the *model* may to
 at `describe` and never added mid-conversation, because a tool definition sits above the cached
 prefix and introducing one late invalidates the whole conversation beneath it.
 
+**So are the artifact tools**, for a different reason: an artifact is the console's rather than any
+session's. `list_artifacts` is offered to every session, and `file_to_artifact` and
+`artifact_to_file` wherever `Files` exists, reading the same value the file tools hold so a file being
+kept and the same file being edited take one lock. They are console tools rather than a plugin's
+because what they keep is served by the console's own pages, which a plugin has no way to add. See
+[Artifacts](../../../docs/design/artifacts.md).
+
 **There is no git tool.** A checkout owns its `.git`, so git in `bash` does everything a session
 needs, confined like every other command; a tool wrapping a subset of it would be a second git
 surface to keep safe for nothing the shell does not already do.

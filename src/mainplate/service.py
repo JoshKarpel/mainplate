@@ -33,6 +33,8 @@ from without_durability_sqlite import SqliteDurable
 
 from mainplate import records
 from mainplate.agent import Choice
+from mainplate.artifacts import Version
+from mainplate.artifacts import made_in
 from mainplate.catalogue import Catalogues
 from mainplate.catalogue import retention_for
 from mainplate.commands import Commands
@@ -461,6 +463,17 @@ class Conversation:
     is worth, which is what it says with no reference database configured.
     """
 
+    kept: tuple[Version, ...] = ()
+    """
+    Every artifact version this session kept, in the order it kept them, for the rail to list.
+
+    Read from the artifact store rather than out of the checkpoint, although each is also a call the
+    checkpoint holds: the call says what the model asked for, and this says what the version is *now*
+    - what its artifact is called and whether a later version has replaced it - which the call cannot.
+    A fork's are its own, since a version names the session whose call kept it and a fork copies the
+    calls without running them again.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class Service:
@@ -701,6 +714,7 @@ class Service:
                 if facts is not None and facts.cost is not None and said.total.context
                 else None
             ),
+            kept=await made_in(self.database, found.id),
         )
 
     async def attended(self, session: str) -> Attended:

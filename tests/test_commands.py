@@ -44,8 +44,8 @@ from mainplate.conversation import transcript
 from mainplate.forge import Reachable
 from mainplate.forge import Reaching
 from mainplate.forge import Workspaces
-from mainplate.pages import BASIS_ID
-from mainplate.pages import BRANCHES_ID
+from mainplate.pages.picker import BASIS_ID
+from mainplate.pages.picker import BRANCHES_ID
 from mainplate.service import Service
 from mainplate.snapshots import branch_named
 

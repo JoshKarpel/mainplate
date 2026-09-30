@@ -63,7 +63,6 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.settings import ThinkingLevel
 from pydantic_ai.toolsets import AbstractToolset
-from without_durability_sqlite import Database
 
 from mainplate.config import Config
 from mainplate.config import Endpoint
@@ -82,6 +81,7 @@ from mainplate.sandbox import Isolation
 from mainplate.sandbox import OverEverything
 from mainplate.snapshots import Checkout
 from mainplate.snapshots import branch_named
+from mainplate.tools import Artifacts
 from mainplate.tools import Files
 from mainplate.tools import GitTracked
 from mainplate.tools import Scratch
@@ -1041,8 +1041,7 @@ def agent_for(
     plugins: Live | None = None,
     environment: Mapping[str, str] | None = None,
     output_cap: int | None = None,
-    artifacts: Database | None = None,
-    session: str = "",
+    artifacts: Artifacts | None = None,
 ) -> Agent:
     """
     The agent one session is answered by, built for the pass that is about to run it.
@@ -1087,6 +1086,12 @@ def agent_for(
     the OpenAI one - and is the honest answer where neither source knows, since a number guessed too
     high is refused outright. A `Choice.output_override` beats it, by the ordering below and no other
     rule.
+
+    `artifacts` is the console's artifact store as this turn reaches it, and like the plugins' tools
+    **the artifact tools are not conditioned on the isolation**: an artifact is the console's rather
+    than any session's, so every session may list them. Moving one to or from a file is conditioned
+    on there being files, which `artifact_tools` reads off the same `Files` as everything else. Absent
+    is a harness built with no store, which is what a test of the other tools wants.
     """
     wire = wires.for_endpoint(chosen.endpoint)
     # The session's own settings over everything else, so a recorded choice always wins: the thing
@@ -1114,7 +1119,7 @@ def agent_for(
         if files.has_repository:
             tools.append(grep_tools(files))
     if artifacts is not None:
-        tools.append(artifact_tools(artifacts, files, session))
+        tools.append(artifact_tools(artifacts, files))
     if reach.confinement is not None and bwrap is not None:
         tools.append(bash_tools(reach.confinement, bwrap, chosen.isolation.venue, environment))
     return Agent(

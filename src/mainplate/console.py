@@ -12,7 +12,6 @@ import os
 from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass
-from html import escape
 from pathlib import Path
 from typing import Final
 from typing import assert_never
@@ -50,26 +49,30 @@ from mainplate.conversation import TRUSTED_FIELD
 from mainplate.conversation import Disposition
 from mainplate.conversation import commit_command
 from mainplate.conversation import parse_disposition
-from mainplate.pages import PLUGIN_LEADER
-from mainplate.pages import SHAPE_FIELD
-from mainplate.pages import WORKSPACE_FIELD
-from mainplate.pages import ZONE_COOKIE
-from mainplate.pages import Links
-from mainplate.pages import Reader
-from mainplate.pages import Shape
-from mainplate.pages import dashboard_page
-from mainplate.pages import fork_page
-from mainplate.pages import fragment
-from mainplate.pages import model_cards
-from mainplate.pages import new_session_page
-from mainplate.pages import plugin_card
-from mainplate.pages import refusal_page
-from mainplate.pages import renamed
-from mainplate.pages import session_page
-from mainplate.pages import settling
-from mainplate.pages import stalled_by
-from mainplate.pages import starting_at
-from mainplate.pages import transcript_region
+from mainplate.pages.artifacts import artifact_page
+from mainplate.pages.artifacts import catalogue_page
+from mainplate.pages.composer import PLUGIN_LEADER
+from mainplate.pages.dashboard import dashboard_page
+from mainplate.pages.document import BEFORE_FIELD
+from mainplate.pages.document import SHAPE_FIELD
+from mainplate.pages.document import VERSION_FIELD
+from mainplate.pages.document import WORKSPACE_FIELD
+from mainplate.pages.document import Links
+from mainplate.pages.document import Shape
+from mainplate.pages.document import fragment
+from mainplate.pages.document import refusal_page
+from mainplate.pages.moments import ZONE_COOKIE
+from mainplate.pages.moments import Reader
+from mainplate.pages.picker import model_cards
+from mainplate.pages.picker import starting_at
+from mainplate.pages.rail import plugin_card
+from mainplate.pages.rail import renamed
+from mainplate.pages.session import fork_page
+from mainplate.pages.session import new_session_page
+from mainplate.pages.session import session_page
+from mainplate.pages.setup import settling
+from mainplate.pages.transcript import stalled_by
+from mainplate.pages.transcript import transcript_region
 from mainplate.plugins.protocol import settings_of
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
@@ -97,8 +100,7 @@ LOCATION = b"location"
 LONGEST_PROMPT = 100_000
 
 session_id = path_param("session", STR)
-artifact_id = path_param("artifact_id", STR)
-artifact_version = query_param("version", optional(int), schema={"type": "integer"})
+artifact_id = path_param("artifact", STR)
 # The endpoint whose models to render, which is the value of the select that asks for them.
 of_endpoint = query_param("endpoint", once(str), schema={"type": "string"})
 # Which workspace's branches to offer, which is the value of the card that asks for them. A query
@@ -758,7 +760,10 @@ async def redrawn(service: Service, session: str, reader: Reader) -> Response:
 
 @get("/", reading, summary="The dashboard: what wants attention, and where a session can work")
 async def start_here(service: Service, reader: Reader) -> Response:
-    return page_response(200, dashboard_page(LINKS, reader, await service.listed(), service.reachable, service.fetches))
+    recent = await artifacts.catalogue(service.database)
+    return page_response(
+        200, dashboard_page(LINKS, reader, await service.listed(), service.reachable, service.fetches, recent)
+    )
 
 
 @get("/sessions/new", of_new_workspace, reading, summary="What a new session in one workspace runs on")
@@ -1231,122 +1236,73 @@ async def archive(service: Service, session: str) -> Response:
     return seeing(LINKS.to_session(session))
 
 
-# The response's sandbox holds on direct navigation as well as inside the preview iframe.
-ARTIFACT_CSP = (
+# What an artifact's bytes are served under, which is the sandbox itself rather than a hope that
+# every page showing them frames them in one. `sandbox allow-scripts` makes the document an opaque
+# origin wherever it is opened, frame or tab, so it cannot read this console's cookies, storage or
+# pages; `connect-src 'none'` and the rest keep it from fetching anything, which is why a page has to
+# carry its scripts, styles, fonts and images inside itself. See `docs/design/artifacts.md`.
+ARTIFACT_POLICY: Final = (
     b"sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; "
-    b"style-src 'unsafe-inline'; img-src data: blob:; font-src data:; "
+    b"style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; "
     b"connect-src 'none'; form-action 'none'; base-uri 'none'"
 )
 
-
-catalogue_cursor = query_param("cursor", optional(int), schema={"type": "integer"})
-
-
-@get("/artifacts", catalogue_cursor, summary="Independent artifact catalogue")
-async def artifact_catalogue(service: Service, cursor: int | None) -> Response:
-    """Offer links to immutable versions without putting HTML into the catalogue."""
-    if cursor is not None and cursor < 0:
-        return Response(status=422)
-    found = await artifacts.listing(service.database, cursor=cursor)
-    items = "".join(
-        f'<li><a href="/artifacts/{each.id}?version={each.version}">{escape(each.title)}</a> '
-        f"(version {each.version})</li>"
-        for each in found
-    )
-    older = (
-        f'<a href="/artifacts?cursor={(cursor or 0) + artifacts.PAGE_SIZE}">Older artifacts</a>'
-        if len(found) == artifacts.PAGE_SIZE
-        else ""
-    )
-    return page_response(
-        200,
-        f"<html><head><title>Artifacts</title></head><body>"
-        f'<nav><a href="/">Mainplate</a></nav><h1>Artifacts</h1><ul>{items}</ul>{older}</body></html>',
-    )
+# Which version a page is drawn at, and where a listing continues from. Optional, because a bare
+# address is the artifact as it now is and the first page of a listing.
+at_version = query_param(VERSION_FIELD, optional(int), schema={"type": "integer"})
+listed_before = query_param(BEFORE_FIELD, optional(int), schema={"type": "integer"})
+# Required on the two routes serving bytes, so the bytes at an address never change: every link to
+# them is pinned by `Links`, and an unpinned one would be a preview that moved under its page.
+pinned_version = query_param(VERSION_FIELD, once(int), schema={"type": "integer"})
 
 
-@get(t"/artifacts/{artifact_id}", artifact_id, artifact_version, summary="Preview an artifact version")
-async def artifact_page(service: Service, artifact: str, version: int | None) -> Response:
-    """Pin both preview and download links to one selected immutable version."""
-    found = await artifacts.content(service.database, artifact, version)
-    if found is None:
-        return page_response(404, "<html><body>Artifact not found</body></html>")
-    selected, _ = found
-    where = f"/artifacts/{selected.id}/content?version={selected.version}"
-    title = escape(selected.title)
-    history = await artifacts.listing(service.database, artifact_id=selected.id)
-    versions = "".join(
-        f'<li><a href="/artifacts/{selected.id}?version={each.version}">Version {each.version}</a></li>'
-        for each in history
-    )
-    older = (
-        f'<a href="/artifacts/{selected.id}/versions?cursor={history[-1].version}">Older versions</a>'
-        if len(history) == artifacts.PAGE_SIZE
-        else ""
-    )
-    return page_response(
-        200,
-        f"<html><head><title>{title}</title></head><body>"
-        f'<nav><a href="/artifacts">Artifacts</a></nav><h1>{title}</h1>'
-        f"<p>Version {selected.version}. Downloaded HTML is not sandboxed and may behave differently.</p>"
-        f'<a href="{where}&download=1">Download HTML</a>'
-        f"<h2>Versions</h2><ul>{versions}</ul>{older}"
-        f'<iframe title="{title}" sandbox="allow-scripts" src="{where}" '
-        f'style="display:block;width:100%;height:75vh"></iframe></body></html>',
-    )
-
-
-artifact_cursor = query_param("cursor", once(int), schema={"type": "integer"})
-
-
-@get(t"/artifacts/{artifact_id}/versions", artifact_id, artifact_cursor, summary="Older artifact versions")
-async def artifact_versions(service: Service, artifact: str, cursor: int) -> Response:
-    """Page through immutable version links without loading their bytes."""
-    if cursor < 1:
-        return Response(status=422)
-    history = await artifacts.listing(service.database, artifact_id=artifact, cursor=cursor)
-    items = "".join(
-        f'<li><a href="/artifacts/{each.id}?version={each.version}">Version {each.version}</a></li>' for each in history
-    )
-    older = (
-        f'<a href="/artifacts/{artifact}/versions?cursor={history[-1].version}">Older versions</a>'
-        if len(history) == artifacts.PAGE_SIZE
-        else ""
-    )
-    return page_response(
-        200, f'<html><body><a href="/artifacts/{artifact}">Artifact</a><ul>{items}</ul>{older}</body></html>'
-    )
-
-
-artifact_download = query_param("download", optional(str), schema={"type": "string"})
+@get("/artifacts", listed_before, reading, summary="Every artifact, newest first")
+async def artifact_catalogue(service: Service, before: int | None, reader: Reader) -> Response:
+    shown = await artifacts.catalogue(service.database, before)
+    return page_response(200, catalogue_page(LINKS, reader, await service.listed(), service.reachable, shown))
 
 
 @get(
-    t"/artifacts/{artifact_id}/content",
-    artifact_id,
-    artifact_version,
-    artifact_download,
-    summary="The immutable HTML bytes of an artifact",
+    t"/artifacts/{artifact_id}", artifact_id, at_version, listed_before, reading, summary="One artifact, at one version"
 )
-async def artifact_content(service: Service, artifact: str, version: int | None, download: str | None) -> Response:
-    """Serve the exact selected bytes with a sandboxed preview or attachment disposition."""
+async def show_artifact(
+    service: Service, artifact: str, version: int | None, before: int | None, reader: Reader
+) -> Response:
+    found = await artifacts.content(service.database, artifact, version)
+    if found is None:
+        named = f"no artifact {artifact}" + ("" if version is None else f" at version {version}")
+        return page_response(404, refusal_page(LINKS, 404, named))
+    selected, _ = found
+    history = await artifacts.history(service.database, artifact, before)
+    listed = await service.listed()
+    return page_response(200, artifact_page(LINKS, reader, listed, service.reachable, selected, history))
+
+
+async def served(service: Service, artifact: str, version: int, *, saving: bool) -> Response:
+    """
+    One version's bytes, exactly as kept, under the artifact policy, shown or saved.
+
+    The preview and the download are this one function with one header different, which is the whole
+    of the promise that what is saved is what was shown. A version that does not exist is a bare `404`
+    rather than a page: what asks for these is a frame or a save, and neither shows a page.
+
+    The saved file's name is built from the version the store handed back and never from the path,
+    since a path segment is whatever was typed and a header is no place for that.
+    """
     found = await artifacts.content(service.database, artifact, version)
     if found is None:
         return Response(status=404)
-    selected, html = found
-    if download not in (None, "1"):
-        return Response(status=422)
+    kept, html = found
     disposition = (
-        b"attachment; filename=artifact-" + selected.id.encode() + f"-v{selected.version}.html".encode()
-        if download
-        else b"inline"
+        # A kept id is hex and a version a number, so the name needs no quoting.
+        b'attachment; filename="artifact-%s-v%d.html"' % (kept.artifact.encode(), kept.version) if saving else b"inline"
     )
     return Response(
         status=200,
         body=html,
         headers=(
             (b"content-type", b"text/html; charset=utf-8"),
-            (b"content-security-policy", ARTIFACT_CSP),
+            (b"content-security-policy", ARTIFACT_POLICY),
             (b"content-disposition", disposition),
             (b"x-content-type-options", b"nosniff"),
             (b"cache-control", b"no-store"),
@@ -1354,12 +1310,18 @@ async def artifact_content(service: Service, artifact: str, version: int | None,
     )
 
 
+@get(t"/artifacts/{artifact_id}/content", artifact_id, pinned_version, summary="One version's bytes, to show")
+async def artifact_content(service: Service, artifact: str, version: int) -> Response:
+    return await served(service, artifact, version, saving=False)
+
+
+@get(t"/artifacts/{artifact_id}/download", artifact_id, pinned_version, summary="One version's bytes, to save")
+async def artifact_download(service: Service, artifact: str, version: int) -> Response:
+    return await served(service, artifact, version, saving=True)
+
+
 CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     start_here,
-    artifact_catalogue,
-    artifact_page,
-    artifact_versions,
-    artifact_content,
     new_session,
     start,
     show_session,
@@ -1374,6 +1336,10 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     press,
     rename_session,
     archive,
+    artifact_catalogue,
+    show_artifact,
+    artifact_content,
+    artifact_download,
 )
 
 LINKS = Links(
@@ -1392,5 +1358,9 @@ LINKS = Links(
     press=press,
     rename=rename_session,
     archive=archive,
+    artifacts=artifact_catalogue,
+    artifact=show_artifact,
+    artifact_content=artifact_content,
+    artifact_download=artifact_download,
     assets=ASSETS,
 )

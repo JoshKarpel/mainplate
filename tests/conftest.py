@@ -406,7 +406,7 @@ WORDED: Final = (
 """
 How long a wait has left, and the one wording both sides of the page must reach for it.
 
-`elapsed` in `pages.py` draws the first figure and `soon` in `mainplate.js` repaints the same element
+`elapsed` in `pages/moments.py` draws the first figure and `soon` in `mainplate.js` repaints the same element
 a second later, so the two implementations are deliberately written twice and their *expectations*
 must not be: asserted against a copy apiece, a width added to one side and not the other is a drift
 neither test reports. Parametrised from here, adding a row is an edit in one place that both sides

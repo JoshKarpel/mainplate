@@ -142,11 +142,11 @@ change to the plate is a change to all three and to the PNGs.
 
 - **Do not replace `htmax.min.js` with core plus separately vendored extensions.** One file cannot
   drift from itself; two have to be kept on one version, and the failure when they are not is a swap
-  that silently misbehaves. Which extensions register is `EXTENSIONS` in `pages.py`.
+  that silently misbehaves. Which extensions register is `EXTENSIONS` in `pages/document.py`.
 - **Everything `mainplate.js` does stays an enhancement.** With the file absent the page must still
   render, still post, and still fold. What it holds is what cannot live in the markup, reapplied
   after every swap through one idempotent `repaint()`.
-- **`soon` in `mainplate.js` words a duration exactly as `elapsed` in `pages.py` does, including the
+- **`soon` in `mainplate.js` words a duration exactly as `elapsed` in `pages/moments.py` does, including the
   unit that is zero.** The server draws the first figure and the script repaints it a second later,
   into the same element, so dropping a `0m` there is a countdown that changes shape while a reader is
   looking at it. Two units at every width above a minute, on both sides. The widths the two owe each
@@ -155,7 +155,7 @@ change to the plate is a change to all three and to the PNGs.
   [the format is canonical, and the zone is the only thing that varies](https://joshkarpel.github.io/mainplate/design/console/#the-format-is-canonical-and-the-zone-is-the-only-thing-that-varies).
 - **Do not format a moment in `mainplate.js`.** `paintClock` writes the reader's zone into a cookie
   and asks for the page again where the one it got was drawn against another; every date and time
-  on the page is rendered by `pages.py`. Rewriting `<time>` elements instead looks like the smaller
+  on the page is rendered by `pages/moments.py`. Rewriting `<time>` elements instead looks like the smaller
   change and is the larger one: half the moments on this page are inside sentences a tooltip holds,
   so it buys a second implementation of what a date looks like, in a language that cannot see the
   first. See

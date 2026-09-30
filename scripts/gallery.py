@@ -39,6 +39,7 @@ from pydantic_ai.messages import UserPromptPart
 from pydantic_ai.usage import RequestUsage
 from without_durability.interfaces import inbox_key
 
+from mainplate import artifacts
 from mainplate import records
 from mainplate.agent import Choice
 from mainplate.agent import Listed
@@ -77,12 +78,14 @@ from mainplate.durability import ModelResponseTypeAdapter
 from mainplate.forge import Fetched
 from mainplate.forge import Reachable
 from mainplate.forge import Repository
-from mainplate.pages import Links
-from mainplate.pages import Reader
-from mainplate.pages import dashboard_page
-from mainplate.pages import fork_page
-from mainplate.pages import new_session_page
-from mainplate.pages import session_page
+from mainplate.pages.artifacts import artifact_page
+from mainplate.pages.artifacts import catalogue_page
+from mainplate.pages.dashboard import dashboard_page
+from mainplate.pages.document import Links
+from mainplate.pages.moments import Reader
+from mainplate.pages.session import fork_page
+from mainplate.pages.session import new_session_page
+from mainplate.pages.session import session_page
 from mainplate.plugins.installed import Enrolled
 from mainplate.plugins.installed import Installed
 from mainplate.plugins.installed import Tier
@@ -105,6 +108,7 @@ from mainplate.sessions import Queued
 from mainplate.sessions import Session
 from mainplate.settings import DEFAULT_INSTRUCTIONS
 from mainplate.snapshots import branch_named
+from mainplate.tools.artifacts.tools import KEPT
 
 ASSETS = Path(__file__).resolve().parent.parent / "src" / "mainplate" / "assets"
 
@@ -140,6 +144,10 @@ Who every page below is drawn for, which is what the console answers off a cooki
 # choice needs it too: a session's branch is named after its id, so the two would otherwise be one
 # literal written twice and a page saying it is on a branch belonging to some other session.
 PARENT_ID = "aa" * 16
+
+# The session with the drawings in it, named for the same reason: its row is in `LISTED`, and the
+# artifacts it kept each name it as the session whose call kept them.
+DRAWING_ID = "99" * 16
 
 # The rest of what a gateway resells, named as the serving service names them. Enough of them that
 # an open model list is taller than a short window, which is what the start page's scrolling is
@@ -339,7 +347,7 @@ LISTED = (
     ),
     Session(id="ee" * 16, created_at=WHEN - timedelta(hours=3), title="Port the old notes", repository=DETACHED),
     # The session with the drawings in it, working in nothing, since a picture needs no files.
-    Session(id="99" * 16, created_at=WHEN - timedelta(hours=5), title="Draw the poll's path"),
+    Session(id=DRAWING_ID, created_at=WHEN - timedelta(hours=5), title="Draw the poll's path"),
     # Archived, and already off the disk, so the row is drawn muted with the word beside the date
     # and no figure: what a closed session looks like once the reconciler has been round.
     Session(
@@ -419,6 +427,12 @@ TIMINGS = {
     "call-6": 0.019,
     "call-7": 12.65,
     "call-9": 0.9,
+    "call-20": 0.006,
+    "call-21": 0.004,
+    "call-22": 0.031,
+    "call-23": 0.028,
+    "call-24": 0.005,
+    "call-25": 0.034,
 }
 
 # What a `read` of the stylesheet in the second turn brought back, ahead of the edit that addresses
@@ -824,6 +838,216 @@ DRAWN: list[ModelMessage] = [
         metadata=timing(4.1),
     ),
 ]
+
+# The drawing session's next two turns keep what it drew as artifacts, which is what puts a call's
+# link to the version it kept on a page, the rail's card of what a session kept, and a history of
+# two versions behind one artifact. The first keeps two pages at once and the second keeps a revision
+# of one of them onto it, naming the version it last saw, which is the whole of how an update goes.
+POLL_ARTIFACT = "7a" * 16
+TOKEN_ARTIFACT = "7b" * 16
+
+
+def page_of(title: str, body: str) -> str:
+    """A self-contained page as a model would keep one: its style inside it, and nothing fetched."""
+    return (
+        f'<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><title>{title}</title>\n'
+        "<style>body{font:16px system-ui;margin:2rem;color:#1d2230}svg{max-width:100%}</style>\n"
+        f"</head><body>\n<h1>{title}</h1>\n{body}\n</body></html>\n"
+    )
+
+
+POLL_PAGE = page_of(
+    "The poll's path",
+    '<svg viewBox="0 0 420 60" width="420" height="60"><g font-family="monospace" font-size="14">'
+    '<rect x="4" y="14" width="96" height="32" rx="4" fill="none" stroke="#1d2230"/>'
+    '<text x="52" y="35" text-anchor="middle">worker</text>'
+    '<rect x="162" y="14" width="96" height="32" rx="4" fill="none" stroke="#1d2230"/>'
+    '<text x="210" y="35" text-anchor="middle">store</text>'
+    '<rect x="320" y="14" width="96" height="32" rx="4" fill="none" stroke="#1d2230"/>'
+    '<text x="368" y="35" text-anchor="middle">page</text>'
+    '<path d="M100 30H162M258 30H320" stroke="#1d2230"/></g></svg>',
+)
+POLL_LABELLED = POLL_PAGE.replace(
+    '<path d="M100 30H162M258 30H320" stroke="#1d2230"/>',
+    '<path d="M100 30H162M258 30H320" stroke="#1d2230"/>'
+    '<text x="131" y="10" text-anchor="middle">records</text><text x="289" y="10" text-anchor="middle">token</text>',
+)
+TOKEN_PAGE = page_of("The change token", "<p><code>2891:3:2874</code>, compared for inequality and nothing else.</p>")
+
+
+def kept_return(call: str, artifact: str, title: str, version: int) -> ToolReturnPart:
+    """A `file_to_artifact` return as the tool writes one: the words for the model, the version for the page."""
+    return ToolReturnPart(
+        tool_name="file_to_artifact",
+        content=f"{title}: artifact {artifact}, version {version} of {version}",
+        tool_call_id=call,
+        metadata={KEPT: {"artifact": artifact, "version": version}},
+        timestamp=WHEN,
+    )
+
+
+KEEPING: list[ModelMessage] = [
+    ModelRequest(parts=[UserPromptPart(content="Keep the path as a page I can open, and the token beside it.")]),
+    ModelResponse(
+        timestamp=WHEN,
+        parts=[
+            ToolCallPart(tool_name="create", args={"path": "poll.html", "content": POLL_PAGE}, tool_call_id="call-20"),
+            ToolCallPart(
+                tool_name="create", args={"path": "token.html", "content": TOKEN_PAGE}, tool_call_id="call-21"
+            ),
+        ],
+        usage=spending(asked=13_100, answered=640, cached=12_600, cost="0.0142"),
+        metadata=timing(6.2),
+    ),
+    ModelRequest(
+        parts=[
+            ToolReturnPart(
+                tool_name="create", content="created poll.html, 7 lines", tool_call_id="call-20", timestamp=WHEN
+            ),
+            ToolReturnPart(
+                tool_name="create", content="created token.html, 7 lines", tool_call_id="call-21", timestamp=WHEN
+            ),
+        ]
+    ),
+    ModelResponse(
+        timestamp=WHEN,
+        parts=[
+            ToolCallPart(
+                tool_name="file_to_artifact",
+                args={"path": "poll.html", "title": "The poll's path"},
+                tool_call_id="call-22",
+            ),
+            ToolCallPart(
+                tool_name="file_to_artifact",
+                args={"path": "token.html", "title": "The change token"},
+                tool_call_id="call-23",
+            ),
+        ],
+        usage=spending(asked=13_800, answered=96, cached=13_700, cost="0.0061"),
+        metadata=timing(1.8),
+    ),
+    ModelRequest(
+        parts=[
+            kept_return("call-22", POLL_ARTIFACT, "The poll's path", 1),
+            kept_return("call-23", TOKEN_ARTIFACT, "The change token", 1),
+        ]
+    ),
+    ModelResponse(
+        timestamp=WHEN,
+        parts=[TextPart(content="Both are kept: the path as one artifact and the token as another.")],
+        usage=spending(asked=14_000, answered=18, cached=13_900, cost="0.0048"),
+        metadata=timing(0.9),
+    ),
+]
+
+REVISING: list[ModelMessage] = [
+    ModelRequest(parts=[UserPromptPart(content="Label the arrows on the path.")]),
+    ModelResponse(
+        timestamp=WHEN,
+        parts=[
+            ToolCallPart(
+                tool_name="create",
+                args={"path": "poll-labelled.html", "content": POLL_LABELLED},
+                tool_call_id="call-24",
+            ),
+            ToolCallPart(
+                tool_name="file_to_artifact",
+                args={"path": "poll-labelled.html", "artifact": POLL_ARTIFACT, "expected_version": 1},
+                tool_call_id="call-25",
+            ),
+        ],
+        usage=spending(asked=14_300, answered=610, cached=14_000, cost="0.0133"),
+        metadata=timing(5.4),
+    ),
+    ModelRequest(
+        parts=[
+            ToolReturnPart(
+                tool_name="create",
+                content="created poll-labelled.html, 7 lines",
+                tool_call_id="call-24",
+                timestamp=WHEN,
+            ),
+            kept_return("call-25", POLL_ARTIFACT, "The poll's path", 2),
+        ]
+    ),
+    ModelResponse(
+        timestamp=WHEN,
+        parts=[TextPart(content="Labelled, and kept as version 2 of the same artifact.")],
+        usage=spending(asked=14_900, answered=14, cached=14_300, cost="0.0050"),
+        metadata=timing(0.8),
+    ),
+]
+
+
+@dataclass(frozen=True, slots=True)
+class Kept:
+    """
+    One artifact version as both scripts know it: which artifact, its bytes, and the call that kept it.
+
+    The artifact fixtures' `Fixture`, for the same reason that is one table: `seed.py` keeps each of
+    these through the store in order, and the gallery draws the same versions from them, so the demo's
+    catalogue and the stills are the same artifacts. Each names a call the drawing session's checkpoint
+    holds, which is what makes the rail's card and the call's link in both agree with the store.
+    """
+
+    artifact: str
+    html: str
+    title: str | None
+    made_by: artifacts.Call
+    made_at: datetime
+
+    def named(self) -> str:
+        """The artifact's id, as the `mint` the seeder keeps its first version with."""
+        return self.artifact
+
+
+# At the moments the turns holding their calls were answered, a second apart where two calls in one
+# response ran together, so the catalogue's order is the order they were kept in.
+KEPT_VERSIONS: Final = (
+    Kept(POLL_ARTIFACT, POLL_PAGE, "The poll's path", artifacts.Call(DRAWING_ID, 1, "call-22"), WHEN),
+    Kept(
+        TOKEN_ARTIFACT,
+        TOKEN_PAGE,
+        "The change token",
+        artifacts.Call(DRAWING_ID, 1, "call-23"),
+        WHEN + timedelta(seconds=1),
+    ),
+    Kept(POLL_ARTIFACT, POLL_LABELLED, None, artifacts.Call(DRAWING_ID, 2, "call-25"), WHEN + timedelta(minutes=3)),
+)
+
+
+def versions_of(kept: Sequence[Kept]) -> tuple[artifacts.Version, ...]:
+    """
+    Every version as the store hands it back once `kept` has been kept in order into an empty store.
+
+    Derived rather than written out, so the pages cannot draw a history the seeder would not plant:
+    the version is its place among its artifact's, `current` and the title are the artifact's as they
+    stand after the last, and `seq` counts from one as the store's does. `test_seed.py` holds the two
+    equal.
+    """
+    counted: dict[str, int] = {}
+    numbered = []
+    for kept_one in kept:
+        counted[kept_one.artifact] = counted.get(kept_one.artifact, 0) + 1
+        numbered.append((kept_one, counted[kept_one.artifact]))
+    titles: dict[str, str] = {}
+    for kept_one in kept:
+        titles[kept_one.artifact] = kept_one.title or titles.get(kept_one.artifact, artifacts.UNTITLED)
+    return tuple(
+        artifacts.Version(
+            artifact=kept_one.artifact,
+            title=titles[kept_one.artifact],
+            version=version,
+            current=counted[kept_one.artifact],
+            made_at=kept_one.made_at,
+            made_by=kept_one.made_by,
+            seq=seq,
+        )
+        for seq, (kept_one, version) in enumerate(numbered, start=1)
+    )
+
+
+VERSIONS: Final = versions_of(KEPT_VERSIONS)
 
 # A reply that opens with its reasoning inside `<think>` tags rather than in a part of its own, which
 # is how some wires carry it, so a page draws what `unthought` makes of one: a reasoning panel with
@@ -1498,7 +1722,9 @@ def fixtures() -> tuple[Fixture, ...]:
         Fixture.of(carried_on, ON_SONNET.settled(forked=True), before(closed, carried_on.forked.turn)),
         # On a repository nothing reaches, so a demo console has the row that renders a bare id.
         Fixture.of(detached, ON_SONNET, recorded(CONVERSATION)),
-        Fixture.of(drawing, ON_SONNET, recorded(DRAWN)),
+        # The drawings, and then the two turns that keep them as artifacts, whose calls are the ones
+        # `KEPT_VERSIONS` names.
+        Fixture.of(drawing, ON_SONNET, recorded(DRAWN, KEEPING, REVISING)),
         # Archived, with the key the press writes rather than only the row's field, because the row's
         # field is *read* out of that key: a session with the field alone is one the sidebar draws as
         # open. The reconciler finds nothing on disk for it and leaves it be.
@@ -1584,6 +1810,9 @@ def showing(
             if facts is not None and facts.cost is not None and said.total.context
             else None
         ),
+        # Read off the artifact fixtures by the session, as `Service.read` reads the store, so a
+        # session's rail lists what the table says it kept and nothing a caller had to remember.
+        kept=tuple(version for version in VERSIONS if version.made_by.session == session.id),
     )
 
 
@@ -1622,6 +1851,9 @@ CAPTIONS: Final[dict[str, str]] = {
     "archived.html": "An archived session, muted, with the fork from its end as the one control left.",
     "forking.html": "Forking at a turn: what is carried over and what is left behind.",
     "forking-no-repository.html": "Forking a session that works in no repository, which has no branch to carry on.",
+    "artifacts.html": "Every artifact, newest first, each at its current version.",
+    "artifact.html": "One artifact at its current version: where it came from, the preview, the download, and its versions.",
+    "artifact-earlier.html": "The same artifact at an earlier version, which says a later one has been kept since.",
 }
 
 
@@ -1787,8 +2019,13 @@ def pages(links: Links = LINKS) -> dict[str, str]:
         ),
     )
 
+    # Each artifact at its current version, newest first, which is the order the store's catalogue
+    # hands them back in; and the poll's path at both of its versions.
+    current = tuple(version for version in reversed(VERSIONS) if version.is_current)
+    poll = tuple(version for version in reversed(VERSIONS) if version.artifact == POLL_ARTIFACT)
+
     return {
-        "dashboard.html": dashboard_page(links, READER, LISTED, REACHABLE, FETCHES),
+        "dashboard.html": dashboard_page(links, READER, LISTED, REACHABLE, FETCHES, current),
         "new-session.html": new_session_page(
             links, READER, LISTED, CATALOGUE, REACHABLE, REFERENCE, WORKING_IN, Filesystem.CHECKOUT, FETCHES[WORKING_IN]
         ),
@@ -1849,6 +2086,9 @@ def pages(links: Links = LINKS) -> dict[str, str]:
             REACHABLE,
             REFERENCE,
         ),
+        "artifacts.html": catalogue_page(links, READER, LISTED, REACHABLE, current),
+        "artifact.html": artifact_page(links, READER, LISTED, REACHABLE, poll[0], poll),
+        "artifact-earlier.html": artifact_page(links, READER, LISTED, REACHABLE, poll[-1], poll),
     }
 
 

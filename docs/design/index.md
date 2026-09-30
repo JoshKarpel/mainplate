@@ -25,6 +25,9 @@ the cross-cutting rules the pages cite rather than restate.
   checkout a session gets, and how a tree is snapshotted at every model request.
 - **[How a model reaches a file](tools.md)** is the toolset: which tools a session gets, and the
   content-addressed anchoring scheme behind `read` and `edit`.
+- **[Artifacts](artifacts.md)** is what a session makes that outlives it: the store of versioned
+  HTML documents beside the checkpoint, the tools that move one to and from a file, and how a
+  version is served in a sandbox.
 - **[Where a command runs](sandbox.md)** is the mount namespace `bash` runs behind, and the two
   isolation axes a session picks.
 - **[What runs, and as whom](security.md)** is the boundary between the parent and the sandbox: what

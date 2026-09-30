@@ -289,7 +289,7 @@ class Located:
 @dataclass(frozen=True, slots=True)
 class Files:
     """
-    The places one session may touch, as the four things a model may do to them.
+    The places one session may touch, as the things a model may do to them.
 
     Frozen and holding only roots, so it is a value rather than a handle: every method is an effect
     against the filesystem, and two callers sharing one share no state.
@@ -485,6 +485,46 @@ class Files:
         anchored = Anchored.over(text.lines)
         made = f"created {self.naming(path, located)}, {counted(len(text.lines), 'line')}"
         return "\n".join((made, "", anchored.rendered(0, MAX_LINES)))
+
+    async def read_bytes(self, path: str, root: str, largest: int) -> bytes:
+        """
+        A file's exact bytes, for a caller that keeps a file rather than reading its lines.
+
+        The same reach and the same lock as `read`, and nothing of `Text`: what the artifact tools
+        promise is the file byte for byte, so nothing here decodes, translates or anchors. `largest`
+        is checked before reading, so a file too large to keep is never pulled into memory.
+        """
+        here = self.resolved(path, root).path
+
+        def load() -> bytes:
+            if not here.is_file():
+                raise Refused(f"there is no file at {path!r}")
+            if here.stat().st_size > largest:
+                raise Refused(f"{path!r} is larger than {largest} bytes, which is too large to keep")
+            return here.read_bytes()
+
+        async with self.exclusively(here):
+            return await asyncio.to_thread(load)
+
+    async def create_bytes(self, path: str, content: bytes, root: str = "") -> None:
+        """
+        A new file holding exactly `content`, refusing a path that exists, as `create` refuses one.
+
+        `create`'s promise with none of its care for lines: no newline is added, since what is written
+        is a copy of bytes kept elsewhere and has to come back out as they went in.
+        """
+        here = self.resolved(path, root).path
+
+        def write() -> None:
+            here.parent.mkdir(parents=True, exist_ok=True)
+            with here.open("xb") as written:
+                written.write(content)
+
+        async with self.exclusively(here):
+            try:
+                await asyncio.to_thread(write)
+            except FileExistsError:
+                raise Refused(f"{path!r} already exists; write it somewhere new") from None
 
 
 def counted(many: int, noun: str) -> str:

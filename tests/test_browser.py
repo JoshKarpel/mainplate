@@ -48,6 +48,7 @@ from mainplate.agent import ANTHROPIC_RETENTION
 from mainplate.app import build_app
 from mainplate.app import open_store
 from mainplate.catalogue import Catalogues
+from mainplate.console import LINKS
 from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import Result
 from mainplate.conversation import messages_key
@@ -60,9 +61,9 @@ from mainplate.conversation import result_key
 from mainplate.conversation import tool_key
 from mainplate.forge import Workspaces
 from mainplate.markup import DRAWABLE
-from mainplate.pages import CACHE_ID
-from mainplate.pages import OPENING
-from mainplate.pages import ZONE_COOKIE
+from mainplate.pages.composer import CACHE_ID
+from mainplate.pages.moments import ZONE_COOKIE
+from mainplate.pages.transcript import OPENING
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.installed import BUNDLED_ROOT
 from mainplate.plugins.installed import Enrolled
@@ -73,6 +74,7 @@ from mainplate.plugins.running import Spawned
 from mainplate.sandbox import Filesystem
 from mainplate.service import Service
 from mainplate.sessions import read_tending
+from scripts.gallery import WHEN
 from scripts.gallery import ZONE
 from scripts.gallery import pages
 from scripts.gallery import write
@@ -369,34 +371,49 @@ class TestTheInstalledConsole:
         assert await page.evaluate("() => caches.keys()") == []
 
 
-class TestArtifactIsolation:
-    """A preview script can run without inheriting the console's origin or reaching the network."""
+# A document that reports, on its own body, whether it could read the console's cookies, reach the
+# page framing it, and fetch from the console. Its scripts running at all is the first claim, since a
+# sandbox that ran nothing would report nothing and every assertion below would time out.
+PROBING = artifacts.Html.parse(
+    b"<!doctype html><html><body><script>"
+    b"try { document.cookie; document.body.dataset.cookie = 'available'; }"
+    b"catch (e) { document.body.dataset.cookie = 'blocked'; }"
+    b"try { window.parent.document.body; document.body.dataset.parent = 'available'; }"
+    b"catch (e) { document.body.dataset.parent = 'blocked'; }"
+    b"fetch('/').then(() => document.body.dataset.fetched = 'yes')"
+    b".catch(() => document.body.dataset.fetched = 'blocked');"
+    b"</script></body></html>"
+)
 
-    async def test_preview_and_direct_navigation_are_sandboxed(self, page: Page, console: tuple[str, Service]) -> None:
+
+class TestAnArtifactRunsInASandbox:
+    """
+    A kept page's scripts run, and reach neither the console's origin nor the network.
+
+    A browser, because what is under test is what a real one does with the frame's `sandbox` and the
+    response's policy: both are strings in the markup and the headers whether or not they work.
+    """
+
+    async def test_in_the_preview_it_reaches_nothing_of_the_page_around_it(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
         base, service = console
-        html = (
-            b"<!doctype html><html><body><script>"
-            b"try { document.cookie; document.body.dataset.cookie = 'available'; }"
-            b"catch(e) { document.body.dataset.cookie = 'blocked'; }"
-            b"try { window.parent.document.body; document.body.dataset.access = 'available'; }"
-            b"catch(e) { document.body.dataset.access = 'blocked'; }"
-            b"document.body.dataset.parent = String(window.parent === window);"
-            b"fetch('/artifacts').then(() => document.body.dataset.fetched = 'yes')"
-            b".catch(() => document.body.dataset.fetched = 'blocked');"
-            b"</script></body></html>"
-        )
-        saved = await artifacts.import_html(service.database, html, "browser-artifact")
-        await page.goto(f"{base}/artifacts/{saved.id}")
-        frame = page.frame_locator("iframe")
-        await expect(frame.locator("body")).to_have_attribute("data-access", "blocked")
-        await expect(frame.locator("body")).to_have_attribute("data-cookie", "blocked")
-        await expect(frame.locator("body")).to_have_attribute("data-parent", "false")
-        await expect(frame.locator("body")).to_have_attribute("data-fetched", "blocked")
-        await page.goto(f"{base}/artifacts/{saved.id}/content?version=1")
-        await expect(page.locator("body")).to_have_attribute("data-access", "available")
-        await expect(page.locator("body")).to_have_attribute("data-cookie", "blocked")
-        await expect(page.locator("body")).to_have_attribute("data-parent", "true")
-        await expect(page.locator("body")).to_have_attribute("data-fetched", "blocked")
+        kept = await artifacts.keep(service.database, PROBING, artifacts.Call("7" * 32, 0, "call-probe"), WHEN)
+        await page.goto(f"{base}{LINKS.to_artifact(kept.artifact)}")
+        framed = page.frame_locator("iframe.artifact__preview").locator("body")
+        await expect(framed).to_have_attribute("data-cookie", "blocked")
+        await expect(framed).to_have_attribute("data-parent", "blocked")
+        await expect(framed).to_have_attribute("data-fetched", "blocked")
+
+    async def test_opened_directly_it_is_still_an_opaque_origin_with_no_network(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        base, service = console
+        kept = await artifacts.keep(service.database, PROBING, artifacts.Call("7" * 32, 0, "call-probe"), WHEN)
+        await page.goto(f"{base}{LINKS.to_artifact_content(kept.artifact, 1)}")
+        opened = page.locator("body")
+        await expect(opened).to_have_attribute("data-cookie", "blocked")
+        await expect(opened).to_have_attribute("data-fetched", "blocked")
 
 
 class TestWhereTheReaderIs:

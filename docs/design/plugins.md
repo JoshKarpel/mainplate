@@ -1300,7 +1300,7 @@ indistinguishable from somebody who left them, and that is the correct reading o
 `tending.py` is a module of its own for `thinking.py`'s reason, which is a cycle: the columns live
 on the session index and the decision is made inside a pass, so `sessions.py` and `conversation.py`
 both read it, and `sessions.py` already reads `conversation.py` for the key scheme. The field names
-the controls post under live there too, by `roots.py`'s rule: `pages.py` renders the controls and
+the controls post under live there too, by `roots.py`'s rule: `pages` renders the controls and
 `console.py` parses them, and the module that owns the vocabulary is the one both can read without
 closing a ring.
 

@@ -125,7 +125,7 @@
   // The one thing here the *server* reads back, which is why it is a cookie and not storage: the
   // zone a page's moments are printed in is decided while the page is being rendered, so the answer
   // has to ride on the request for the document itself. Everything else in this file is the reader's
-  // and stays in this browser. See `ZONE_COOKIE` in `pages.py`, and `paintClock` below.
+  // and stays in this browser. See `ZONE_COOKIE` in `pages/moments.py`, and `paintClock` below.
   const ZONE_COOKIE = "zone";
 
   // A cookie is arbitrary text the way storage is, and this runs before `start` exists, so a value
@@ -578,7 +578,7 @@
     // the mode arrives only on a key that says the word is done.
     //
     // One attribute is the whole of what this sets. Which button shows, what it is called, what it
-    // posts and the sentence above the box are all in `pages.py` and drawn off `data-leading` by the
+    // posts and the sentence above the box are all in `pages/composer.py` and drawn off `data-leading` by the
     // stylesheet, so nothing here holds a label, a field name or a disposition. That is also what
     // makes a mode safe rather than the failure a remembered choice would be: the button a reader is
     // about to press is one the server rendered, saying what it does.
@@ -803,7 +803,7 @@
     // copies is decided by where it sits.
     //
     // Seated here rather than rendered by the server, which the code button forces: a fence is
-    // markup the Markdown renderer produced, so there is no node for `pages.py` to hang a button on
+    // markup the Markdown renderer produced, so there is no node for `pages` to hang a button on
     // inside one. Rendering the panel's and seating the code's would be two mechanisms for one
     // thing, and the seating has to exist either way.
     //
@@ -881,7 +881,7 @@
     //
     // The library is three and a half megabytes and is fetched the first time a diagram is on the
     // page, so a page with none pays nothing for it. Where it is served is on `<html>`, put there
-    // by `pages.py`, because an asset's address is the server's to say.
+    // by `pages/document.py`, because an asset's address is the server's to say.
     //
     // Which blocks are shown as text is a value here and reapplied after every swap, like the
     // folds: the morph would otherwise put a diagram back in front of the code somebody had just
@@ -1227,7 +1227,7 @@
       // deferring a session until its allowance resets is days out, and `6623m` is a figure a reader
       // has to divide twice.
       //
-      // **`elapsed` in `pages.py`, unit for unit, including the unit that is zero.** The server
+      // **`elapsed` in `pages/moments.py`, unit for unit, including the unit that is zero.** The server
       // renders the first value of every one of these and this takes over a second later, so a wait
       // landing on a whole hour drawn as `1h 0m` and repainted as `1h` is a figure that changes
       // shape while a reader is looking at it, which reads as the countdown having moved. Two units
@@ -1614,7 +1614,7 @@
     // call a reader watched arrive stayed open for good.
     //
     // The dock's third button is the way back from any decision, and it is why the *server* still
-    // says where each fold started: see `data-opens` and `opens` in `pages.py`.
+    // says where each fold started: see `data-opens` and `opens` in `pages/document.py`.
     const wireFolds = () => {
       document.addEventListener("toggle", (event) => {
         const fold = event.target;
@@ -2035,7 +2035,7 @@
     // A message is rendered Markdown, and the rendering is lossy in exactly the way somebody copying
     // cares about: the fences, the emphasis, the list markers and the table are gone from the text of
     // the page. So a block that was Markdown carries its own source and that is what is handed over -
-    // see `written_block` in `pages.py`. A block of code inside one needs no such thing, since a
+    // see `written_block` in `pages/transcript.py`. A block of code inside one needs no such thing, since a
     // fence renders as the characters it was written with.
     //
     // A tool call is the block that is not simply its own text either: its parts are a name, what it

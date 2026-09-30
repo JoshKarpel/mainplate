@@ -234,6 +234,19 @@ which is worth recording because both read well:
   check against once the session owns its `.git`: a hook the session wrote on purpose and one it was
   talked into are the same file.
 
+## An artifact is served from this origin, and runs in none
+
+An artifact is HTML a model wrote, and the console serves it from its own origin, which is the
+origin its cookies and pages are on. What keeps that from mattering is the response rather than the
+page framing it: every version is served under `Content-Security-Policy: sandbox allow-scripts` with
+nothing allowed out, so the document is an opaque origin however it is opened, in the preview frame
+or typed into a tab, and its scripts can reach neither this console nor the network. The frame's own
+`sandbox` attribute says the same again and is not what anything relies on.
+
+The file a person downloads is the same bytes with none of that around it, and a browser opening a
+local file gives it whatever it gives local files. The page says so beside the link, and nothing here
+can do more. See [Artifacts](artifacts.md#serving-a-version).
+
 ## What is deliberately not defended
 
 Naming these is the point of the page. Each is a decision, and each is somewhere the argument above

@@ -31,7 +31,6 @@ from markupsafe import Markup
 from markupsafe import escape
 from without_html import Element
 from without_html import Node
-from without_html import a
 from without_html import code
 from without_html import dd
 from without_html import div
@@ -45,6 +44,7 @@ from mainplate.markup import SHELL
 from mainplate.markup import highlighted
 from mainplate.markup import language_of
 from mainplate.markup import linked_text
+from mainplate.tools.artifacts.tools import KEPT
 from mainplate.tools.files.anchors import ALPHABET
 from mainplate.tools.files.anchors import GUTTER
 from mainplate.tools.files.anchors import UNADDRESSABLE
@@ -469,6 +469,31 @@ def recorded_diff(used: ToolUse) -> str | None:
     return found if isinstance(found, str) else None
 
 
+@dataclass(frozen=True, slots=True)
+class Kept:
+    """Which artifact version a `file_to_artifact` call kept, as the call recorded it for the page."""
+
+    artifact: str
+    version: int
+
+
+def recorded_kept(used: ToolUse) -> Kept | None:
+    """
+    The version a `file_to_artifact` call recorded beside its reply, or nothing where it is not one that did.
+
+    Read from the call's metadata rather than out of the words the model was sent, which say the same
+    two numbers for the model's sake: the metadata is the half written for the page, and a change to
+    how the reply is worded then cannot break a link.
+    """
+    if used.tool != "file_to_artifact" or used.returned is None or not isinstance(used.returned.metadata, Mapping):
+        return None
+    match used.returned.metadata.get(KEPT):
+        case {"artifact": str(artifact), "version": int(version)}:
+            return Kept(artifact=artifact, version=version)
+        case _:
+            return None
+
+
 # --- The body ------------------------------------------------------------------------------------
 
 
@@ -541,12 +566,6 @@ def returned_element(tool: str, arguments: str, content: str) -> Node:
     not: its regions come from as many files as matched, and which grammar each is in is in a header
     line this console would have to parse a second time to learn. That is the cost, stated.
     """
-    if tool == "file_to_artifact":
-        # The tool's last word is its versioned URL; render that as a local link, not an
-        # absolute URL using the request Host (which a tool has no reason to know).
-        label, separator, location = content.rpartition(" ")
-        if separator and re.fullmatch(r"/artifacts/[A-Za-z0-9_-]+\?version=[0-9]+", location):
-            return pre(children=code(children=[label, " ", a(attrs={"href": location}, children=location)]))
     if tool not in ANCHORING:
         return pre(children=code(children=linked_text(content)))
     handed = arguments_of(arguments)

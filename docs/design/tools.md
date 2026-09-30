@@ -35,8 +35,8 @@ its way around with `ls` and `rg`, without the depth bound `list` puts on an ans
 anchors on what a search finds, so an edit there follows a `read`.
 
 **`hand_off` is outside that entirely and is in every session**, `NOTHING` included, so a session
-with no files still has exactly one toolset rather than none. It is not an exception to the rule
-above but a different subject: what it reaches is the conversation, and every session has one.
+with no files still has a toolset rather than none. It is not an exception to the rule above but a
+different subject: what it reaches is the conversation, and every session has one.
 
 `handoff/` is therefore the one package whose subject is the conversation rather than the machine,
 which is why it alone is not conditioned on the isolation. It is in every session's cached prefix
@@ -46,6 +46,11 @@ window, where a permanent one costs its own description at cache-read prices on 
 orders of magnitude. It takes the document as an argument rather than reading one out of the turn's
 prose, because a model asked for a handoff in words leaks the framing around it into what the next
 model is told. Both are argued in full on [the handoff plugin's page](../plugins/handoff.md).
+
+**The artifact tools are outside it too**, on a third subject: the console's store of artifacts,
+which is no session's. `list_artifacts` is in every session, and the two that move a document between
+a file and an artifact wherever there are files to move it between. See
+[Artifacts](artifacts.md#which-tools-a-session-gets).
 
 ## `list`
 

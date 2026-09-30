@@ -97,7 +97,7 @@ from mainplate.forge import Reachable
 from mainplate.forge import Reaching
 from mainplate.forge import Workspaces
 from mainplate.forge import discover as reachable
-from mainplate.pages import refusal_page
+from mainplate.pages.document import refusal_page
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.installed import Tier
 from mainplate.plugins.installed import bundled

@@ -24,8 +24,8 @@ from mainplate.conversation import opened_key
 from mainplate.conversation import result_key
 from mainplate.conversation import transcript
 from mainplate.conversation import turn_of
-from mainplate.pages import arrange
-from mainplate.pages import inheriting
+from mainplate.pages.session import inheriting
+from mainplate.pages.shell import arrange
 from mainplate.service import Service
 from mainplate.sessions import Origin
 from mainplate.sessions import Session

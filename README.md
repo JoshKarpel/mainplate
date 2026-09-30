@@ -254,9 +254,9 @@ a repository gets `read`, `edit` and `create` over its own checkout and a scratc
 beside it, and repository-only `list` and `grep` over the checkout. One working on the whole machine
 gets the first three with no such boundary, while the repository-only pair refuse. One reaching
 nothing of the machine still gets a scratch directory of its own, the first three over it, and
-`bash` inside it; without `bubblewrap` it gets no tools at all, and is a place to talk.
+`bash` inside it; without `bubblewrap` it gets no file tools at all, and is a place to talk.
 
-Anywhere there are tools there is also `bash`, wherever `bubblewrap` is installed to confine it.
+Anywhere there are file tools there is also `bash`, wherever `bubblewrap` is installed to confine it.
 Every command runs in a mount namespace of its own holding exactly what that session reaches and a
 read-only system, so your home directory and the console's configuration are not in it, and the
 network is off unless the session asked for it. What a command does get as its home is the session's
@@ -313,22 +313,24 @@ There is deliberately no tool that overwrites a whole file. `create` refuses a p
 exists, because a tool that rewrites a file wholesale is the escape hatch that makes all of this
 pointless: the first refused edit becomes a full rewrite, discarding whatever had not been read.
 
-## HTML artifacts
+## Artifacts
 
-An artifact is a standalone UTF-8 HTML document stored in the console's database, independent
-of the session that created it or any worktree commit. Use `file_to_artifact` on a file the model
-has built with its file tools; to update an artifact, supply its `id` and current
-`expected_version`. A stale version is refused without changing the artifact. `list_artifacts`
-finds artifacts and pages through a selected artifact's version history without returning HTML.
-`artifact_to_file` exports one version's exact bytes into a new path and refuses to overwrite.
-The artifact catalogue at `/artifacts` links to each current version; a tool's import result links
-to the version it created.
+A session can keep a page it made as an **artifact**: a self-contained HTML document the console
+holds on to after the session is archived, with every version of it kept. The model builds the page
+as a file with the tools it already has and keeps it with `file_to_artifact`; to revise one it writes
+a version back out with `artifact_to_file`, edits the file, and keeps it again, naming the version it
+started from. If another session has kept a newer version in between, that is refused rather than
+overwritten. `list_artifacts` finds what there is.
 
-A selected version's preview and attachment serve the same immutable bytes. The preview iframe
-has an opaque origin and the content response enforces a sandbox even on direct navigation;
-network requests are blocked, so embed all styles, scripts, images and fonts rather than using
-CDNs. Downloading the HTML is not a claim that it is safe to run locally or behaves identically
-to the sandboxed preview. Artifact URLs are console-local, not public sharing links.
+The dashboard lists the artifacts kept most recently and links to all of them, a session's rail
+lists what it kept, and each call that kept a version links to it. An artifact's page shows the
+document in a sandboxed frame, with the turn that kept it, its versions, and a download of exactly
+the same file.
+
+The sandbox holds wherever the document is opened, in the frame or on its own: it runs its own
+scripts and reaches nothing else, not this console's cookies or pages and not the network. So a page
+carries its styles, scripts, fonts and images inside itself, and a library from a CDN does not load.
+A downloaded copy runs under whatever your browser gives a local file, which is not that sandbox.
 
 ## The console
 
