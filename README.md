@@ -109,9 +109,8 @@ minutes while any session works in it, since a session's own `git fetch` reads t
 **Forking keeps the original readable.** Every turn opens with a rule carrying a `fork` link:
 following it makes a new session that inherits the turns before that one, on whatever endpoint,
 model and thinking level you pick, and asks that turn's own question again with the message editable.
-The sidebar draws the result as a tree. A fork inherits its parent's repository, because re-asking a
-turn against different files is a different question wearing the same words; a session working in
-*no* repository is the exception, and forking one is how you pick a repository up.
+The sidebar draws the result as a tree. A fork works in its parent's files, repository or none,
+because re-asking a turn against different files is a different question wearing the same words.
 
 A fork inherits no plugins, though, so it lands on that same **Load plugins** step before it answers
 anything, with the parent's switches already set the way you left them. The step stands where the

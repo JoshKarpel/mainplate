@@ -147,10 +147,15 @@ def branch_named(session: str) -> str:
     to push it under. Reading, editing and every question `git` answers are fine detached; the one
     thing that is not is the thing a checkout of its own exists to make possible.
 
-    Named from the **session id**, so it is unique by construction and pushing two sessions' work
-    never collides on the remote. That is also why it is not derived from the session's title - two
-    sessions opened with the same message would collide, so the id would have to be in the name
-    anyway, and a title is prose where a ref is not.
+    Named from the **session id**, so it is unique by construction and two sessions pushing branches
+    this names never collide on the remote. That is also why it is not derived from the session's
+    title - two sessions opened with the same message would collide, so the id would have to be in
+    the name anyway, and a title is prose where a ref is not.
+
+    What that does not cover is a name somebody chose, and the fork page chooses one by default: it
+    offers the parent's branch, so a fork that keeps it shares it with its parent and the second of
+    the two to push is refused. That is the fork page's cost to state and `Choice.branch` states it;
+    a fork only lands here when the box was emptied.
     """
     return f"{BRANCH_PREFIX}{session[:BRANCH_ID]}"
 
@@ -311,6 +316,22 @@ class Store:
         """Whether a commit is already here, which is when a capture need not carry the one it stood on."""
         ran = await self.git("cat-file", "-t", commit)
         return ran.ok and ran.out == "commit"
+
+    async def upstream(self) -> tuple[str, ...]:
+        """
+        Every commit the store's refreshed branches are at, which a bundle has no need to carry.
+
+        What a session reaches with `git fetch` in its checkout, since `origin` there is this store,
+        so a session that rebased onto `origin/main` or merged it built on these. A bundle made thin
+        against the session's base alone would send every one of those commits back to the store that
+        handed them out; made thin against these too, it sends what the session made on top.
+
+        Read from the store rather than from the checkout's `refs/remotes/origin/*`, which are the
+        session's to rewrite: a bundle requiring a commit the store lacks is a refused fetch. The
+        cost, stated: one exclusion per branch the remote has, all on one `git bundle` argv.
+        """
+        listed = await self.demand("for-each-ref", "--format=%(objectname)", "refs/remotes/origin/")
+        return tuple(dict.fromkeys(object_id(line, "refs/remotes/origin") for line in listed.splitlines() if line))
 
     async def fetched(self, bundle: Path, head: str, into: str) -> str:
         """
@@ -535,9 +556,10 @@ class Checkout:
           so the reader's staged changes are theirs and two captures in flight write two files.
         - **Only where the store lacks the tree or that commit**, the sandbox commits the tree onto
           `HEAD` (onto the session's base, where `HEAD` names nothing) and bundles it, and the store
-          fetches the bundle. Everything the store already holds is left out of it, so the bundle is
-          what the session wrote and committed since and nothing more. An unchanged checkout, and a
-          fork that has not been touched, send nothing at all.
+          fetches the bundle. What the store's own refs already reach is left out of it - the base,
+          the last snapshot, a `HEAD` the store holds, and the refreshed branches a session catches
+          up with - so the bundle is what the session wrote and committed on top of those. An
+          unchanged checkout, and a fork that has not been touched, send nothing at all.
         - **In the store**, the snapshot is chained onto this session's snapshots, with the tip it
           read as the old value, so two captures racing each other both land rather than one
           overwriting the other.
@@ -564,16 +586,26 @@ class Checkout:
             await self.demand("add", "-A", environment=shadow, writable=(transfer,))
             tree = object_id(await self.demand("write-tree", environment=shadow, writable=(transfer,)), "write-tree")
             head, branch = await self.standing()
-            held_head = head is not None and await self.store.holds_commit(head)
-            if (head is not None and not held_head) or not await self.store.holds_tree(tree):
+            if head is None:
+                held_head, held_tree = False, await self.store.holds_tree(tree)
+            else:
+                held_head, held_tree = await asyncio.gather(self.store.holds_commit(head), self.store.holds_tree(tree))
+            if (head is not None and not held_head) or not held_tree:
                 incoming = f"{self.refs}/incoming/{token_hex(8)}"
                 carrying = f"{TRANSFER}/{token_hex(8)}"
                 under = head or base
                 commit = object_id(await self.demand("commit-tree", tree, "-p", under, "-m", why), "commit-tree")
                 await self.demand("update-ref", carrying, commit)
                 try:
-                    tip = await self.store.commit_at(self.snapshots_ref)
-                    excluding = (base, *((tip,) if tip is not None else ()), *((under,) if held_head else ()))
+                    tip, upstream = await asyncio.gather(
+                        self.store.commit_at(self.snapshots_ref), self.store.upstream()
+                    )
+                    excluding = (
+                        base,
+                        *upstream,
+                        *((tip,) if tip is not None else ()),
+                        *((under,) if held_head else ()),
+                    )
                     arrived = await self.bundled(carrying, incoming, excluding=excluding, transfer=transfer)
                 finally:
                     await self.git("update-ref", "-d", carrying)
@@ -595,12 +627,21 @@ class Checkout:
 
         Either may be nothing, and neither is a failure: an orphan branch has no commit yet, and a
         detached `HEAD` has no branch. Asked in the sandbox like every other git against a checkout,
-        since both read what the session wrote.
+        since both read what the session wrote. Two sandboxes at once rather than one after the other,
+        since neither answer depends on the other and every capture waits on both.
+
+        **The full ref and never `--short`.** A short name is whatever is unambiguous among *all* of
+        the checkout's refs, so a branch `v1` beside a tag `v1` comes back as `heads/v1`, which
+        `parse_branch` accepts as a name: the fork page would offer it and the fork would start and
+        push a branch called `heads/v1`. A `HEAD` pointing anywhere but `refs/heads/` is on no branch.
         """
-        named = await self.git("rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+        named, on = await asyncio.gather(
+            self.git("rev-parse", "--verify", "--quiet", "HEAD^{commit}"),
+            self.git("symbolic-ref", "--quiet", "HEAD"),
+        )
         head = object_id(named.out, "HEAD") if named.ok and named.out else None
-        on = await self.git("symbolic-ref", "--quiet", "--short", "HEAD")
-        return head, parse_branch(on.out) if on.ok else None
+        branch = parse_branch(on.out) if on.ok and on.out.startswith("refs/heads/") else None
+        return head, branch
 
     async def chained(self, snapshot: Snapshot, why: str) -> Snapshot:
         """
@@ -642,13 +683,11 @@ class Checkout:
         """
         head = f"refs/heads/{branch}"
         commit = object_id(await self.demand("rev-parse", "--verify", f"{head}^{{commit}}"), head)
-        held = await self.store.git("cat-file", "-t", commit)
-        if not (held.ok and held.out == "commit"):
-            base = await self.store.commit_at(self.base_ref)
+        if not await self.store.holds_commit(commit):
+            base, upstream = await asyncio.gather(self.store.commit_at(self.base_ref), self.store.upstream())
+            excluding = (*((base,) if base is not None else ()), *upstream)
             with tempfile.TemporaryDirectory(prefix="mainplate-push-") as made:
-                commit = await self.bundled(
-                    head, f"{self.refs}/pushing", excluding=() if base is None else (base,), transfer=Path(made)
-                )
+                commit = await self.bundled(head, f"{self.refs}/pushing", excluding=excluding, transfer=Path(made))
         return await self.store.git("push", url, f"{commit}:{head}")
 
     async def paths(self, tree: str) -> tuple[str, ...]:

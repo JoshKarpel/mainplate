@@ -603,6 +603,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a rule always plants at that turn's own tree. Forking is that link, at a turn boundary, and the
   one end worth forking, an archived session's, carries the same link on the rule under its last
   turn. `Parent` stays, from any fork. Sessions recorded as asides are still drawn as they were.
+- Picking a repository up in a fork of a session that had none. A fork works in its parent's files:
+  its repository, or with no repository the same reach of the machine, and the fork page draws no
+  checkout control for any session. The network may still change there. Going to work in a
+  repository after talking something through with none is a new session.
 
 ## [0.0.1]
 

@@ -53,7 +53,7 @@ from mainplate.conversation import ARCHIVED_KEY
 from mainplate.conversation import Result
 from mainplate.conversation import before
 from mainplate.conversation import commit_command
-from mainplate.conversation import fork_point
+from mainplate.conversation import fork_branch
 from mainplate.conversation import heard_key
 from mainplate.conversation import instructing
 from mainplate.conversation import instructions_key
@@ -74,7 +74,6 @@ from mainplate.conversation import tree_key
 from mainplate.conversation import wrote_key
 from mainplate.durability import TOOK
 from mainplate.durability import ModelResponseTypeAdapter
-from mainplate.durability import parse_snapshot
 from mainplate.forge import Fetched
 from mainplate.forge import Reachable
 from mainplate.forge import Repository
@@ -1267,12 +1266,6 @@ TREES = (
 STOOD_ON = "4be1f0c6d2a95c1e7b3f80a4d9e2c6b1a7f3e5d0"
 
 
-def carrying(recorded: dict[str, object], at: int) -> str | None:
-    """The branch a fork before turn `at` is offered, by the rule `Service.branch_at` reads it with."""
-    snapshot = parse_snapshot(fork_point(recorded, at))
-    return None if snapshot is None else snapshot.branch
-
-
 def snapshotted(written: dict[str, object], branch: str | None) -> dict[str, object]:
     """
     The same checkpoint with a checkout state before each of a turn's model requests, and a batch's
@@ -1628,7 +1621,7 @@ CAPTIONS: Final[dict[str, str]] = {
     "dropped.html": "Nothing answering the session and nothing scheduled to.",
     "archived.html": "An archived session, muted, with the fork from its end as the one control left.",
     "forking.html": "Forking at a turn: what is carried over and what is left behind.",
-    "forking-attach.html": "Forking a session that worked in no repository, which is the one that may pick one up.",
+    "forking-no-repository.html": "Forking a session that works in no repository, which has no branch to carry on.",
 }
 
 
@@ -1831,7 +1824,7 @@ def pages(links: Links = LINKS) -> dict[str, str]:
         # Forking at turn 1, so the page has something to show as carried over and something to
         # leave behind: the fork keeps turn 0 and waits to be told turn 1 differently. This session
         # is already in a repository, so no repository control appears - it inherits that one - and
-        # the branch box holds the branch turn 1 started on, read the way `Service.branch_at` reads it.
+        # the branch box holds the branch turn 1 started on, by the `fork_branch` the console reads it with.
         "forking.html": fork_page(
             links,
             READER,
@@ -1841,12 +1834,12 @@ def pages(links: Links = LINKS) -> dict[str, str]:
             CATALOGUE,
             REACHABLE,
             REFERENCE,
-            carrying(settled, 1),
+            fork_branch(settled, 1),
         ),
-        # And a fork of a session in *no* repository, which is the one that may pick one up: the
-        # ordinary shape of having thought something through and then going to work on it. The
-        # choice is settled against having none, as the console would settle it, so the rail says so.
-        "forking-attach.html": fork_page(
+        # And a fork of a session in *no* repository, which has no branch to carry on and no files
+        # to say anything about, and like every fork draws no checkout control. The choice is
+        # settled against having none, as the console would settle it, so the rail says so.
+        "forking-no-repository.html": fork_page(
             links,
             READER,
             LISTED,

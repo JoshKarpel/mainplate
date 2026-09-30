@@ -47,6 +47,7 @@ from mainplate.conversation import declared_in
 from mainplate.conversation import deferred_in
 from mainplate.conversation import environment_in
 from mainplate.conversation import failure_in
+from mainplate.conversation import fork_branch
 from mainplate.conversation import fork_point
 from mainplate.conversation import opening_tree_key
 from mainplate.conversation import plugins_refused_in
@@ -61,7 +62,6 @@ from mainplate.conversation import setup_key
 from mainplate.conversation import setup_refused_in
 from mainplate.conversation import setups_in
 from mainplate.conversation import transcript
-from mainplate.durability import parse_snapshot
 from mainplate.footprint import Footprints
 from mainplate.forge import Fetched
 from mainplate.forge import Reachable
@@ -626,8 +626,26 @@ class Service:
         found = await read_session(self.database, session)
         if found is None:
             return None
-        found = self.footprinted(found)
+        return await self.conversation(found, await self.checkpointer.load(session))
+
+    async def forkable(self, session: str, at: int) -> tuple[Conversation, str | None] | None:
+        """
+        One session as the fork page asks about it: the conversation, and the branch a fork from
+        before turn `at` is offered, which is `fork_branch`'s answer.
+
+        Both from one load of the checkpoint, which is the reason this is not `read` and a second
+        call beside it: a conversation is the largest thing this console reads, and the branch is one
+        record inside it.
+        """
+        found = await read_session(self.database, session)
+        if found is None:
+            return None
         recorded = await self.checkpointer.load(session)
+        return await self.conversation(found, recorded), fork_branch(recorded, at)
+
+    async def conversation(self, found: Session, recorded: Mapping[str, object]) -> Conversation:
+        """One session's row and its checkpoint, as the `Conversation` every page of it draws from."""
+        found = self.footprinted(found)
         chosen = choice_of(recorded)
         working = chosen is not None and chosen.repository is not None
         facts = facts_of(self.catalogues.current, self.references.current, chosen) if chosen is not None else None
@@ -671,9 +689,9 @@ class Service:
             # one field along. A moment already passed is a wait that is over, whether or not the
             # pass it belongs to has run again.
             deferred=waiting_out(deferred_in(recorded), self.now()),
-            attention=await self.attention(session),
+            attention=await self.attention(found.id),
             repository=self.repository_of(chosen),
-            checkout=self.workspaces.at(session) if self.workspaces is not None and working else None,
+            checkout=self.workspaces.at(found.id) if self.workspaces is not None and working else None,
             runnable=self.commands is not None and self.workspaces is not None and working,
             window=facts.context if facts is not None else None,
             since=since,
@@ -889,22 +907,25 @@ class Service:
             return None
         recorded = await self.checkpointer.load(session)
         carried = before(recorded, at)
-        # A fork may *attach* a repository to a session that had none, and may not *swap* one for
-        # another. The two are not the same act. Swapping asks the new model to redo a turn against
-        # different files, which is a different question wearing the same words; attaching asks it
-        # to carry on with files where there were none, and the turns being inherited were not
-        # asked against other files, they were asked against no files at all. That is the ordinary
-        # shape of thinking something through and then going to work on it.
+        # **A fork works in what its parent worked in**: the same repository, or the same reach where
+        # there was none, whatever the caller said. The turns it carries were asked against those
+        # files, so a fork in other ones would be re-asking them against a different question
+        # wearing the same words. That holds for a session that had no files too: going to work in a
+        # repository after talking something through is a new session, where where to start can be
+        # asked. The cost, stated: what that conversation said comes across by hand.
         #
         # Decided here rather than trusted from the caller, so that a form which names nothing
-        # cannot quietly move a session out of its repository - which is exactly what the fork
-        # form, having no control for it, would otherwise do.
+        # cannot quietly move a session out of its files - which is exactly what the fork form,
+        # having no control for it, would otherwise do. The network is not the files, and a fork is
+        # the one moment it may change, like the model.
         was = choice_of(recorded)
-        held = was.repository if was is not None else None
-        chosen = replace(chosen, repository=chosen.repository if held is None else held)
-        # Settled *after* the repository is decided, and the order is the whole of it: a fork that
-        # inherits its parent's repository reaches that checkout whatever the form said, and one
-        # attaching a repository to a session that had none moves to `CHECKOUT` by the same rule.
+        if was is not None:
+            chosen = replace(
+                chosen,
+                repository=was.repository,
+                isolation=replace(chosen.isolation, filesystem=was.isolation.filesystem),
+            )
+        # Settled *after* the files are decided, so what they imply is made to agree with them.
         #
         # `forked` is what drops any base. A fork plants at the commit and the files of the turn it
         # re-asks, so a base beside that would be a second answer to where its files come from. The
@@ -948,7 +969,7 @@ class Service:
         # the repository's head there would hand the branch files the conversation never saw. So it
         # plants at the newest state the parent recorded - the one the reconciler captured on the way
         # to archiving it, which is the end the rule offers, or the last request's for an end reached
-        # by URL. Both halves are `fork_point`'s rule, which the fork page reads as well.
+        # by URL. Both halves are `fork_point`'s rule, which the fork page reads through `fork_branch`.
         started_on = fork_point(recorded, at)
         if started_on is not None:
             await self.checkpointer.supply(forked.id, opening_tree_key(at), started_on)
@@ -976,18 +997,6 @@ class Service:
             # until somebody typed, and the settings step would have nothing to draw.
             await self.durable.scheduler.make_ready(forked.id)
         return forked
-
-    async def branch_at(self, session: str, at: int) -> str | None:
-        """
-        The branch a fork from before turn `at` would carry on, as the parent was on it then.
-
-        What the fork page pre-fills, read from the same recorded state `fork` plants the fork at, so
-        the name offered is the one that state's commit was under. Nothing on a detached `HEAD`, and
-        nothing where the parent recorded no checkout, and the box is then empty and the fork gets a
-        branch of its own.
-        """
-        snapshot = parse_snapshot(fork_point(await self.checkpointer.load(session), at))
-        return None if snapshot is None else snapshot.branch
 
     async def archive(self, session: str) -> Session | None:
         """

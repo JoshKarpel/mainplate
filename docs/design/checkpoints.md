@@ -129,8 +129,8 @@ the turn did anything. Nothing draws it, since a snapshot is never something a r
 
 `instructions:{n}` is the one key here that is neither turn-prefixed nor named after an entry, and
 both halves of that are decided. Not turn-prefixed, because `before` copies those by shape and a
-fork that attached a repository its parent never had would inherit instructions with no guidance in
-them. Not session-level, because a forget ends a stretch of context and composing again there is
+fork that turned the network the other way, or whose plugins say something else once they are set
+up again, would inherit instructions describing its parent. Not session-level, because a forget ends a stretch of context and composing again there is
 free: the prefix it would have invalidated has just been thrown away.
 
 `archived` and `archived:tree` are session-level for the reason a fork of an archived session is a

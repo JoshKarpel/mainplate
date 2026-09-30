@@ -1250,8 +1250,9 @@ def instructions_key(began: int) -> StepKey:
 
     **Not `turn:{n}:instructions`**, deliberately, and the fork is what decides it: `before` copies
     turn-prefixed keys by shape, so a turn-shaped name would carry a parent's instructions into a
-    branch that may have attached a repository the parent never had. Named this way a fork composes
-    its own, which is what a session that can differ in its choice should do.
+    branch that may have turned the network the other way and sets its plugins up again, both of
+    which are in what it is told. Named this way a fork composes its own, which is what a session
+    that can differ in its choice should do.
     """
     return f"instructions:{began}"
 
@@ -2541,14 +2542,29 @@ def fork_point(recorded: Mapping[str, object], at: int) -> object | None:
     newest one the parent recorded, which is `latest_tree`'s rule. Nothing where the parent recorded
     none, which a session that never reached a turn has.
 
-    One rule read by two callers, `Service.fork` carrying it across and the fork page pre-filling
-    the branch it names, so the branch a person is offered is the branch of the state the fork will
-    actually be planted at.
+    One rule read by two callers, `Service.fork` carrying it across and `fork_branch` naming the
+    branch the fork page pre-fills, so the branch a person is offered is the branch of the state the
+    fork will actually be planted at.
     """
     started_on = recorded.get(opening_tree_key(at))
     if started_on is None and at > 0:
         return latest_tree(recorded)
     return started_on
+
+
+def fork_branch(recorded: Mapping[str, object], at: int) -> str | None:
+    """
+    The branch a fork from before turn `at` is offered, as the parent was on it at `fork_point`.
+
+    What the fork page's box starts out holding, so carrying the parent's work on under its own name
+    needs nothing typed. Nothing on a detached `HEAD`, and nothing where the parent recorded no
+    checkout, and the box is then empty and the fork gets a branch of its own.
+
+    A function of the checkpoint rather than a call that loads one, so the fork page reads it out of
+    the load it already made, and the gallery draws that page by the same rule instead of a copy.
+    """
+    snapshot = parse_snapshot(fork_point(recorded, at))
+    return None if snapshot is None else snapshot.branch
 
 
 def parse_failed(recorded: object) -> records.Failed:

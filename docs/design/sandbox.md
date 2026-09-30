@@ -224,11 +224,10 @@ with it and make "the whole machine with no network" unrepresentable. `Sandbox.e
 read-write instead of a checkout and changes nothing else, which is why there is one `argv` rather
 than two.
 
-**The repository and the filesystem level are one question, asked once.** On the dashboard it is
-the card you press **New session** on; on the fork page `workspace_cards` is the group: every
-repository a forge reaches, plus `only scratch` and `whole machine`. Picking one
-settles `Choice.repository` and `isolation.filesystem` together, so they cannot disagree at the
-source. `posted_workspace` is where one posted value becomes the two recorded ones, told apart
+**The repository and the filesystem level are one question, asked once.** It is the card you press
+**New session** on, on the dashboard: every repository a forge reaches, plus `only scratch` and
+`whole machine`. Picking one settles `Choice.repository` and `isolation.filesystem` together, so
+they cannot disagree at the source, and a fork inherits both. `posted_workspace` is where one posted value becomes the two recorded ones, told apart
 without a prefix because a repository's id is `forge:key` and so always holds a colon.
 
 That is a correction rather than the first design, and the reason is worth keeping. They were two

@@ -235,13 +235,9 @@ ENDPOINT_TOGGLE_ID: Final = "open-endpoint"
 
 MODEL_TOGGLE_ID: Final = "open-model"
 
-REPOSITORY_TOGGLE_ID: Final = "open-repository"
-
 THINKING_TOGGLE_ID: Final = "open-thinking"
 
 THINKING_ID: Final = "thinking"
-
-REPOSITORY_ID: Final = "repository"
 
 NETWORK_TOGGLE_ID: Final = "open-network"
 NETWORK_ID: Final = "network"
@@ -249,21 +245,24 @@ NETWORK_ID: Final = "network"
 TRUST_TOGGLE_ID: Final = "open-trust"
 TRUST_ID: Final = "trust"
 
-# The one field the checkout group posts. Form-only rather than a recorded field, because what
-# it carries is *two* recorded things at once - a repository and a filesystem level - and which
-# two is decided by parsing it, at the boundary, once.
+# The one field that says what files a session has, posted hidden by the new-session page for the
+# workspace the dashboard answered. Form-only rather than a recorded field, because what it carries
+# is *two* recorded things at once - a repository and a filesystem level - and which two is decided
+# by parsing it, at the boundary, once.
 WORKSPACE_FIELD: Final = "workspace"
 
-# What the two fields under the repository cards are, as one thing to swap: picking a repository
-# replaces the whole block so the completions are that repository's. Both are named here because the
-# card carries the target and the block carries the id, and the two must not drift.
+# What the two fields under the new-session page's heading are, as one thing to swap: the block
+# asks for the repository's branches once it has arrived and is replaced whole by the answer. Named
+# here because the asking element carries the target and the block carries the id, and the two must
+# not drift.
 BASIS_ID: Final = "basis"
 OVERRIDE_ID: Final = "output-override"
 BRANCHES_ID: Final = "branches"
 FOUND_ID: Final = "branches-found"
 
 # The dots inside that block, shown while the forge is being asked what branches it has. Named here
-# for the same reason the block is: the card points `hx-indicator` at it and the block draws it.
+# for the same reason the block is: the asking element points `hx-indicator` at it and the block
+# draws it.
 BASIS_LOADING_ID: Final = "basis-loading"
 
 SENDING_ID: Final = "sending"
@@ -1977,57 +1976,6 @@ def trust_cards(trusted: bool) -> Element:
     )
 
 
-def workspace_card(links: Links, naming: str, value: str, saying: str, chosen: bool) -> Element:
-    """
-    One answer to what files a session has: a repository of its own, or one of the two that are not.
-
-    A card rather than an `<option>`, and that is what the second line is drawn on: an `<option>`
-    renders as text in every browser, so neither the forge a repository came from nor what a level
-    means has anywhere to go inside a select. A row here carries it, which matters the moment two
-    rows read `owner/repo` from different places.
-
-    The `hx-get` is the same shape the endpoint cards use one group down, and for the same reason:
-    what a session may *start at* is whatever this repository's branches are, so picking one asks for
-    those and swaps the block under the cards. htmx sends the triggering input's own value, so it
-    needs no interpolation, and the two cards that are not repositories ask the same question and get
-    a block with no completions - which is what stops a list going stale under a reader who changed
-    their mind about where they were working.
-
-    `outerHTML` and not `outerMorph`, exactly as the model group is: the point of the swap is that
-    the completions are now a *different* list, and merging would keep suggestions from a repository
-    nobody is looking at any more.
-    """
-    return label(
-        cls="repo",
-        attrs={"data-name": naming},
-        children=[
-            input_(
-                cls="repo__pick",
-                attrs={
-                    "type": "radio",
-                    "name": WORKSPACE_FIELD,
-                    "value": value,
-                    "checked": chosen,
-                    "form": CHOOSING_ID,
-                    "hx-get": links.to_workspace_branches(),
-                    "hx-target": f"#{BASIS_ID}",
-                    "hx-swap": "outerHTML",
-                    # The dots inside the block being replaced, rather than the card that asked:
-                    # what a reader is waiting on is the fields, and the card has already answered
-                    # by drawing itself picked. Being inside the target is what makes it right
-                    # rather than a problem - it is shown for exactly as long as the block it is
-                    # standing in for has not arrived, and the swap that ends the request removes it.
-                    "hx-indicator": f"#{BASIS_LOADING_ID}",
-                    "hx-status:4xx": "swap:none",
-                    "hx-status:5xx": "swap:none",
-                },
-            ),
-            span(cls="repo__name", children=naming),
-            span(cls="repo__forge", children=saying),
-        ],
-    )
-
-
 def starting_at(repository: str | None, base: str | None, branch: str | None, branches: Sequence[str] = ()) -> Element:
     """
     Where in the repository the checkout starts, and what branch it starts there.
@@ -2049,18 +1997,13 @@ def starting_at(repository: str | None, base: str | None, branch: str | None, br
     makes the first one work.
 
     **With no repository there are no fields, and the block is an empty anchor.** A base and a branch
-    are answers *about* a repository, so with `only scratch` or `whole machine` picked they are two
-    boxes asking a question the session does not have - and `Choice.settled` drops whatever they hold
-    anyway, which is a form saying one thing and a record keeping another. That is not the greying
-    `workspace_cards` was written to undo, because nothing here is kept in step with anything: which
-    fields exist and which branches complete them are one answer, decided in this one call from the
-    same `repository`, and delivered by the one swap a card already makes. The anchor stays so the
-    next pick has something to target.
+    are answers *about* a repository, so with `only scratch` or `whole machine` they are two boxes
+    asking a question the session does not have - and `Choice.settled` drops whatever they hold
+    anyway, which is a form saying one thing and a record keeping another. The new-session page
+    draws no block for such a workspace, so this arm is what `/fragments/branches` answers for one.
 
-    The cost, with htmx absent: a card cannot reveal the fields, so a session started that way begins
-    on the repository's default branch under the name this console gives it. The branches were already
-    the swap's to deliver, so what is given up is naming a base by hand on a page whose scripts did
-    not load.
+    With htmx absent the fields are still there, drawn with no completions by the page itself, so
+    what is given up is only the list of what the repository has.
 
     Both are optional and the placeholders say what leaving them does, which is the whole of what
     keeps two more fields from becoming two more steps: blank is the repository's default branch as
@@ -2071,11 +2014,10 @@ def starting_at(repository: str | None, base: str | None, branch: str | None, br
     would stop the next one planting at all. So one says where to begin and the other says what to
     begin, and the placeholder on this one has to say so rather than implying the first answers both.
     """
-    # The branches come off a forge, so a card is picked and the fields under it *arrive*: on a cold
-    # clone that is seconds of a block that has not changed yet, which reads as a card that did
-    # nothing. The dots are drawn in both shapes because both are what a pick lands on, including the
-    # empty anchor a repository is picked *from*. They take no room until the request starts; see
-    # `.basis__loading`.
+    # The branches come off a forge, so the completions *arrive* after the page does: on a cold clone
+    # that is seconds of a field with nothing under it, which reads as a repository with no branches.
+    # The dots are drawn in both shapes because both are what the swap can land on. They take no room
+    # until the request starts; see `.basis__loading`.
     loading = working(saying="loading branches", extra="basis__loading", identified=BASIS_LOADING_ID)
     if repository is None:
         return div(attrs={"id": BASIS_ID}, children=loading)
@@ -2184,81 +2126,9 @@ def branch_field(saying: str, branch: str | None, placeholder: str) -> Element:
     )
 
 
-def workspace_cards(
-    links: Links,
-    reachable: Reachable,
-    repository: str | None,
-    chosen: Filesystem,
-    base: str | None = None,
-    branch: str | None = None,
-) -> Element:
-    """
-    What files a session has, as **one** question rather than two that must be kept agreeing.
-
-    A repository and a filesystem level used to be separate groups, and that was the mistake: the
-    level a repository implies is not a second decision beside it, so the two controls had to be kept
-    in step - the checkout level greyed until a repository was picked, a swap to update the greying,
-    and a filter that could name a card it must not check. Every one of those is machinery for
-    keeping one answer stored in two places, which is the thing this console refuses everywhere else.
-
-    Asked once, the answers are simply the cards: each repository this console can reach, and the two
-    that are not a repository. Picking one settles `repository` and `isolation.filesystem` together,
-    so they cannot disagree at the source rather than being reconciled after the fact.
-
-    Values are the repository's id or the `Filesystem` member's own name, and that is unambiguous
-    rather than lucky: an id is `forge:key`, so it always holds a colon and can never be either name.
-
-    `whole machine` is worth reading twice before picking. A session on it can read this
-    console's own configuration, which holds the credentials, and its store, which holds every other
-    conversation. It is still inside a sandbox, so the network answer below still means what it says,
-    but nothing about the filesystem is held back.
-
-    Labels come from `Reachable`, which qualifies a row only where two would otherwise read the same:
-    the same repository can be attached twice with different rights, and choosing between two
-    identical rows is guessing.
-    """
-    rows = reachable.labelled()
-    return choosing(
-        "Checkout",
-        REPOSITORY_TOGGLE_ID,
-        [*(naming for naming, _, _ in WITHOUT_A_REPOSITORY), *(naming for _, naming in rows)],
-        div(
-            cls="repos",
-            attrs={"id": REPOSITORY_ID, "role": "radiogroup", "aria-label": "Checkout"},
-            children=[
-                div(
-                    cls="repos__grid",
-                    children=[
-                        *(
-                            workspace_card(
-                                links, naming, level.value, saying, chosen=repository is None and level is chosen
-                            )
-                            for naming, level, saying in WITHOUT_A_REPOSITORY
-                        ),
-                        *(
-                            workspace_card(links, naming, reached.id, reached.forge, reached.id == repository)
-                            for reached, naming in rows
-                        ),
-                    ],
-                ),
-                # Under the cards rather than beside them, because they are details of the answer
-                # above: which repository comes first, and where in it comes after. So a workspace
-                # that is not a repository has none of them, and a page nobody has picked on yet is
-                # that case.
-                #
-                # With no completions, always: asking a repository what branches it has to draw a
-                # page on which that field may never be looked at is a network call for nothing.
-                # Picking a card is what fetches the one list that matters.
-                starting_at(repository, base, branch),
-            ],
-        ),
-    )
-
-
 def picker(
     links: Links,
     catalogue: Catalogue,
-    reachable: Reachable | None,
     reference: Reference | None,
     chosen: Choice | None = None,
     naming: Placed = None,
@@ -2268,17 +2138,22 @@ def picker(
     """
     Everything a session is decided by, laid out as the question it actually is.
 
+    **What files the session has is never asked here.** A new session's was answered by the press on
+    the dashboard, and a fork's is its parent's, so on both pages it is settled before this is drawn,
+    and a control for it would be a lie about what the page does.
+
     `leading` is what the page puts above every question, which on the new-session page is the
-    workspace already answered and where in it to start. Handed in for the reason `naming` is: the
-    fork page asks the same questions and has none of that to say.
+    workspace already answered and where in it to start, and on the fork page is the branch the fork
+    carries on. Handed in for the reason `naming` is: the two pages ask the same questions and have
+    different things to say before them, and a fork of a session in no repository has nothing.
 
     One block rather than a row of selects, because choosing a model is the one real decision on
     this page and a row of selects made it look like a footnote to the message box.
 
-    **The order is what a session is decided by, widest first: where it works, what answers it,
-    which model, how hard that model thinks, and how much it may say.** The repository comes first
-    because it is the broadest of them and the only one that decides what the agent can touch at
-    all; the endpoint and the model are next and are adjacent because they are a pair, the list
+    **The order is what a session is decided by, widest first: what it may do with its files, what
+    answers it, which model, how hard that model thinks, and how much it may say.** The network and
+    the repository's code come first because they are the broadest of what is left and decide what
+    the agent can do at all; the endpoint and the model are next and are adjacent because they are a pair, the list
     being whatever the endpoint above it offers; the thinking level and the output override are last
     because they are settings on the model rather than choices beside it, and the override after the
     level because it is the one almost nobody touches.
@@ -2294,12 +2169,6 @@ def picker(
     A fork passes the parent's own choice instead, so continuing on the same model is the path that
     needs nothing touched: the fork exists to let the choice change, not to require it.
 
-    Whether the checkout *can* be chosen here is the caller's answer, given as `None` rather than
-    as an empty set: a fork of a session already in a repository is handed `None`, because it
-    inherits that one and a control that could not be honoured would be a lie about what the page
-    does. An empty `Reachable` is a different thing and still draws the group, since a machine with
-    no forge attached still has two answers worth offering.
-
     A choice naming an endpoint the catalogue no longer has falls back to the default rather than
     rendering a picker with nothing selected. That is the same case `stalled_by` explains on the
     session page, and here there is a sensible thing to show.
@@ -2309,24 +2178,10 @@ def picker(
         cls="picker",
         children=[
             leading,
-            *(
-                ()
-                if reachable is None
-                else (
-                    workspace_cards(
-                        links,
-                        reachable,
-                        starting.repository,
-                        starting.isolation.filesystem,
-                        starting.base,
-                        starting.branch,
-                    ),
-                )
-            ),
-            # The network sits under the checkout and above the endpoint, because that is the order
-            # of breadth: what a session's files are decides what it can touch, whether it can dial
-            # out decides what it can do with them, and the endpoint and model only decide who
-            # answers.
+            # The network sits under what the page leads with and above the endpoint, because that is
+            # the order of breadth: what a session's files are decides what it can touch, whether it
+            # can dial out decides what it can do with them, and the endpoint and model only decide
+            # who answers.
             network_cards(starting.isolation.network),
             # Whether the repository's own code runs, directly under what the session can reach and
             # whether it can dial out, because it is the third question about the same subject: what
@@ -5426,7 +5281,6 @@ def new_session_page(
                         children=picker(
                             links,
                             catalogue,
-                            None,
                             reference,
                             chosen=chosen,
                             naming=naming(),
@@ -5451,8 +5305,8 @@ def new_session_page(
                                     *(
                                         (
                                             # The block that asks for its own completions once it is on
-                                            # the page, which is the same swap a workspace card makes
-                                            # on the fork page, fired by arriving rather than by a pick.
+                                            # the page, so the page is drawn without waiting on the
+                                            # forge.
                                             div(
                                                 attrs={
                                                     "hx-get": f"{links.to_workspace_branches()}?{urlencode({WORKSPACE_FIELD: repository})}",
@@ -5965,21 +5819,6 @@ def runs_in(showing: Conversation) -> str | None:
     return where_it_works(showing.repository, showing.chosen.branch if showing.chosen is not None else None)
 
 
-def attachable(showing: Conversation, reachable: Reachable) -> Reachable | None:
-    """
-    What a fork of this session may work in, or nothing at all once the question is already answered.
-
-    A fork attaches a repository or inherits one; it never swaps. `None` rather than an empty set of
-    choices, and the difference is load-bearing now that the checkout group holds more than
-    repositories: empty means "no forge reaches anything", which still leaves two answers worth
-    offering, where `None` means the question is settled and the control would be a lie about what
-    the page does. Answering it here is what keeps `picker` a rendering rather than a place that
-    knows the rule.
-    """
-    settled = showing.chosen is not None and showing.chosen.repository is not None
-    return None if settled else reachable
-
-
 def inheriting(at: int, asking: bool) -> str:
     """
     What a fork from `at` would carry, said in turns.
@@ -6043,8 +5882,10 @@ def fork_page(
     **The git branch is asked the same way**, above everything else because it is the one question
     about the files: `carrying` is the branch the parent was on when the forked turn began, already
     in the box, so carrying the work on under its own name needs nothing typed. Emptied, the fork
-    gets a branch of its own. Only for a session already in a repository; one in none picks its
-    repository and its branch together in the picker, as a new session does.
+    gets a branch of its own. Only for a session in a repository, since one in none has no branch.
+
+    **What files the fork works in is not asked at all**, because it is not the fork's to change:
+    it works in what its parent worked in, and `Service.fork` holds it to that.
     """
     kept = tuple(panel for panel in showing.said.panels if panel.turn < at)
     asked = showing.said.asked_at(at)
@@ -6087,17 +5928,13 @@ def fork_page(
                             },
                             children=asked or "",
                         ),
-                        # A repository is offered only to a fork of a session that has none.
-                        # One already in a repository inherits it, so there is nothing to choose;
-                        # one in none may pick a repository up here, which is the ordinary shape
-                        # of having thought something through and then going to work on it.
                         picker(
                             links,
                             catalogue,
-                            attachable(showing, reachable),
                             reference,
                             showing.chosen,
-                            # A fork begins with its parent's current title; it can be renamed later.
+                            # No `naming`: a fork begins with its parent's current title, and it can
+                            # be renamed later.
                             leading=(
                                 div(
                                     cls="basis",

@@ -140,9 +140,10 @@ have to be in it anyway. A name somebody typed always wins over the generated on
 
 It is filled by `Service.start` and `Service.fork` rather than by `Choice.settled`, and that split
 is the same one `settled` already makes: `settled` is a rule about a choice on its own, where this
-needs the session's id. A fork takes one of its **own** for the same reason it drops its parent's,
-that a push from the fork would otherwise land on the parent's branch, and dropping without filling
-would land every fork on a detached `HEAD`, which is exactly where somebody carries on working.
+needs the session's id. A fork is offered its parent's branch, and takes one of its **own** where
+that box was emptied, since leaving it unfilled would put the fork on a detached `HEAD`, which is
+exactly where somebody carries on working. A fork that keeps the parent's name is the one case this
+uniqueness does not cover; the fork's own bullet below says what that costs.
 
 **They are two questions and not one, because where work begins is not where it goes.** A session
 started at `main` and left *on* `main` is one whose push lands on `main`, which is rarely what
@@ -159,14 +160,9 @@ Five things there are decided rather than incidental:
   `scripts/seed.py`, which is the one writer that is not the service.
 - **With no repository the two controls are not drawn at all**, so a page never asks a question the
   session does not have, and the record `settled` would drop is never posted in the first place.
-  That is not the greying `workspace_cards` was written to undo, and the difference is that nothing
-  is kept in step: which fields exist and which branches complete them are one answer, decided in
-  one call from the same `repository`, delivered by the one swap picking a card already makes. The
-  block stays as an empty anchor, since it is what the next pick targets. What it costs with
-  `mainplate.js` and htmx absent is naming a base by hand: a card cannot then reveal the fields, and
-  such a session starts on the repository's default branch under the name this console gives it. The
-  completions were always the swap's to deliver, so that page was already the lesser half of this
-  control.
+  Which fields exist and which branches complete them are one answer, decided in `starting_at` from
+  the same `repository`. With `mainplate.js` and htmx absent the fields are still drawn, with no
+  completions, so what is given up is only the list of what the repository has.
 - **A fork carries no base, and its branch is the one its fork page posted.** A fork plants at the
   commit its parent recorded for the turn it re-asks, so a base beside that is a second answer to
   where its files come from, and `settled(forked=True)` drops one. The branch is a different
@@ -201,22 +197,22 @@ Five things there are decided rather than incidental:
 
     Two cases skip the fetch and both would be round trips that cannot change an answer: a store
     that has just been cloned is current by construction, and a fork plants at a recorded
-    snapshot, whose tree and commit a capture already carried into the store.
+    snapshot, whose tree and commit a capture already carried into the store. A fork of a parent
+    on an orphan branch recorded no commit and stands on the default branch like a new session, so
+    it fetches like one.
 
-- **The branches are offered rather than enumerated, and asked of the remote.** Picking a workspace
-  card swaps the block under the cards through `/fragments/branches`, which is the shape the model
-  group already has under the endpoint cards and for the same reason: what a repository's branches
-  are has a different answer per card, so a page that serialized one list would be completing the
-  wrong repository's the moment somebody changed their mind. `Clones.branches` runs `git ls-remote`,
+- **The branches are offered rather than enumerated, and asked of the remote.** The new-session page
+  asks for them once it has arrived, swapping the block under its heading through
+  `/fragments/branches`, so the page is drawn without waiting on the forge. `Clones.branches` runs `git ls-remote`,
   which transfers no objects, so it needs no store, which is the point, since the very first session
   on a repository is both the case with no store and the case where saying where to start matters
   most. It promises not to raise, `forge.offers`-style, so an unreachable host costs a suggestion
   rather than an ability.
 
-    Asking the remote is a round trip, so the fields *arrive* rather than appear, and on a slow
-    remote that is seconds of a block that has not changed yet: a card pressed and nothing under it,
-    which reads as a card that did nothing. So the block draws the same three dots a turn with no
-    answer yet draws, as the card's `hx-indicator`. They stand **inside the block being replaced**,
+    Asking the remote is a round trip, so the completions *arrive* rather than appear, and on a slow
+    remote that is seconds of a field with nothing under it, which reads as a repository with no
+    branches. So the block draws the same three dots a turn with no answer yet draws, as the
+    request's `hx-indicator`. They stand **inside the block being replaced**,
     which is what makes them right rather than a problem: they are shown for exactly as long as the
     thing they stand in for has not arrived, and the swap that ends the request removes them. They
     are hidden by `display` and not by the `opacity` htmx's own indicator rules toggle, which is the
@@ -280,11 +276,14 @@ Six things there are easy to undo:
   `write-tree` and the two questions about `HEAD` run behind `bwrap` through `Checkout.git`. Where
   the store does not already hold that tree or that commit, the sandbox commits the tree onto
   `HEAD` (onto the session's base, on an orphan branch with no commit yet) and bundles it, excluding
-  the base, the session's last snapshot and a `HEAD` the store already holds, so what crosses is
-  what the session wrote and committed since; the store fetches the bundle, reads the tree and the
-  commit under it back out of itself and refuses either one the checkout misreported. The branch is
-  the one thing taken on the checkout's word, because it is a name and not an object: it goes through
-  `parse_branch`, and only ever pre-fills a box on the fork page. An untouched checkout, or a fork
+  the base, the session's last snapshot, a `HEAD` the store already holds and every branch the store
+  last fetched, so what crosses is what the session wrote and committed on top of those, and a
+  session that rebased onto `origin/main` does not send `main` back; the store fetches the bundle,
+  reads the tree and the commit under it back out of itself and refuses either one the checkout
+  misreported. The branch is the one thing taken on the checkout's word, because it is a name and
+  not an object: it is read as the full `refs/heads/` ref, since a short name is `heads/v1` wherever
+  a tag is also called `v1`, goes through `parse_branch`, and only ever pre-fills a box on the fork
+  page. An untouched checkout, or a fork
   nobody has changed yet, sends nothing. The checkout is the one directory a session may write and
   its configuration names programs git runs, so
   [the parent reads none of it](security.md#the-parent-never-runs-git-against-a-checkout). The cost,
@@ -342,8 +341,8 @@ back unstaged, since the snapshot's index was its own and not the session's.
 
 **The branch is the person's to pick.** The fork page's box starts out holding the branch the
 parent was on then, so carrying the work on under its own name needs nothing typed, and an emptied
-box gives the fork one of its own. `Service.branch_at` reads it out of the same record the fork
-will be planted at, through `fork_point`, so the name offered is the one that commit was under.
+box gives the fork one of its own. `fork_branch` reads it out of the same record the fork will be
+planted at, through `fork_point`, so the name offered is the one that commit was under.
 
 The mechanism is one extra key rather than planting a checkout in a request handler:
 `Service.fork` copies `turn:{at}:tree:0` across on its own, even though that turn's prompt and
@@ -351,13 +350,14 @@ messages are *not* inherited, and the fork's first pass plants at whatever state
 recorded for the turn it is about to run. The `:0` is the point: a turn records a snapshot per model
 request, and what a fork wants is the one before the turn did anything.
 
-### A fork may attach a repository and may not swap one
+### A fork works in its parent's files
 
-The two look alike and are not. Swapping re-asks a turn against different files, which is a
-different question wearing the same words and invisible in the transcript; attaching carries on with
-files where there were none, and the turns being inherited were not asked against *other* files,
-they were asked against none. So a session in a repository inherits it and its fork page renders no
-control, and a session in none is offered the picker. `Service.fork` decides that rather than
+A fork works in its parent's repository, or with the same reach of the machine where the parent had
+none, and its fork page draws no checkout control. Changing them would re-ask the carried turns
+against different files, which is a different question wearing the same words and invisible in the
+transcript. That holds for a parent with no files too: going to work in a repository after talking
+something through with none is a new session, where where to start can be asked. The cost, stated:
+what that conversation said comes across by hand. `Service.fork` decides all of it rather than
 trusting what the form posted, which is what stops a form with no repository field quietly moving a
 branch out of its repository, the bug that shape of trust actually produced.
 

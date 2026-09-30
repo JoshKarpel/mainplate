@@ -2522,7 +2522,7 @@ pre.lines > code {
 /* Shut: everything not picked is gone, and so is the provider heading over it - a lone card under
    `ANTHROPIC` is a group of one, which is not what a settled choice looks like - and so is the box
    for narrowing a list that is not being shown. */
-.picker__part:not(:has(> .picker__toggle:checked)) :is(.endpoint, .model, .network, .repo, .think):not(:has(:checked)),
+.picker__part:not(:has(> .picker__toggle:checked)) :is(.endpoint, .model, .network, .think):not(:has(:checked)),
 .picker__part:not(:has(> .picker__toggle:checked)) .models__provider:not(:has(.model__pick:checked)),
 .picker__part:not(:has(> .picker__toggle:checked)) .models__heading,
 .picker__part:not(:has(> .picker__toggle:checked)) .picker__filter {
@@ -2555,20 +2555,10 @@ pre.lines > code {
     display: none;
 }
 
-/* --- Where a session works, and how hard it thinks ---------------------- */
+/* --- Where a session starts, and how hard it thinks --------------------- */
 
-/* Both are rows rather than a grid of cards with facts on them: a repository is a name and where it
-   came from, and a thinking level is one word. Cards all the same, so the fold, the count and the
-   narrowing are one mechanism across every question this page asks. */
-.repos__grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(20rem, 100%), 1fr));
-    gap: var(--space-3);
-}
-
-/* Where in the repository the checkout starts, under the cards that say which repository. Two text
-   boxes rather than cards, because neither has a closed set to draw; laid out on the same grid as
-   the cards above so the group reads as one question with its details under it. */
+/* Where in the repository the checkout starts, under the heading that says which repository. Two
+   text boxes rather than cards, because neither has a closed set to draw. */
 .basis {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(20rem, 100%), 1fr));
@@ -2718,7 +2708,9 @@ pre.lines > code {
     gap: var(--space-3);
 }
 
-.repo,
+/* Rows rather than a grid of cards with facts on them: a network answer and a thinking level are a
+   word or two. Cards all the same, so the fold, the count and the narrowing are one mechanism across
+   every question this page asks. */
 .network,
 .think {
     position: relative;
@@ -2732,13 +2724,11 @@ pre.lines > code {
     cursor: pointer;
 }
 
-.repo:hover,
 .network:hover,
 .think:hover {
     border-color: color-mix(in srgb, var(--person-edge) 45%, var(--edge));
 }
 
-.repo__pick,
 .network__pick,
 .think__pick {
     position: absolute;
@@ -2748,48 +2738,27 @@ pre.lines > code {
     pointer-events: none;
 }
 
-.repo:has(.repo__pick:checked),
 .network:has(.network__pick:checked),
 .think:has(.think__pick:checked) {
     border-color: var(--person-edge);
     background: color-mix(in srgb, var(--person-edge) 8%, var(--raised));
 }
 
-.repo:has(.repo__pick:focus-visible),
 .network:has(.network__pick:focus-visible),
 .think:has(.think__pick:focus-visible) {
     outline: 2px solid var(--mark);
     outline-offset: 2px;
 }
 
-.repo__name {
-    min-width: 0;
-    font-weight: 600;
-    overflow-wrap: anywhere;
-}
-
-/* Which forge reached it, which is the fact that tells two rows apart once there is more than one
-   place repositories come from. Last in the row and quiet, like the endpoint's format. */
-.repo__forge {
-    margin-left: auto;
-    font-family: var(--mono);
-    font-size: 0.68rem;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--tool-edge);
-}
-
-/* Whole, and never broken mid-word, which is where this differs from a repository's name: those are
-   `owner/some-very-long-repository` and genuinely have to break somewhere, where every name in this
-   group is one or two short words. Given the room to shrink it wrapped `trusted` as `truste` / `d`
+/* Whole, and never broken mid-word: every name in this group is one or two short words. Given the room to shrink it wrapped `trusted` as `truste` / `d`
    on a phone, which reads as a rendering fault. The note beside it is what gives up width instead. */
 .network__name {
     flex: none;
     font-weight: 600;
 }
 
-/* What the level actually means, in the quiet voice the forge uses on a repository row: the name is
-   what you pick by, and this is what stops you picking the wrong one. */
+/* What the level actually means, in a quieter voice than its name: the name is what you pick by,
+   and this is what stops you picking the wrong one. */
 .network__note {
     margin-left: auto;
     font-size: 0.72rem;
@@ -2804,13 +2773,11 @@ pre.lines > code {
 
 /* The picker sits on a raised card on the fork page, so its own cards need a ground to stand out
    from rather than the one they are already on - the same trade the endpoints and models make. */
-.forking .repo,
 .forking .network,
 .forking .think {
     background: var(--ground);
 }
 
-.forking .repo:has(.repo__pick:checked),
 .forking .network:has(.network__pick:checked),
 .forking .think:has(.think__pick:checked) {
     background: color-mix(in srgb, var(--person-edge) 8%, var(--ground));
@@ -4713,14 +4680,12 @@ main:has(> .forking) {
         .starting button,
         .setup__set,
         .picker__filter-field,
-        .repo,
         .think {
             min-height: 2.75rem;
         }
 
         /* A card is a row here, so it wants its text centred in the height a thumb needs rather
            than sitting at the top of it. */
-        .repo,
         .think {
             align-items: center;
         }

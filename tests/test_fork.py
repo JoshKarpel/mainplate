@@ -86,8 +86,8 @@ class TestReadingAKeyBack:
         What the key's shape is for, and the reason it is not `turn:{n}:instructions`.
 
         `before` carries turn-prefixed keys across by shape, so a turn-shaped name would hand a
-        branch its parent's system prompt - and a fork may *attach* a repository the parent never
-        had, whose guidance and index would then be missing from words the branch is answered under.
+        branch its parent's system prompt - and a fork may turn the network the other way and sets
+        its plugins up again, so the words it is answered under may not be its parent's.
         """
         recorded: dict[str, object] = {
             CHOICE_KEY: {"endpoint": "here", "model": "ripe/fast"},

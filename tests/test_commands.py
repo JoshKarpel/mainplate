@@ -925,12 +925,10 @@ class TestStartingSomewhereThroughTheForm:
 
 class TestOfferingWhereToStart:
     """
-    The completions beside the field, swapped in when a workspace card is picked.
+    The completions beside the field, swapped in once the new-session page has arrived.
 
-    The same shape the model group already has under the endpoint cards, and it exists for a reason
-    a still cannot show: what a repository's branches are is a question with a different answer per
-    card, so a page that serialized one list would be offering the wrong repository's the moment
-    somebody changed their mind.
+    Asked for rather than drawn with the page, because they are a round trip to the remote and the
+    rest of the page is not.
     """
 
     @pytest.fixture

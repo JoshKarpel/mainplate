@@ -77,8 +77,8 @@ something did was two behaviours behind one word, which is what took the compose
 - **What its plugins *are*, at every tier**, which a fork declares and sets up afresh. Nothing about
   the parent's comes across, so describing them again is how a conversation picks up an edited one.
   See [plugins](plugins.md#setup).
-- **A repository it does not have.** A fork may *attach* one and may not *swap* one; see [the
-  workspace](workspace.md#a-fork-may-attach-a-repository-and-may-not-swap-one).
+- **Different files.** A fork works in its parent's repository, or with its parent's reach where
+  there was none; see [the workspace](workspace.md#a-fork-works-in-its-parents-files).
 
 What it *does* inherit, besides the turns, is the checkout state: a fork's checkout stands on the
 commit the forked turn started on, with that turn's uncommitted changes on top, so a branch re-asks

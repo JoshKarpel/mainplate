@@ -123,11 +123,10 @@ class Choice:
     *about* the files it is looking at, so one that changed repository halfway would have a
     transcript whose earlier half discusses code the later half cannot see.
 
-    A fork may **attach** one to a session that had none, and may not **swap** one for another. The
-    two look alike and are not: swapping re-asks a turn against different files, which is a
-    different question wearing the same words, where attaching carries on with files where there
-    were none - and the turns being inherited were not asked against other files, they were asked
-    against no files at all.
+    A fork works in its parent's, and that includes a parent that had none: the turns it carries
+    were asked against those files, so re-asking them against others is a different question
+    wearing the same words. Going to work in a repository after a conversation in none is a new
+    session.
 
     An id rather than a path or a URL, because how to reach a repository is a discovery-time fact
     and which repository it is is not. Absent means a session with no files at all, which is what a

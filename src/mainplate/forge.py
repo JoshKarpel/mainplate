@@ -529,7 +529,11 @@ class Workspaces:
 
         Two cases skip it and both would be round trips that cannot change an answer. A store that
         has just been *cloned* is current by construction. And a **fork** plants at a recorded
-        snapshot, whose tree and commit a capture already carried into the store.
+        snapshot, whose tree and commit a capture already carried into the store - where there is a
+        commit. A parent whose `HEAD` named none, on an orphan branch, recorded a tree alone, and its
+        fork stands on the default branch the way a new session does, so it fetches the way one does:
+        skipped, it would stand on a `main` up to a fetch interval old, which is a new session's plant
+        without the one step that makes it mean the repository as it is now.
 
         Only where the checkout is about to be made, which keeps the cost to one fetch per session
         rather than one per pass: a session's second turn finds its checkout planted and never
@@ -543,7 +547,8 @@ class Workspaces:
                 return None
             await self.clones.ensure(found)
             self.fetched(repository, None)
-        if not cloning and snapshot is None and not checkouts.planted(session):
+        at_recorded_commit = snapshot is not None and snapshot.head is not None
+        if not cloning and not at_recorded_commit and not checkouts.planted(session):
             reached = self.named(repository)
             if reached is not None:
                 await self.refresh(reached)

@@ -444,15 +444,15 @@ on the dashboard answered it. It rides back on the form as a hidden field, so th
 choice and is parsed as it always was, and `change` goes back to the dashboard. On a repository,
 **where to start in it comes first**, above everything else, since it is the question most likely to
 differ from one session to the next; its branches are asked for once the page has arrived, with the
-same fragment a workspace card asks for on the fork page, so the page never waits on the forge.
+`/fragments/branches` swap, so the page never waits on the forge.
 
-**The fork page still asks the workspace as a question**, where a session with no repository may
-attach one. There it is the first group, which is where the rest of this ordering starts.
+**The fork page does not ask the workspace at all**, since a fork works in its parent's files; on a
+repository it leads with the branch the fork carries on instead.
 
 **Ordered widest-first: workspace, network, repository code, endpoint, model, thinking, output
 override**, and then the name. What files a session has is the broadest thing about it and is one
-question rather than two, so it leads; the network follows because it is the other thing deciding
-what the agent can do at all; whether the repository's own code runs is the third question about
+question rather than two, so it leads, answered before the picker on both pages; the network follows
+because it is the other thing deciding what the agent can do at all; whether the repository's own code runs is the third question about
 that same subject, so it sits with them and is drawn only where a repository is picked; the endpoint
 and the model are adjacent because they are a pair, the list being whatever the endpoint above it
 offers; the thinking level and the output override are settings *on* the model, so they sit under

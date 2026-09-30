@@ -88,8 +88,9 @@ Five details there are decided:
   `match` statements they would be two places to keep in step over one answer and the failure would
   be quiet: a session told it has a scratch directory whose tools cannot reach one.
 - **The key is not turn-prefixed**, deliberately. `before` copies turn-prefixed keys by shape, so a
-  turn-shaped name would carry a parent's instructions into a fork that may have attached a
-  repository the parent never had. Named this way a fork composes its own.
+  turn-shaped name would carry a parent's instructions into a fork that may have turned the network
+  the other way, or whose plugins say something else once set up again. Named this way a fork
+  composes its own.
 - **`working_note` names a session's places and never paths them**, which is `roots.py`'s whole
   argument said one layer out and a fact about the cache besides. A checkout sits under 32 hex
   characters of session id, so printing the path invites the failure the root names were built to

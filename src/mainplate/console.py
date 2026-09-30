@@ -571,16 +571,23 @@ def posted_isolation(fields: Mapping[str, list[str]]) -> Isolation:
     """
     How confined a form asked for, as the two axes together.
 
+    Nothing here reconciles the filesystem with the repository, and after the merge nothing needs to:
+    they come out of one posted value. `Isolation.settled` is still what the service applies, because
+    a form is not the only way in.
+    """
+    _, reaching = posted_workspace(fields)
+    return Isolation(filesystem=reaching, network=posted_network(fields))
+
+
+def posted_network(fields: Mapping[str, list[str]]) -> bool:
+    """
+    Whether a form asked for the network, which is the half of the isolation a fork may change.
+
     The network is a closed set, so this layer settles it the way it settles the thinking level and
     for the same reason: unlike an endpoint it is not discovered. A radio that is not checked posts
     no field at all, so an absent one has to mean off, which is also the safe answer.
-
-    Nothing here reconciles the filesystem with the repository, and after the merge nothing needs to:
-    they come out of one posted value. `Isolation.settled` is still what the service applies, because
-    a fork's repository is inherited rather than posted and a form is not the only way in.
     """
-    _, reaching = posted_workspace(fields)
-    return Isolation(filesystem=reaching, network=fields.get(NETWORK_FIELD, [""])[0].strip() == "on")
+    return fields.get(NETWORK_FIELD, [""])[0].strip() == "on"
 
 
 def posted_thinking(fields: Mapping[str, list[str]]) -> ThinkingLevel | None:
@@ -629,8 +636,10 @@ def parse_form_fork(raw: bytes) -> Forking:
     message back for asking again. An empty box is the first of those rather than a refusal, so a
     fork that is only meant to carry a past is a form somebody can submit.
 
-    The branch is the one ref a fork posts. There is no base, because a fork starts at the commit
-    its parent recorded; `Choice.settled` drops one whatever arrives.
+    The files are not asked at all: a fork works in what its parent worked in, and `Service.fork`
+    is what says so, whatever arrives. So the branch is the one ref a fork posts, and the network
+    the one half of the isolation. There is no base, because a fork starts at the commit its parent
+    recorded; `Choice.settled` drops one whatever arrives.
 
     The turn is refused rather than defaulted, because a fork that silently branched at turn zero
     would throw away the conversation somebody meant to keep.
@@ -650,13 +659,10 @@ def parse_form_fork(raw: bytes) -> Forking:
         chosen=Choice(
             endpoint=endpoint,
             model=model,
-            # Only meaningful for a fork of a session that has no repository, and the service is
-            # what decides that: one already in a repository keeps it whatever arrives here.
-            repository=posted_workspace(fields)[0],
             # Refused rather than dropped where it is not a branch name, for `parse_form_start`'s
             # reason; empty is a branch of the fork's own.
             branch=posted_ref(fields, BRANCH_FIELD, parse_branch, "a branch name"),
-            isolation=posted_isolation(fields),
+            isolation=Isolation(network=posted_network(fields)),
             thinking=posted_thinking(fields),
             output_override=posted_output_override(fields),
         ),
@@ -833,13 +839,13 @@ async def fork_form(service: Service, session: str, at: int, reader: Reader) -> 
     be one per turn. Here the question is asked once, on a page that is not swapping, and the answer
     arrives as an ordinary form post that a browser with no script can make.
     """
-    found = await service.read(session)
-    if found is None:
+    forkable = await service.forkable(session, at)
+    if forkable is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    found, carrying = forkable
     if not 0 <= at <= found.said.turns:
         return page_response(404, refusal_page(LINKS, 404, f"session {session} has no turn {at}"))
     listed = await service.listed()
-    carrying = await service.branch_at(session, at)
     markup = await asyncio.to_thread(
         fork_page,
         LINKS,
@@ -869,11 +875,6 @@ async def fork(service: Service, session: str, branch: Forking) -> Response:
     """
     if not service.catalogues.current.offers(branch.chosen.endpoint, branch.chosen.model):
         return page_response(422, refusal_page(LINKS, 422, f"no endpoint on offer serves {branch.chosen.model}"))
-    # A repository is only ever *attached* here, so it is checked on the same terms a new session's
-    # is. Whether it may be attached at all is the service's, since only it knows what the parent
-    # is already in; a posted repository for a session that has one is ignored rather than refused.
-    if branch.chosen.repository is not None and not service.reaches(branch.chosen.repository):
-        return page_response(422, refusal_page(LINKS, 422, f"no forge reaches {branch.chosen.repository}"))
     forked = await service.fork(session, at=branch.at, chosen=branch.chosen, said=branch.said)
     if forked is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
@@ -903,10 +904,9 @@ async def workspace_branches(service: Service, workspace: str) -> Response:
     """
     The branches a repository has, as the completions beside the field that asks where to start.
 
-    Asked when a workspace card is picked, so the list is that repository's rather than the one that
-    happened to be checked when the page was drawn. On demand rather than serialized into the page
-    for every repository at once: a console reaching six repositories would make six network calls to
-    render a page on which five of the lists are never looked at.
+    Asked by the new-session page once it has arrived, rather than before the page is drawn, so the
+    page never waits on the forge: the list is a round trip to the remote, and the rest of the page
+    is not.
 
     **Nothing about a repository makes this refuse.** One no forge reaches and one whose host is not
     answering are the same block with nothing to complete, which is exactly the field as it was
@@ -914,12 +914,11 @@ async def workspace_branches(service: Service, workspace: str) -> Response:
     refusal, and the difference is the usual one - the field takes free text either way, so having no
     completions costs a suggestion and not an ability. A workspace value this console does not
     recognise is the one refusal, because that is a malformed request rather than an answer about an
-    environment, and the card's own `hx-status:4xx` leaves the block standing.
+    environment, and the asking block's own `hx-status:4xx` leaves it standing.
 
-    A workspace that is not a repository is answered with the empty block, which takes the fields
-    themselves off the page: a base and a branch are answers *about* a repository, and `only scratch` has
-    none for them to be about. Answered rather than left alone, because the previous repository's
-    fields and completions are on the page until this swap replaces them.
+    A workspace that is not a repository is answered with the empty block: a base and a branch are
+    answers *about* a repository, and `only scratch` has none for them to be about. No page asks for
+    one, but the route takes whatever workspace a form does.
 
     The values it renders are *not* trusted on the way back in: `parse_form_start` re-parses whatever
     was posted, since a completion menu is a suggestion a browser was given rather than a constraint

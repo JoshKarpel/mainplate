@@ -41,7 +41,9 @@ from mainplate.forge import Reachable
 from mainplate.forge import Reaching
 from mainplate.forge import Repository
 from mainplate.forge import Workspaces
+from mainplate.sandbox import Filesystem
 from mainplate.sandbox import InACheckout
+from mainplate.sandbox import Isolation
 from mainplate.sandbox import Venue
 from mainplate.service import Service
 from mainplate.settings import Settings
@@ -271,6 +273,53 @@ class TestCapturing:
 
         assert captured.head == await run("git", "rev-parse", "HEAD", cwd=checkout.root)
         assert captured.branch == branch_named(PLANTED)
+
+    async def test_a_branch_a_tag_shares_its_name_with_is_captured_by_its_own_name(self, checkout: Checkout) -> None:
+        """
+        A short name is whatever is unambiguous among every ref, so beside a tag `v1` the branch `v1`
+        shortens to `heads/v1`, which is a valid branch name and the wrong one to offer a fork.
+        """
+        await run("git", "checkout", "-q", "-b", "v1", cwd=checkout.root)
+        await run("git", "tag", "v1", cwd=checkout.root)
+
+        captured = await checkout.capture("ambiguous")
+
+        assert captured.branch == "v1"
+
+    async def test_a_capture_after_catching_up_leaves_out_what_the_store_fetched(
+        self, checkout: Checkout, workspaces: Workspaces, origin: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """
+        A session that merged `origin/main` built on commits the store handed it, so a bundle thin
+        against the base alone would carry all of them back. What it is thin against is read off the
+        bundle's own header: a prerequisite is an excluded commit an included one sits directly on,
+        so a bundle leaving out upstream requires upstream's tip, and one leaving out only the base
+        requires the base.
+        """
+        (origin / "src" / "kept.txt").write_text("upstream moved on\n")
+        await run("git", "commit", "-aqm", "upstream", cwd=origin)
+        upstream = await run("git", "rev-parse", "HEAD", cwd=origin)
+        reached = workspaces.named(FIXTURE)
+        assert reached is not None
+        await workspaces.refresh(reached)
+        await run("git", "fetch", "-q", "origin", cwd=checkout.root)
+        await run("git", "merge", "-q", "--ff-only", "origin/main", cwd=checkout.root)
+        (checkout.root / "src" / "new.txt").write_text("the session's own\n")
+        await run("git", "add", "-A", cwd=checkout.root)
+        await run("git", "commit", "-qm", "on top of upstream", cwd=checkout.root)
+        required: list[str] = []
+        fetched = Store.fetched
+
+        async def reading_the_header(store: Store, bundle: Path, head: str, into: str) -> str:
+            header = bundle.read_bytes().split(b"\n\n", 1)[0].decode()
+            required.extend(line[1:].split()[0] for line in header.splitlines() if line.startswith("-"))
+            return await fetched(store, bundle, head, into)
+
+        monkeypatch.setattr(Store, "fetched", reading_the_header)
+
+        await checkout.capture("caught up")
+
+        assert required == [upstream]
 
     async def test_a_detached_head_is_captured_with_no_branch(self, checkout: Checkout) -> None:
         await run("git", "checkout", "-q", "--detach", cwd=checkout.root)
@@ -1015,6 +1064,25 @@ class TestForkingTheCheckoutToo:
         assert await run("git", "diff", "--name-only", cwd=planted.root) == "src/kept.txt"
         assert await run("git", "branch", "--show-current", cwd=planted.root) == "carried-on"
 
+    async def test_a_fork_of_a_parent_on_no_commit_stands_on_the_default_branch_as_it_is_now(
+        self, checkout: Checkout, workspaces: Workspaces, origin: Path
+    ) -> None:
+        """
+        With no recorded commit there is nothing in the store to plant at, so the fork stands where a
+        new session would and fetches the way one does, rather than on the `main` of the last fetch.
+        """
+        await run("git", "checkout", "-q", "--orphan", "fresh-start", cwd=checkout.root)
+        captured = await checkout.capture("orphaned")
+        (origin / "src" / "kept.txt").write_text("moved on\n")
+        await run("git", "commit", "-aqm", "second", cwd=origin)
+
+        planted = await workspaces.plant("f" * 32, FIXTURE, snapshot=captured, branch="carried-on")
+
+        assert planted is not None
+        assert await run("git", "rev-parse", "HEAD", cwd=planted.root) == await run(
+            "git", "rev-parse", "HEAD", cwd=origin
+        )
+
     async def test_a_fork_of_a_turn_that_never_ran_starts_where_the_repository_is(
         self, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
@@ -1057,17 +1125,31 @@ class TestForkingTheCheckoutToo:
         """
         assert await self.forked_into(planting, on_fixture, "test:somewhere-else") == FIXTURE
 
-    async def test_a_fork_may_attach_a_repository_to_a_session_that_had_none(self, planting: Service) -> None:
+    async def test_a_fork_of_a_session_with_none_cannot_pick_one_up(self, planting: Service) -> None:
         """
-        Not the same act as swapping, and the difference is why both rules exist. The turns being
-        inherited were not asked against *other* files, they were asked against none, so picking a
-        repository up here breaks nothing: it is the ordinary shape of thinking something through
-        and then going to work on it.
+        The turns it carries were asked against no files, so re-asking them in a repository is the
+        swap by another name. Going to work in one after talking it through is a new session.
         """
-        assert await self.forked_into(planting, DEFAULT_CHOICE, FIXTURE) == FIXTURE
+        assert await self.forked_into(planting, DEFAULT_CHOICE, FIXTURE) is None
 
-    async def test_a_fork_of_a_session_with_none_may_still_choose_none(self, planting: Service) -> None:
-        assert await self.forked_into(planting, DEFAULT_CHOICE, None) is None
+    async def test_a_fork_of_a_session_with_none_keeps_its_reach_and_may_change_its_network(
+        self, planting: Service
+    ) -> None:
+        """
+        What the files are is inherited whole, and with no repository that is the filesystem level;
+        the network is not the files, and a fork is where it may change.
+        """
+        opening = replace(DEFAULT_CHOICE, isolation=Isolation(filesystem=Filesystem.EVERYTHING, network=False))
+        session = await started(planting, "first", opening)
+
+        forked = await planting.fork(
+            session.id, at=0, chosen=replace(opening, isolation=Isolation(network=True)), said="again"
+        )
+
+        assert forked is not None
+        recorded = choice_of(await planting.checkpointer.load(forked.id))
+        assert recorded is not None
+        assert recorded.isolation == Isolation(filesystem=Filesystem.EVERYTHING, network=True)
 
 
 class TestPickingOneThroughTheConsole:
@@ -1144,28 +1226,24 @@ class TestPickingOneThroughTheConsole:
 
         assert answered.status == 422
 
-    async def test_the_fork_page_offers_no_repository_to_a_session_that_has_one(
-        self, app: ASGIApp, planting: Service
+    @pytest.mark.parametrize(
+        "repository",
+        [
+            pytest.param(FIXTURE, id="a session in a repository"),
+            pytest.param(None, id="a session in none"),
+        ],
+    )
+    async def test_the_fork_page_offers_no_checkout_control(
+        self, app: ASGIApp, planting: Service, repository: str | None
     ) -> None:
-        """Because it inherits that one; offering a choice that cannot be honoured would be a lie."""
-        session = await started(planting, "first", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        """A fork works in its parent's files, so offering a choice that cannot be honoured would be a lie."""
+        session = await started(planting, "first", replace(DEFAULT_CHOICE, repository=repository))
 
         async with calling(app) as caller:
             answered = await caller.get(f"/sessions/{session.id}/forks/new?at=0")
 
         assert answered.status == 200
         assert 'id="repository"' not in answered.text
-
-    async def test_the_fork_page_offers_one_to_a_session_that_has_none(self, app: ASGIApp, planting: Service) -> None:
-        """The other half of the rule: a fork may attach a repository where there was none."""
-        session = await started(planting, "first", DEFAULT_CHOICE)
-
-        async with calling(app) as caller:
-            answered = await caller.get(f"/sessions/{session.id}/forks/new?at=0")
-
-        assert answered.status == 200
-        assert 'id="repository"' in answered.text
-        assert f'value="{FIXTURE}"' in answered.text
 
     async def test_the_fork_page_offers_the_branch_its_turn_started_on(
         self, app: ASGIApp, planting: Service, provider: Provider, workspaces: Workspaces, on_fixture: Choice
@@ -1276,7 +1354,10 @@ class TestWhatTheSidebarSaysASessionWorksIn:
         listed = await planting.listed()
         assert [one.repository for one in listed if one.id == session.id] == [FIXTURE]
 
-    async def test_attaching_a_repository_through_the_fork_form_works(self, app: ASGIApp, planting: Service) -> None:
+    async def test_a_workspace_posted_with_a_fork_is_not_what_it_works_in(
+        self, app: ASGIApp, planting: Service
+    ) -> None:
+        """No page posts one, and a post that does anyway leaves the fork in its parent's files."""
         session = await started(planting, "first", DEFAULT_CHOICE)
 
         async with calling(app) as caller:
@@ -1294,7 +1375,7 @@ class TestWhatTheSidebarSaysASessionWorksIn:
         assert answered.status == 303
         chosen = choice_of(await planting.checkpointer.load(answered.location.rsplit("/", 1)[-1]))
         assert chosen is not None
-        assert chosen.repository == FIXTURE
+        assert chosen.repository is None
 
     async def test_forking_through_the_console_keeps_the_repository(self, app: ASGIApp, planting: Service) -> None:
         """The bug this class exists for: the form carries no repository, so the service supplies it."""
