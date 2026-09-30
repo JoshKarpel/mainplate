@@ -62,6 +62,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.settings import ThinkingLevel
 from pydantic_ai.toolsets import AbstractToolset
+from without_durability_sqlite import Database
 
 from mainplate.config import Config
 from mainplate.config import Endpoint
@@ -84,6 +85,7 @@ from mainplate.tools import Files
 from mainplate.tools import GitTracked
 from mainplate.tools import Scratch
 from mainplate.tools import System
+from mainplate.tools import artifact_tools
 from mainplate.tools import bash_tools
 from mainplate.tools import file_tools
 from mainplate.tools import grep_tools
@@ -1015,6 +1017,8 @@ def agent_for(
     plugins: Live | None = None,
     environment: Mapping[str, str] | None = None,
     output_cap: int | None = None,
+    artifacts: Database | None = None,
+    session: str = "",
 ) -> Agent:
     """
     The agent one session is answered by, built for the pass that is about to run it.
@@ -1076,9 +1080,11 @@ def agent_for(
     tools: list[AbstractToolset[None]] = []
     if plugins is not None and (contributed := contributions(plugins)):
         tools.append(PluginTools(contributed, asking_through(plugins)))
-    if reach.roots:
-        files = Files(roots=reach.roots)
+    files = Files(roots=reach.roots) if reach.roots else None
+    if files is not None:
         tools.extend((file_tools(files), grep_tools(files)))
+    if artifacts is not None:
+        tools.append(artifact_tools(artifacts, files, session))
     if reach.confinement is not None and bwrap is not None:
         tools.append(bash_tools(reach.confinement, bwrap, chosen.isolation.venue, environment))
     return Agent(

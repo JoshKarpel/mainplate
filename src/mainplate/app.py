@@ -61,6 +61,7 @@ from mainplate import records
 from mainplate.agent import Wires
 from mainplate.agent import build_wires
 from mainplate.archive import reconciling
+from mainplate.artifacts import prepare as prepare_artifacts
 from mainplate.catalogue import Catalogues
 from mainplate.catalogue import discover
 from mainplate.catalogue import refreshing
@@ -198,6 +199,7 @@ async def open_store(
     try:
         await migrate(opened)
         await prepare(opened)
+        await prepare_artifacts(opened)
         checkpointer = SqliteCheckpointer(opened)
         # Only where there are workspaces, since a command runs in a session's worktree and a
         # console keeping none has nowhere to put one. The same pairing the file tools already have,
@@ -373,6 +375,7 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
                         # it, so a plugin's delivery made that way would leave the session waiting on
                         # a message already in its own inbox with nothing that will ever wake it.
                         delivering=delivering(service.durable),
+                        artifacts=service.database,
                     ),
                 )
             ),

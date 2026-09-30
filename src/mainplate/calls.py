@@ -32,6 +32,7 @@ from markupsafe import Markup
 from markupsafe import escape
 from without_html import Element
 from without_html import Node
+from without_html import a
 from without_html import code
 from without_html import dd
 from without_html import div
@@ -500,6 +501,12 @@ def returned_element(tool: str, arguments: str, content: str) -> Node:
     not: its regions come from as many files as matched, and which grammar each is in is in a header
     line this console would have to parse a second time to learn. That is the cost, stated.
     """
+    if tool == "file_to_artifact":
+        # The tool's last word is its versioned URL; render that as a local link, not an
+        # absolute URL using the request Host (which a tool has no reason to know).
+        label, separator, location = content.rpartition(" ")
+        if separator and re.fullmatch(r"/artifacts/[A-Za-z0-9_-]+\?version=[0-9]+", location):
+            return pre(children=code(children=[label, " ", a(attrs={"href": location}, children=location)]))
     if tool not in ANCHORING:
         return pre(children=code(children=linked_text(content)))
     handed = arguments_of(arguments)

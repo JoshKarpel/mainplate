@@ -122,6 +122,7 @@ from without_durability.interfaces import Entry
 from without_durability.stepwise import Run
 from without_durability.stepwise import ScheduledWakeup
 from without_durability.stepwise import StepKey
+from without_durability_sqlite import Database
 
 from mainplate import records
 from mainplate.agent import Choice
@@ -3319,6 +3320,7 @@ def conversing(
     storings: Storings | None = None,
     declaring: Declaring | None = None,
     delivering: Callable[[str, records.Note], Awaitable[None]] | None = None,
+    artifacts: Database | None = None,
 ) -> Callable[[Run], Awaitable[Ended]]:
     """
     The workflow body every session runs, closed over everything it takes to build an agent.
@@ -3556,6 +3558,8 @@ def conversing(
                 # off the record the setup pass wrote: a value, settled for the session's life.
                 environment=environment_in(run.recorded),
                 output_cap=cap,
+                artifacts=artifacts,
+                session=f"{run.workflow}:{at.turn}",
             )
 
             # The turn's *prefix* rather than the run: the requests this block makes are numbered

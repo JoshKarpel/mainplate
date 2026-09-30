@@ -254,10 +254,10 @@ What a session's tools reach is one of the things it picks when it is created. A
 a repository gets `read`, `edit` and `create` over its own checkout and a scratch directory
 beside it, and repository-only `list` and `grep` over the worktree. One working on the whole machine
 gets the first three with no such boundary, while the repository-only pair refuse. One reaching
-nothing gets no tools at all, which is what this console was before there were repositories: a place
-to talk.
+nothing gets file tools over its scratch only when there is a sandbox to create it, and an artifact
+catalogue tool even without files. A session without a worktree is still a place to talk.
 
-Anywhere there are tools there is also `bash`, wherever `bubblewrap` is installed to confine it.
+File tools come with `bash` wherever `bubblewrap` is installed to confine it.
 Every command runs in a mount namespace of its own holding exactly what that session reaches and a
 read-only system, so your home directory and the console's configuration are not in it, and the
 network is off unless the session asked for it. What a command does get as its home is the session's
@@ -313,6 +313,23 @@ entire rather than half-applied.
 There is deliberately no tool that overwrites a whole file. `create` refuses a path that already
 exists, because a tool that rewrites a file wholesale is the escape hatch that makes all of this
 pointless: the first refused edit becomes a full rewrite, discarding whatever had not been read.
+
+## HTML artifacts
+
+An artifact is a standalone UTF-8 HTML document stored in the console's database, independent
+of the session that created it or any worktree commit. Use `file_to_artifact` on a file the model
+has built with its file tools; to update an artifact, supply its `id` and current
+`expected_version`. A stale version is refused without changing the artifact. `list_artifacts`
+finds artifacts and pages through a selected artifact's version history without returning HTML.
+`artifact_to_file` exports one version's exact bytes into a new path and refuses to overwrite.
+The artifact catalogue at `/artifacts` links to each current version; a tool's import result links
+to the version it created.
+
+A selected version's preview and attachment serve the same immutable bytes. The preview iframe
+has an opaque origin and the content response enforces a sandbox even on direct navigation;
+network requests are blocked, so embed all styles, scripts, images and fonts rather than using
+CDNs. Downloading the HTML is not a claim that it is safe to run locally or behaves identically
+to the sandboxed preview. Artifact URLs are console-local, not public sharing links.
 
 ## The console
 

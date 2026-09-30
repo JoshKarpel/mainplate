@@ -11,6 +11,7 @@ import os
 from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass
+from html import escape
 from pathlib import Path
 from typing import Final
 from typing import assert_never
@@ -37,6 +38,7 @@ from without_web import path_param
 from without_web import post
 from without_web import query_param
 
+from mainplate import artifacts
 from mainplate.agent import Choice
 from mainplate.conversation import BASE_FIELD
 from mainplate.conversation import BRANCH_FIELD
@@ -96,6 +98,8 @@ LOCATION = b"location"
 LONGEST_PROMPT = 100_000
 
 session_id = path_param("session", STR)
+artifact_id = path_param("artifact_id", STR)
+artifact_version = query_param("version", optional(int), schema={"type": "integer"})
 # The endpoint whose models to render, which is the value of the select that asks for them.
 of_endpoint = query_param("endpoint", once(str), schema={"type": "string"})
 # Which workspace's branches to offer, which is the value of the card that asks for them. A query
@@ -1222,8 +1226,135 @@ async def archive(service: Service, session: str) -> Response:
     return seeing(LINKS.to_session(session))
 
 
+# The response's sandbox holds on direct navigation as well as inside the preview iframe.
+ARTIFACT_CSP = (
+    b"sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; "
+    b"style-src 'unsafe-inline'; img-src data: blob:; font-src data:; "
+    b"connect-src 'none'; form-action 'none'; base-uri 'none'"
+)
+
+
+catalogue_cursor = query_param("cursor", optional(int), schema={"type": "integer"})
+
+
+@get("/artifacts", catalogue_cursor, summary="Independent artifact catalogue")
+async def artifact_catalogue(service: Service, cursor: int | None) -> Response:
+    """Offer links to immutable versions without putting HTML into the catalogue."""
+    if cursor is not None and cursor < 0:
+        return Response(status=422)
+    found = await artifacts.listing(service.database, cursor=cursor)
+    items = "".join(
+        f'<li><a href="/artifacts/{each.id}?version={each.version}">{escape(each.title)}</a> '
+        f"(version {each.version})</li>"
+        for each in found
+    )
+    older = (
+        f'<a href="/artifacts?cursor={(cursor or 0) + artifacts.PAGE_SIZE}">Older artifacts</a>'
+        if len(found) == artifacts.PAGE_SIZE
+        else ""
+    )
+    return page_response(
+        200,
+        f"<html><head><title>Artifacts</title></head><body>"
+        f'<nav><a href="/">Mainplate</a></nav><h1>Artifacts</h1><ul>{items}</ul>{older}</body></html>',
+    )
+
+
+@get(t"/artifacts/{artifact_id}", artifact_id, artifact_version, summary="Preview an artifact version")
+async def artifact_page(service: Service, artifact: str, version: int | None) -> Response:
+    """Pin both preview and download links to one selected immutable version."""
+    found = await artifacts.content(service.database, artifact, version)
+    if found is None:
+        return page_response(404, "<html><body>Artifact not found</body></html>")
+    selected, _ = found
+    where = f"/artifacts/{selected.id}/content?version={selected.version}"
+    title = escape(selected.title)
+    history = await artifacts.listing(service.database, artifact_id=selected.id)
+    versions = "".join(
+        f'<li><a href="/artifacts/{selected.id}?version={each.version}">Version {each.version}</a></li>'
+        for each in history
+    )
+    older = (
+        f'<a href="/artifacts/{selected.id}/versions?cursor={history[-1].version}">Older versions</a>'
+        if len(history) == artifacts.PAGE_SIZE
+        else ""
+    )
+    return page_response(
+        200,
+        f"<html><head><title>{title}</title></head><body>"
+        f'<nav><a href="/artifacts">Artifacts</a></nav><h1>{title}</h1>'
+        f"<p>Version {selected.version}. Downloaded HTML is not sandboxed and may behave differently.</p>"
+        f'<a href="{where}&download=1">Download HTML</a>'
+        f"<h2>Versions</h2><ul>{versions}</ul>{older}"
+        f'<iframe title="{title}" sandbox="allow-scripts" src="{where}" '
+        f'style="display:block;width:100%;height:75vh"></iframe></body></html>',
+    )
+
+
+artifact_cursor = query_param("cursor", once(int), schema={"type": "integer"})
+
+
+@get(t"/artifacts/{artifact_id}/versions", artifact_id, artifact_cursor, summary="Older artifact versions")
+async def artifact_versions(service: Service, artifact: str, cursor: int) -> Response:
+    """Page through immutable version links without loading their bytes."""
+    if cursor < 1:
+        return Response(status=422)
+    history = await artifacts.listing(service.database, artifact_id=artifact, cursor=cursor)
+    items = "".join(
+        f'<li><a href="/artifacts/{each.id}?version={each.version}">Version {each.version}</a></li>' for each in history
+    )
+    older = (
+        f'<a href="/artifacts/{artifact}/versions?cursor={history[-1].version}">Older versions</a>'
+        if len(history) == artifacts.PAGE_SIZE
+        else ""
+    )
+    return page_response(
+        200, f'<html><body><a href="/artifacts/{artifact}">Artifact</a><ul>{items}</ul>{older}</body></html>'
+    )
+
+
+artifact_download = query_param("download", optional(str), schema={"type": "string"})
+
+
+@get(
+    t"/artifacts/{artifact_id}/content",
+    artifact_id,
+    artifact_version,
+    artifact_download,
+    summary="The immutable HTML bytes of an artifact",
+)
+async def artifact_content(service: Service, artifact: str, version: int | None, download: str | None) -> Response:
+    """Serve the exact selected bytes with a sandboxed preview or attachment disposition."""
+    found = await artifacts.content(service.database, artifact, version)
+    if found is None:
+        return Response(status=404)
+    selected, html = found
+    if download not in (None, "1"):
+        return Response(status=422)
+    disposition = (
+        b"attachment; filename=artifact-" + selected.id.encode() + f"-v{selected.version}.html".encode()
+        if download
+        else b"inline"
+    )
+    return Response(
+        status=200,
+        body=html,
+        headers=(
+            (b"content-type", b"text/html; charset=utf-8"),
+            (b"content-security-policy", ARTIFACT_CSP),
+            (b"content-disposition", disposition),
+            (b"x-content-type-options", b"nosniff"),
+            (b"cache-control", b"no-store"),
+        ),
+    )
+
+
 CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     start_here,
+    artifact_catalogue,
+    artifact_page,
+    artifact_versions,
+    artifact_content,
     new_session,
     start,
     show_session,

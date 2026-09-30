@@ -43,6 +43,7 @@ from without_asgi import Inventory
 from without_durability.interfaces import INBOX
 from without_http import serving
 
+from mainplate import artifacts
 from mainplate.agent import ANTHROPIC_RETENTION
 from mainplate.app import build_app
 from mainplate.app import open_store
@@ -366,6 +367,36 @@ class TestTheInstalledConsole:
 
         assert scope == f"{origin}/"
         assert await page.evaluate("() => caches.keys()") == []
+
+
+class TestArtifactIsolation:
+    """A preview script can run without inheriting the console's origin or reaching the network."""
+
+    async def test_preview_and_direct_navigation_are_sandboxed(self, page: Page, console: tuple[str, Service]) -> None:
+        base, service = console
+        html = (
+            b"<!doctype html><html><body><script>"
+            b"try { document.cookie; document.body.dataset.cookie = 'available'; }"
+            b"catch(e) { document.body.dataset.cookie = 'blocked'; }"
+            b"try { window.parent.document.body; document.body.dataset.access = 'available'; }"
+            b"catch(e) { document.body.dataset.access = 'blocked'; }"
+            b"document.body.dataset.parent = String(window.parent === window);"
+            b"fetch('/artifacts').then(() => document.body.dataset.fetched = 'yes')"
+            b".catch(() => document.body.dataset.fetched = 'blocked');"
+            b"</script></body></html>"
+        )
+        saved = await artifacts.import_html(service.database, html, "browser-artifact")
+        await page.goto(f"{base}/artifacts/{saved.id}")
+        frame = page.frame_locator("iframe")
+        await expect(frame.locator("body")).to_have_attribute("data-access", "blocked")
+        await expect(frame.locator("body")).to_have_attribute("data-cookie", "blocked")
+        await expect(frame.locator("body")).to_have_attribute("data-parent", "false")
+        await expect(frame.locator("body")).to_have_attribute("data-fetched", "blocked")
+        await page.goto(f"{base}/artifacts/{saved.id}/content?version=1")
+        await expect(page.locator("body")).to_have_attribute("data-access", "available")
+        await expect(page.locator("body")).to_have_attribute("data-cookie", "blocked")
+        await expect(page.locator("body")).to_have_attribute("data-parent", "true")
+        await expect(page.locator("body")).to_have_attribute("data-fetched", "blocked")
 
 
 class TestWhereTheReaderIs:

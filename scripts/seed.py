@@ -27,6 +27,7 @@ import sys
 from datetime import timedelta
 from pathlib import Path
 
+from mainplate import artifacts
 from mainplate import records
 from mainplate.app import open_store
 from mainplate.catalogue import Catalogues
@@ -96,6 +97,13 @@ async def plant(service: Service, fixture: Fixture) -> None:
         await service.checkpointer.supply(fixture.session.id, key, value)
 
 
+DEMO_HTML = (
+    b'<!doctype html><html><head><meta charset="utf-8">'
+    b"<style>body{font:2rem system-ui;margin:4rem;background:#151b2a;color:#f4e2a0}</style>"
+    b"</head><body><h1>Independent artifact</h1><p>Previewed without a model call.</p></body></html>"
+)
+
+
 async def seed(database: Path) -> None:
     async with open_store(database, LEASE, Catalogues(current=CATALOGUE)) as service:
         for fixture in FIXTURES:
@@ -104,6 +112,9 @@ async def seed(database: Path) -> None:
             session = fixture.session
             origin = f" (forked from turn {session.forked.turn})" if session.forked else ""
             print(f"  {'replaced' if replaced else 'wrote   '} {session.id[:12]}… {session.title}{origin}")
+        if await artifacts.completed(service.database, "demo-artifact") is None:
+            saved = await artifacts.import_html(service.database, DEMO_HTML, "demo-artifact", title="Demo artifact")
+            print(f"  artifact {saved.id} version {saved.version}: {saved.title}")
     print(f"\n{database} is ready. `just demo` serves it; the fixtures are on {CATALOGUE.default.endpoint}.")
 
 

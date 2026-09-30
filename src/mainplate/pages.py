@@ -5078,7 +5078,13 @@ def shell(
             # because the row is already spent: the two clasps stand in a band across the top of
             # the page that everything else starts under, so the name stands between them at no
             # cost. The stylesheet draws this nowhere else.
-            header(cls="bar", children=[a(cls="brand", attrs={"href": links.to_home()}, children="mainplate")]),
+            header(
+                cls="bar",
+                children=[
+                    a(cls="brand", attrs={"href": links.to_home()}, children="mainplate"),
+                    a(attrs={"href": "/artifacts"}, children="artifacts"),
+                ],
+            ),
             main(children=[*pane]),
             *aside_rail,
         ],

@@ -29,6 +29,14 @@ def drawn(tool: str, arguments: dict[str, object], returned: Returned | None) ->
     return render(call_body(ToolUse(tool=tool, arguments=json.dumps(arguments), returned=returned)))
 
 
+def test_artifact_import_returns_a_versioned_link() -> None:
+    """The return keeps its exact words and offers the immutable URL as a local link."""
+    url = "/artifacts/abc_12?version=3"
+    html = drawn("file_to_artifact", {"path": "page.html"}, Returned("success", f"Title: abc_12 version 3 {url}"))
+    assert f'href="{url}"' in html
+    assert "Title: abc_12 version 3" in html
+
+
 class TestReadingLinesBehindAGutter:
     """The tool's own lines are told from the file's by what stands in front of them."""
 
