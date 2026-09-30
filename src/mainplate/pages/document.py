@@ -297,9 +297,9 @@ class Links:
         One artifact's page, at `version` or at whichever is current when it is opened.
 
         Unpinned is what a catalogue row links to, since it is listing the artifact and a reader
-        following it wants what the artifact is now. Every link that names a version the session kept,
-        from a call or from the rail, pins it, so it opens on what was kept however far the artifact
-        has moved since. `before` pages the version history the same way the catalogue's pages.
+        following it wants what the artifact is now. A call's link to the version it kept pins it, as
+        does a row of a version history, so it opens on what was kept however far the artifact has
+        moved since. `before` pages the version history the same way the catalogue's pages.
         """
         asked = {
             **({} if version is None else {VERSION_FIELD: version}),

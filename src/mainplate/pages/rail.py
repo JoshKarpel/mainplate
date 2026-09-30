@@ -28,9 +28,7 @@ from without_html import title
 from without_html import ul
 
 from mainplate.agent import Choice
-from mainplate.artifacts import Version
 from mainplate.pages.archive import archive_card
-from mainplate.pages.artifacts import kept_card
 from mainplate.pages.document import Links
 from mainplate.pages.document import Placed
 from mainplate.pages.document import fact
@@ -645,7 +643,6 @@ def rail(
     *,
     about: Placed = None,
     archived: datetime | None = None,
-    kept: Sequence[Version] = (),
 ) -> Element:
     """
     Everything that navigates the conversation, in one column outside the region that swaps.
@@ -693,10 +690,6 @@ def rail(
     do while the session runs, and this is what to do when it is over. The card is drawn whether or
     not there are facts yet, since archiving is offered before the first message.
 
-    **What the session kept as artifacts comes under the plugins' cards**, and only for a session that
-    kept any: it is what the conversation made rather than how it is run, so it stands just above the
-    card about the session itself. See `kept_card`.
-
     **The theme goes last, pinned to the bottom by the stylesheet**, because it is the one card here
     that is not about this conversation at all - it is the reader's, across every session - so it is
     the one thing a reader scanning the rail for something about *this* session can skip.
@@ -720,7 +713,6 @@ def rail(
                         for plugin in plugins
                         if plugin.described.card is not None
                     ),
-                    *kept_card(links, kept),
                     div(
                         cls="about",
                         attrs={"aria-label": "About this session"},

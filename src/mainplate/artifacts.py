@@ -177,9 +177,35 @@ def titled(title: str) -> str:
     return stripped
 
 
+def folded(text: str | None) -> str | None:
+    """
+    Text as the catalogue's search compares it, which is Python's `casefold` and not SQLite's `lower`.
+
+    SQLite's own `lower` folds ASCII and nothing else, so a search for `über` would miss `Über Plan`.
+    `None` passes through because SQLite may call this on a `NULL` query even where the `IS NULL`
+    beside it has already answered.
+    """
+    return None if text is None else text.casefold()
+
+
+# The name `folded` is registered under on the connection, which `catalogue` calls it by.
+FOLDED: Final = "casefold"
+
+
 async def prepare(database: Database) -> None:
-    """Create the two tables, beside the checkpoint's and the session index; idempotent, run every boot."""
-    await database.run(lambda connection: connection.executescript(SCHEMA))
+    """
+    Create the two tables, beside the checkpoint's and the session index, and teach the connection
+    `folded`; idempotent, run every boot.
+
+    A function registered on the connection rather than anything in the schema, so it lasts as long as
+    the connection does, and every read here goes through the one connection this is handed.
+    """
+
+    def prepared(connection: sqlite3.Connection) -> None:
+        connection.executescript(SCHEMA)
+        connection.create_function(FOLDED, 1, folded, deterministic=True)
+
+    await database.run(prepared)
 
 
 async def keep(
@@ -282,32 +308,53 @@ async def made(database: Database, made_by: Call) -> Version | None:
     return await database.run(read)
 
 
+# Which version `version_of` and `content` read: the one named, or the current one where none is.
+PINNED: Final = "a.id = ? AND v.version = coalesce(?, a.current)"
+
+
+async def version_of(database: Database, artifact: str, version: int | None = None) -> Version | None:
+    """
+    One version without its bytes, the current one where no version is named.
+
+    What a page about a version needs, which is everything but the document: the frame fetches that
+    by its own address, so reading it here as well would carry up to `LARGEST` through the one
+    connection every other request is queued on, for nothing.
+    """
+
+    def read(connection: sqlite3.Connection) -> Version | None:
+        row = connection.execute(f"{SELECTED} WHERE {PINNED}", (artifact, version)).fetchone()
+        return None if row is None else parse_version(row)
+
+    return await database.run(read)
+
+
 async def content(database: Database, artifact: str, version: int | None = None) -> tuple[Version, bytes] | None:
     """One version and its exact bytes, the current one where no version is named."""
 
     def read(connection: sqlite3.Connection) -> tuple[Version, bytes] | None:
-        row = connection.execute(
-            f"SELECT v.html, {COLUMNS} {JOINED} WHERE a.id = ? AND v.version = coalesce(?, a.current)",
-            (artifact, version),
-        ).fetchone()
+        row = connection.execute(f"SELECT v.html, {COLUMNS} {JOINED} WHERE {PINNED}", (artifact, version)).fetchone()
         return None if row is None else (parse_version(row[1:]), bytes(row[0]))
 
     return await database.run(read)
 
 
-async def catalogue(database: Database, before: int | None = None, query: str | None = None) -> tuple[Version, ...]:
+async def catalogue(
+    database: Database, before: int | None = None, query: str | None = None, limit: int = LISTED
+) -> tuple[Version, ...]:
     """
-    Every artifact's current version, most recently kept first, `LISTED` at a time.
+    Every artifact's current version, most recently kept first, `limit` at a time.
 
-    `before` is the `seq` of the last one a previous listing held. `query` is a case-blind substring of
-    the title rather than a `LIKE` pattern, so a title with `%` or `_` in it is searched for as written.
+    `before` is the `seq` of the last one a previous listing held. `query` is a substring of the title,
+    compared after `folded`, rather than a `LIKE` pattern, so a title with `%` or `_` in it is searched
+    for as written. `limit` is `LISTED` for a listing somebody pages through, and less for a section
+    that only ever shows the first few.
     """
 
     def read(connection: sqlite3.Connection) -> tuple[Version, ...]:
         rows = connection.execute(
             f"{SELECTED} WHERE v.version = a.current AND (? IS NULL OR v.seq < ?) "
-            "AND (? IS NULL OR instr(lower(a.title), lower(?)) > 0) ORDER BY v.seq DESC LIMIT ?",
-            (before, before, query, query, LISTED),
+            f"AND (? IS NULL OR instr({FOLDED}(a.title), {FOLDED}(?)) > 0) ORDER BY v.seq DESC LIMIT ?",
+            (before, before, query, query, limit),
         ).fetchall()
         return tuple(map(parse_version, rows))
 
@@ -322,21 +369,6 @@ async def history(database: Database, artifact: str, before: int | None = None) 
             f"{SELECTED} WHERE a.id = ? AND (? IS NULL OR v.version < ?) ORDER BY v.version DESC LIMIT ?",
             (artifact, before, before, LISTED),
         ).fetchall()
-        return tuple(map(parse_version, rows))
-
-    return await database.run(read)
-
-
-async def made_in(database: Database, session: str) -> tuple[Version, ...]:
-    """
-    Every version one session kept, in the order it kept them.
-
-    Unbounded, unlike the listings, because it is what one conversation made and the page it is drawn
-    on already holds that whole conversation.
-    """
-
-    def read(connection: sqlite3.Connection) -> tuple[Version, ...]:
-        rows = connection.execute(f"{SELECTED} WHERE v.session = ? ORDER BY v.seq", (session,)).fetchall()
         return tuple(map(parse_version, rows))
 
     return await database.run(read)

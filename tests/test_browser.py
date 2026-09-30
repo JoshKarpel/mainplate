@@ -388,7 +388,10 @@ PROBING = artifacts.Html.parse(
 
 class TestAnArtifactRunsInASandbox:
     """
-    A kept page's scripts run, and reach neither the console's origin nor the network.
+    A kept page's scripts run, cannot reach the console's origin, and fetch nothing.
+
+    Navigating itself away is the one way out a page keeps, and nothing here pins it, since no policy
+    this console could send closes it; `docs/design/security.md` names it as undefended.
 
     A browser, because what is under test is what a real one does with the frame's `sandbox` and the
     response's policy: both are strings in the markup and the headers whether or not they work.

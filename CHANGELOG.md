@@ -12,8 +12,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   new artifact or as the next version of one, refusing an update onto a version that is no longer
   current; `artifact_to_file` writes a version back out; `list_artifacts` finds them. An artifact
   outlives the session that made it. The dashboard lists the most recent and links to all of them,
-  a session's rail lists what it kept, a call that kept a version links to it, and an artifact's page
-  shows it in a sandbox with its versions, the turn that kept it, and a download of the same file.
+  a call that kept a version links to it, and an artifact's page shows it in a sandbox with its
+  versions, the turn that kept it, and a download of the same file.
 - **The front page is a dashboard.** It lists the sessions that are unread and the ones still
   working, both redrawn live, then a card for only scratch, the whole machine and each
   repository, with its sessions, a **New session** press, a link to the repository on GitHub, and

@@ -295,7 +295,6 @@ def session_page(
                         showing.session.footprint,
                     ),
                     archived=showing.session.archived,
-                    kept=showing.kept,
                 )
             ],
         ),

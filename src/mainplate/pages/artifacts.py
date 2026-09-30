@@ -1,5 +1,5 @@
-# Artifacts as the console draws them: the catalogue, one artifact's page, the dashboard's section
-# of recent ones, and the rail's card of what one session kept.
+# Artifacts as the console draws them: the catalogue, one artifact's page, and the dashboard's
+# section of recent ones.
 #
 # The artifact itself is never drawn here. Its bytes are served by a route of their own, with a
 # policy that sandboxes them, and this module only ever *frames* them: a page of the console's with
@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from itertools import groupby
 from typing import Final
 
 from without_html import Element
@@ -297,6 +296,9 @@ def recent_artifacts(links: Links, reader: Reader, recent: Sequence[Version]) ->
     """
     The dashboard's section of the artifacts most recently kept, with the way to every one of them.
 
+    `recent` is drawn whole: the route asks the store for `RECENT` and no more, rather than a full
+    listing's worth to cut down here.
+
     Nothing at all on a console that has kept none, for `wanting_region`'s reason: a heading over
     nothing reads as a page that failed to load. The catalogue is still at its address.
     """
@@ -313,65 +315,12 @@ def recent_artifacts(links: Links, reader: Reader, recent: Sequence[Version]) ->
                     children=[
                         ul(
                             cls="dashboard__sessions",
-                            children=[artifact_row(links, reader, kept) for kept in recent[:RECENT]],
+                            children=[artifact_row(links, reader, kept) for kept in recent],
                         ),
                         div(
                             cls="dashboard__foot",
                             children=a(attrs={"href": links.to_artifacts()}, children="every artifact"),
                         ),
-                    ],
-                ),
-            ],
-        ),
-    )
-
-
-def kept_card(links: Links, kept: Sequence[Version]) -> tuple[Element, ...]:
-    """
-    The rail's card of what this session kept: an artifact to a row, each version it kept a link.
-
-    Grouped by artifact, in the order the session first kept each, because a session that keeps a
-    page and then three revisions of it made one thing four times rather than four things. Each version
-    link is pinned to what this session kept; the title links to the artifact as it is now, which may
-    be a version some other session kept since.
-
-    Nothing where the session kept nothing, which is most sessions, so the rail is not a card longer
-    for them.
-    """
-    if not kept:
-        return ()
-    first: dict[str, int] = {}
-    for at, each in enumerate(kept):
-        first.setdefault(each.artifact, at)
-    ordered = sorted(kept, key=lambda each: (first[each.artifact], each.version))
-    return (
-        div(
-            cls="about kept",
-            attrs={"aria-label": "Artifacts this session kept"},
-            children=[
-                div(cls="about__head", children="artifacts"),
-                ul(
-                    cls="kept__rows",
-                    children=[
-                        li(
-                            children=[
-                                a(
-                                    cls="kept__title",
-                                    attrs={"href": links.to_artifact(artifact)},
-                                    children=versions[0].title,
-                                ),
-                                *(
-                                    a(
-                                        cls="kept__version",
-                                        attrs={"href": links.to_artifact(artifact, each.version)},
-                                        children=f"v{each.version}",
-                                    )
-                                    for each in versions
-                                ),
-                            ]
-                        )
-                        for artifact, grouped in groupby(ordered, key=lambda each: each.artifact)
-                        for versions in (tuple(grouped),)
                     ],
                 ),
             ],

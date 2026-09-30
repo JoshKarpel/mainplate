@@ -240,8 +240,9 @@ An artifact is HTML a model wrote, and the console serves it from its own origin
 origin its cookies and pages are on. What keeps that from mattering is the response rather than the
 page framing it: every version is served under `Content-Security-Policy: sandbox allow-scripts` with
 nothing allowed out, so the document is an opaque origin however it is opened, in the preview frame
-or typed into a tab, and its scripts can reach neither this console nor the network. The frame's own
-`sandbox` attribute says the same again and is not what anything relies on.
+or typed into a tab: its scripts cannot read this console's cookies, storage or pages, and cannot
+fetch anything. The frame's own `sandbox` attribute says the same again and is not what anything
+relies on. The document can still navigate itself away, which the next section names.
 
 The file a person downloads is the same bytes with none of that around it, and a browser opening a
 local file gives it whatever it gives local files. The page says so beside the link, and nothing here
@@ -262,6 +263,13 @@ would then be a copy rather than a checkout of an object that already exists.
 a plugin that runs `git -C <checkout>` the ordinary way reads the configuration the session wrote and
 runs whatever it names, as the service user. Nothing here can stop that, since the plugin is a
 program the operator installed; what the bundled one does is the pattern to copy.
+
+**An artifact navigating itself away.** Its scripts run, and a document whose scripts run can send
+its frame or its tab to any address, carrying whatever it holds; no policy directive governs a
+document's own navigation. What it holds is what the model wrote into it, since it can read nothing
+of this console's, so a model under prompt injection can publish what it was shown by keeping a page
+that leaves. Serving artifacts without scripts would close all of it but a press on a link, and would
+make every artifact static. See [Artifacts](artifacts.md#serving-a-version).
 
 **What a session pushes.** `/push` sends the session's recorded branch as the session left it, and
 the content of every commit on it is the session's. A person pressing it is the review; nothing here

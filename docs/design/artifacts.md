@@ -73,11 +73,8 @@ records `{artifact, version}` under its `metadata`, which the model is never sen
 that to link the call to the version. The words the model is sent say the same two numbers for the
 model's sake, and nothing parses them.
 
-So the transcript links each call to what it kept, pinned to that version; the rail lists every
-version the session kept, grouped by artifact; and an artifact's page links back to the rule of the
-turn whose call kept the version on show. The rail is read from the store rather than out of the
-checkpoint, since the call says what was kept and the store says what that artifact is called now
-and whether a later version has replaced it.
+So the transcript links each call to what it kept, pinned to that version, and an artifact's page
+links back to the rule of the turn whose call kept the version on show.
 
 ## Serving a version
 
@@ -92,6 +89,17 @@ That policy is what makes "self-contained" a rule rather than advice: a page tha
 a CDN is a page whose script does not load. Allowing a CDN would mean a network request on behalf of
 a document a model wrote, from a browser holding this console's session, which is a decision to make
 deliberately if ever, not a default.
+
+**What the policy cannot stop is the document navigating itself.** A script setting `location`, a
+`<meta http-equiv=refresh>`, or a link somebody presses takes the frame, or the tab it was opened
+in, to any address at all, and whatever the page holds can ride along in that address. The policy
+has no directive for this: `navigate-to` was proposed and never shipped, and the sandbox's own
+flags govern only the page *around* the frame and new windows, both of which stay shut. So a page a
+model was talked into writing can send what it holds somewhere, one navigation at a time. It cannot
+read the console to find more than it was written with, which is what bounds it: what leaves is
+what the model already put in the page. The alternative is serving without `allow-scripts`, which
+stops the refresh and every navigation but a press, and makes every artifact a static document; an
+artifact is meant to be a page that does something, so that is not the default.
 
 **The preview and the download are one function with one header different**, so what is saved is
 byte for byte what was shown. What is *not* the same is what runs it: a saved file opened from disk
@@ -112,7 +120,9 @@ history. Both are the dashboard card's rows, so a list of artifacts reads like a
 Listings page by keyset rather than offset, so a version kept while somebody pages does not shift
 the page under them: the catalogue by the order versions were kept in, a history by version. A page
 holding a full `LISTED` draws a link to the next, which costs a link to an empty page when there were
-exactly that many, and saves a second query on every page to rule it out.
+exactly that many, and saves a second query on every page to rule it out. `list_artifacts` does the
+same for the model: a full page ends by saying there may be more and what to pass as `before`, so
+the page size is written nowhere but `LISTED`.
 
 ## What is not here
 

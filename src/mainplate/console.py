@@ -49,6 +49,7 @@ from mainplate.conversation import TRUSTED_FIELD
 from mainplate.conversation import Disposition
 from mainplate.conversation import commit_command
 from mainplate.conversation import parse_disposition
+from mainplate.pages.artifacts import RECENT
 from mainplate.pages.artifacts import artifact_page
 from mainplate.pages.artifacts import catalogue_page
 from mainplate.pages.composer import PLUGIN_LEADER
@@ -760,10 +761,8 @@ async def redrawn(service: Service, session: str, reader: Reader) -> Response:
 
 @get("/", reading, summary="The dashboard: what wants attention, and where a session can work")
 async def start_here(service: Service, reader: Reader) -> Response:
-    recent = await artifacts.catalogue(service.database)
-    return page_response(
-        200, dashboard_page(LINKS, reader, await service.listed(), service.reachable, service.fetches, recent)
-    )
+    listed, recent = await asyncio.gather(service.listed(), artifacts.catalogue(service.database, limit=RECENT))
+    return page_response(200, dashboard_page(LINKS, reader, listed, service.reachable, service.fetches, recent))
 
 
 @get("/sessions/new", of_new_workspace, reading, summary="What a new session in one workspace runs on")
@@ -1240,7 +1239,9 @@ async def archive(service: Service, session: str) -> Response:
 # every page showing them frames them in one. `sandbox allow-scripts` makes the document an opaque
 # origin wherever it is opened, frame or tab, so it cannot read this console's cookies, storage or
 # pages; `connect-src 'none'` and the rest keep it from fetching anything, which is why a page has to
-# carry its scripts, styles, fonts and images inside itself. See `docs/design/artifacts.md`.
+# carry its scripts, styles, fonts and images inside itself. Nothing here stops the document
+# navigating its own frame or tab away, since no directive governs that; keeping `allow-scripts` is
+# accepting it. See `docs/design/artifacts.md`.
 ARTIFACT_POLICY: Final = (
     b"sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; "
     b"style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; "
@@ -1268,11 +1269,10 @@ async def artifact_catalogue(service: Service, before: int | None, reader: Reade
 async def show_artifact(
     service: Service, artifact: str, version: int | None, before: int | None, reader: Reader
 ) -> Response:
-    found = await artifacts.content(service.database, artifact, version)
-    if found is None:
+    selected = await artifacts.version_of(service.database, artifact, version)
+    if selected is None:
         named = f"no artifact {artifact}" + ("" if version is None else f" at version {version}")
         return page_response(404, refusal_page(LINKS, 404, named))
-    selected, _ = found
     history = await artifacts.history(service.database, artifact, before)
     listed = await service.listed()
     return page_response(200, artifact_page(LINKS, reader, listed, service.reachable, selected, history))

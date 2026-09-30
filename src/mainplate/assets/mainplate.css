@@ -3605,41 +3605,6 @@ mark.hit.current {
     text-transform: uppercase;
 }
 
-/* What the session kept as artifacts: an artifact to a row, its title taking the row and each version
-   this session kept a short link after it. The title is cut rather than wrapped, as a session's
-   name is in the list. */
-.kept__rows {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-}
-
-.kept__rows li {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-2);
-    min-width: 0;
-}
-
-.kept__title {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-    color: var(--ink);
-}
-
-.kept__version {
-    flex: none;
-    color: var(--ink-faint);
-    font-family: var(--mono);
-    font-size: 0.75rem;
-}
-
 /* A card of facts: a key and a value to a row, the key in the head's own faint chrome and the value
    at the right in the ink every figure here takes. The value is one line, never wrapped: a value
    broken mid-word across two lines is what made this card read as a mess where the dock beside it

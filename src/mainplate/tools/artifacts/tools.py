@@ -52,6 +52,23 @@ def said(kept: artifacts.Version) -> str:
     return f"{kept.title}: artifact {kept.artifact}, version {kept.version} of {kept.current}"
 
 
+def paged(lines: list[str], last: int | None, empty: str) -> str:
+    """
+    One page of a listing as the model is sent it, ending with where to continue when it was full.
+
+    A full page is what says there may be more, as it is for the catalogue's link on the page, so the
+    model is told in the listing rather than told the page size in the description: a number written
+    in the description is a second copy of `LISTED`, and a model counting lines against it is doing
+    the store's arithmetic. The cost, stated: a listing of exactly `LISTED` says there may be more,
+    and one more call finds nothing.
+    """
+    if not lines or last is None:
+        return empty
+    if len(lines) < artifacts.LISTED:
+        return "\n".join(lines)
+    return "\n".join([*lines, f"There may be more: pass before={last} for the next page."])
+
+
 def artifact_tools(store: Artifacts, files: Files | None) -> FunctionToolset[None]:
     """
     `list_artifacts` everywhere, and the two that move a document between a file and an artifact
@@ -67,31 +84,31 @@ def artifact_tools(store: Artifacts, files: Files | None) -> FunctionToolset[Non
 
     async def list_artifacts(query: str | None = None, artifact: str | None = None, before: int | None = None) -> str:
         """
-        List artifacts, or one artifact's versions, newest first, 30 at a time. Never returns HTML.
+        List artifacts, or one artifact's versions, newest first, a page at a time. Never returns HTML.
 
         With no `artifact`, lists every artifact at its current version, and `query` narrows that to
         titles containing it. With `artifact`, lists that artifact's versions instead.
 
-        Each line ends with a number to pass as `before` for the next 30: for the list of artifacts
-        it is an order, and for one artifact's versions it is the version number.
+        A page that may not be the last ends by saying so, with the `before` to pass for the next.
 
         Args:
             query: Text a title contains, matched without regard to case.
             artifact: An artifact's id, to list its versions rather than every artifact.
-            before: From the last line of a previous listing, to continue it.
+            before: From the end of a previous listing, to continue it.
 
         """
         if artifact is None:
             found = await artifacts.catalogue(store.database, before, query)
-            return "\n".join(
-                f"{said(kept)}, kept {kept.made_at:%Y-%m-%d %H:%M} (before={kept.seq})" for kept in found
-            ) or ("No artifacts.")
-        found = await artifacts.history(store.database, artifact, before)
-        return (
-            "\n".join(
-                f"version {kept.version}, kept {kept.made_at:%Y-%m-%d %H:%M} (before={kept.version})" for kept in found
+            return paged(
+                [f"{said(kept)}, kept {kept.made_at:%Y-%m-%d %H:%M}" for kept in found],
+                found[-1].seq if found else None,
+                "No artifacts.",
             )
-            or f"No versions of {artifact}."
+        versions = await artifacts.history(store.database, artifact, before)
+        return paged(
+            [f"version {kept.version}, kept {kept.made_at:%Y-%m-%d %H:%M}" for kept in versions],
+            versions[-1].version if versions else None,
+            f"No versions of {artifact}.",
         )
 
     toolset.add_function(list_artifacts)

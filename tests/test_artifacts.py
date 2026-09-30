@@ -5,14 +5,15 @@ the pages that frame one.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from calling import calling
-from conftest import started
 from pydantic_ai import ModelRetry
 from pydantic_ai.messages import ToolReturn
 from pydantic_ai.models.test import TestModel
@@ -30,6 +31,9 @@ from mainplate.artifacts import Updating
 from mainplate.console import LINKS
 from mainplate.conversation import Returned
 from mainplate.conversation import ToolUse
+from mainplate.pages.artifacts import RECENT
+from mainplate.pages.moments import Reader
+from mainplate.pages.transcript import rule_element
 from mainplate.pages.transcript import tool_block
 from mainplate.service import Service
 from mainplate.tools.artifacts import Artifacts
@@ -161,12 +165,27 @@ class TestListing:
             await artifacts.keep(service.database, SECOND, by(f"call-{at}"), KEPT_AT, Updating(first.artifact, at))
         assert [kept.version for kept in await artifacts.history(service.database, first.artifact, 3)] == [2, 1]
 
-    async def test_what_a_session_kept_is_its_own_in_the_order_it_kept_them(self, service: Service) -> None:
-        mine, theirs = "a" * 32, "b" * 32
-        await artifacts.keep(service.database, FIRST, by("call-a", session=mine), KEPT_AT, title="First")
-        await artifacts.keep(service.database, SECOND, by("call-b", session=theirs), KEPT_AT, title="Theirs")
-        await artifacts.keep(service.database, THIRD, by("call-c", session=mine), KEPT_AT, title="Second")
-        assert [kept.title for kept in await artifacts.made_in(service.database, mine)] == ["First", "Second"]
+    async def test_a_query_folds_case_beyond_ascii(self, service: Service) -> None:
+        await artifacts.keep(service.database, FIRST, by("call-a"), KEPT_AT, title="Über den Straßenplan")
+        await artifacts.keep(service.database, SECOND, by("call-b"), KEPT_AT, title="Uber the plan")
+        listed = await artifacts.catalogue(service.database, query="über den STRASSEN")
+        assert [kept.title for kept in listed] == ["Über den Straßenplan"]
+
+    async def test_a_catalogue_asked_for_fewer_holds_the_newest_few(self, service: Service) -> None:
+        for at in range(4):
+            await artifacts.keep(service.database, FIRST, by(f"call-{at}"), KEPT_AT, title=f"Page {at}")
+        listed = await artifacts.catalogue(service.database, limit=2)
+        assert [kept.title for kept in listed] == ["Page 3", "Page 2"]
+
+    async def test_a_version_named_is_read_as_it_stands_now(self, service: Service) -> None:
+        first = await artifacts.keep(service.database, FIRST, by("call-a"), KEPT_AT)
+        await artifacts.keep(service.database, SECOND, by("call-b"), KEPT_AT, Updating(first.artifact, 1))
+        assert await artifacts.version_of(service.database, first.artifact, 1) == replace(first, current=2)
+
+    async def test_a_version_not_named_is_the_current_one(self, service: Service) -> None:
+        first = await artifacts.keep(service.database, FIRST, by("call-a"), KEPT_AT)
+        second = await artifacts.keep(service.database, SECOND, by("call-b"), KEPT_AT, Updating(first.artifact, 1))
+        assert await artifacts.version_of(service.database, first.artifact) == second
 
     async def test_versions_outlast_the_connection_that_kept_them(self, tmp_path: Path) -> None:
         database = tmp_path / "artifacts.db"
@@ -261,6 +280,20 @@ class TestTheTools:
         assert "The poll" in str(listed)
         assert "script" not in str(listed)
 
+    async def test_a_full_listing_says_where_to_continue(self, service: Service) -> None:
+        for at in range(artifacts.LISTED + 1):
+            await artifacts.keep(service.database, FIRST, by(f"call-{at}"), KEPT_AT, title=f"Page {at}")
+        tools = artifact_tools(Artifacts(service.database, "s" * 32, 2), None)
+        first = await artifacts.catalogue(service.database)
+        listed = await called(tools, "list_artifacts", {})
+        assert str(listed).endswith(f"pass before={first[-1].seq} for the next page.")
+
+    async def test_a_listing_short_of_a_page_says_nothing_more(self, service: Service) -> None:
+        await artifacts.keep(service.database, FIRST, by("call-a"), KEPT_AT, title="The poll")
+        tools = artifact_tools(Artifacts(service.database, "s" * 32, 2), None)
+        listed = await called(tools, "list_artifacts", {})
+        assert "before=" not in str(listed)
+
 
 class TestTheCallLinksToWhatItKept:
     def test_the_summary_links_to_the_version_the_call_recorded(self) -> None:
@@ -351,11 +384,16 @@ class TestThePages:
             page = await client.get(LINKS.to_home())
         assert f'href="{LINKS.to_artifacts()}"' not in page.text
 
-    async def test_a_sessions_rail_lists_what_it_kept(self, app: ASGIApp, service: Service) -> None:
-        session = await started(service, "draw the poll")
-        kept = await artifacts.keep(
-            service.database, FIRST, by("call-a", session=session.id), KEPT_AT, title="The poll"
-        )
+    async def test_the_dashboard_names_only_the_most_recent_few(self, app: ASGIApp, service: Service) -> None:
+        for at in range(RECENT + 1):
+            await artifacts.keep(service.database, FIRST, by(f"call-{at}"), KEPT_AT, title=f"Artifact number {at}")
         async with calling(app) as client:
-            page = await client.get(LINKS.to_session(session.id))
-        assert f'href="{LINKS.to_artifact(kept.artifact, 1)}"' in page.text
+            page = await client.get(LINKS.to_home())
+        assert f"Artifact number {RECENT}" in page.text
+        assert "Artifact number 0" not in page.text
+
+    async def test_a_link_to_a_turn_lands_on_the_rule_that_links_to_itself(self) -> None:
+        rule = render(rule_element(LINKS, Reader(zone=ZoneInfo("UTC")), "7" * 32, 4, opens=True))
+        _, landing = LINKS.to_turn("7" * 32, 4).split("#")
+        assert f'id="{landing}"' in rule
+        assert f'href="#{landing}"' in rule

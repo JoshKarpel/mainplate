@@ -322,15 +322,17 @@ a version back out with `artifact_to_file`, edits the file, and keeps it again, 
 started from. If another session has kept a newer version in between, that is refused rather than
 overwritten. `list_artifacts` finds what there is.
 
-The dashboard lists the artifacts kept most recently and links to all of them, a session's rail
-lists what it kept, and each call that kept a version links to it. An artifact's page shows the
-document in a sandboxed frame, with the turn that kept it, its versions, and a download of exactly
-the same file.
+The dashboard lists the artifacts kept most recently and links to all of them, and each call that
+kept a version links to it. An artifact's page shows the document in a sandboxed frame, with the turn
+that kept it, its versions, and a download of exactly the same file.
 
 The sandbox holds wherever the document is opened, in the frame or on its own: it runs its own
-scripts and reaches nothing else, not this console's cookies or pages and not the network. So a page
-carries its styles, scripts, fonts and images inside itself, and a library from a CDN does not load.
-A downloaded copy runs under whatever your browser gives a local file, which is not that sandbox.
+scripts, cannot read this console's cookies or pages, and cannot fetch anything. So a page carries
+its styles, scripts, fonts and images inside itself, and a library from a CDN does not load. What no
+browser lets the sandbox stop is the page navigating itself away, and a navigation can carry
+whatever the page holds in its address, so treat an artifact that leaves its frame like a link a
+model wrote. A downloaded copy runs under whatever your browser gives a local file, which is not that
+sandbox.
 
 ## The console
 

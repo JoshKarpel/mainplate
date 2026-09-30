@@ -756,7 +756,7 @@ def rule_element(
         },
         children=[
             *(
-                (a(cls="rule__at", attrs={"href": f"#rule-{turn}", "title": f"Turn {turn}"}, children=f"#{turn}"),)
+                (a(cls="rule__at", attrs={"href": f"#{rule_id(turn)}", "title": f"Turn {turn}"}, children=f"#{turn}"),)
                 if opens
                 else ()
             ),

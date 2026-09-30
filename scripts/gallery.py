@@ -78,6 +78,7 @@ from mainplate.durability import ModelResponseTypeAdapter
 from mainplate.forge import Fetched
 from mainplate.forge import Reachable
 from mainplate.forge import Repository
+from mainplate.pages.artifacts import RECENT
 from mainplate.pages.artifacts import artifact_page
 from mainplate.pages.artifacts import catalogue_page
 from mainplate.pages.dashboard import dashboard_page
@@ -840,8 +841,7 @@ DRAWN: list[ModelMessage] = [
 ]
 
 # The drawing session's next two turns keep what it drew as artifacts, which is what puts a call's
-# link to the version it kept on a page, the rail's card of what a session kept, and a history of
-# two versions behind one artifact. The first keeps two pages at once and the second keeps a revision
+# link to the version it kept on a page and a history of two versions behind one artifact. The first keeps two pages at once and the second keeps a revision
 # of one of them onto it, naming the version it last saw, which is the whole of how an update goes.
 POLL_ARTIFACT = "7a" * 16
 TOKEN_ARTIFACT = "7b" * 16
@@ -987,7 +987,7 @@ class Kept:
     The artifact fixtures' `Fixture`, for the same reason that is one table: `seed.py` keeps each of
     these through the store in order, and the gallery draws the same versions from them, so the demo's
     catalogue and the stills are the same artifacts. Each names a call the drawing session's checkpoint
-    holds, which is what makes the rail's card and the call's link in both agree with the store.
+    holds, which is what makes the call's link in both agree with the store.
     """
 
     artifact: str
@@ -1810,9 +1810,6 @@ def showing(
             if facts is not None and facts.cost is not None and said.total.context
             else None
         ),
-        # Read off the artifact fixtures by the session, as `Service.read` reads the store, so a
-        # session's rail lists what the table says it kept and nothing a caller had to remember.
-        kept=tuple(version for version in VERSIONS if version.made_by.session == session.id),
     )
 
 
@@ -2025,7 +2022,7 @@ def pages(links: Links = LINKS) -> dict[str, str]:
     poll = tuple(version for version in reversed(VERSIONS) if version.artifact == POLL_ARTIFACT)
 
     return {
-        "dashboard.html": dashboard_page(links, READER, LISTED, REACHABLE, FETCHES, current),
+        "dashboard.html": dashboard_page(links, READER, LISTED, REACHABLE, FETCHES, current[:RECENT]),
         "new-session.html": new_session_page(
             links, READER, LISTED, CATALOGUE, REACHABLE, REFERENCE, WORKING_IN, Filesystem.CHECKOUT, FETCHES[WORKING_IN]
         ),
