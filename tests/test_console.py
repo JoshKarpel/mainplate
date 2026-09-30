@@ -97,7 +97,7 @@ from mainplate.sessions import Session
 from mainplate.sessions import enrol
 from mainplate.sessions import prepare
 from mainplate.sessions import read_tending
-from mainplate.snapshots import Worktree
+from mainplate.snapshots import Checkout
 from mainplate.tending import AGAIN
 from mainplate.tending import SETTLE_FIELD
 from mainplate.tending import SETTLED
@@ -165,7 +165,7 @@ async def a_session(
     A session started the way a browser starts one, with its first message in it.
 
     **Two posts, because creating one and saying the first thing in it are separate requests**: a
-    repository's plugins cannot be named until its worktree is planted, so creation records the
+    repository's plugins cannot be named until its checkout is planted, so creation records the
     choice and the message box is on the session's own page. Written once here rather than at every
     call site, and a test that is about the split posts to `/sessions` itself.
 
@@ -377,7 +377,7 @@ class TestTheConsole:
         **No message box here**, which is the visible half of the two-step creation.
 
         A plugin's settings are the controls on its card, its card comes back from `describe`, and a
-        repository's plugin cannot be described until its worktree is planted - which a pass does. So
+        repository's plugin cannot be described until its checkout is planted - which a pass does. So
         this page decides what a session *is* and the box is on the session's own page.
         """
         async with calling(app) as caller:
@@ -404,7 +404,7 @@ class TestTheConsole:
         assert answered.status == 303
         assert answered.location == "/"
 
-    @pytest.mark.parametrize(("workspace", "status"), [("somewhere", 422), ("worktree", 422), ("test:gone", 404)])
+    @pytest.mark.parametrize(("workspace", "status"), [("somewhere", 422), ("checkout", 422), ("test:gone", 404)])
     async def test_new_session_in_a_workspace_nothing_offers_is_refused(
         self, app: ASGIApp, workspace: str, status: int
     ) -> None:
@@ -534,7 +534,7 @@ class TestTheConsole:
     ) -> None:
         """
         A session's first message is queued before the pass that composes for it has planted a
-        worktree to read, so the panel is there from the moment the message is and fills in on the
+        checkout to read, so the panel is there from the moment the message is and fills in on the
         swap the first answer arrives on. Asserted against the *fold*, because the panel is drawn
         either way and what tells the two apart is whether there is anything to unfold.
         """
@@ -2359,26 +2359,36 @@ class TestTheRuleAtARequest:
         requests, and it is why the modifier exists rather than the selector being every rule.
         """
         session = await a_session(app, service)
-        await service.checkpointer.supply(session, tree_key(0, 1), snapshotted("b" * 40))
         await answered(service, session, *ANSWERED, *ANSWERED)
         region = await watched(app, session)
         assert region.count('class="rule rule--turn"') == 1
         assert region.count('class="rule"') == 1, "the second request, which opens no turn"
         assert ">r0.1<" in region
-        assert "bbbbbbbb" in region, "the tree the second request was made against"
 
-    async def test_a_rule_carries_what_the_request_cost_and_the_tree_it_saw(
-        self, app: ASGIApp, service: Service
-    ) -> None:
-        """The three things that are true of a request, which were previously homeless or on a panel."""
+    async def test_a_rule_carries_what_the_request_cost(self, app: ASGIApp, service: Service) -> None:
+        """What is true of a request and was previously homeless or on a panel."""
         session = await a_session(app, service)
-        await service.checkpointer.supply(session, tree_key(0, 0), snapshotted("a" * 40))
         await answered(service, session, *ANSWERED)
         region = await watched(app, session)
-        assert "aaaaaaaa" in region, "the tree taken before the ask"
-        assert "\N{UPWARDS ARROW}5K" in region, "and what the answer cost"
+        assert "\N{UPWARDS ARROW}5K" in region, "what the answer cost"
         assert 'class="rule__request"' in region, "and which request it was, named turn and request"
         assert ">r0.0<" in region
+
+    @pytest.mark.parametrize("at", [0, 1])
+    async def test_a_rule_prints_no_snapshot_hash(self, app: ASGIApp, service: Service, at: int) -> None:
+        """
+        A snapshot is how a fork gets its files back, and nothing a reader handles.
+
+        Recorded at both boundaries a two-request turn has, the turn's own rule and the request's, so
+        each is checked against the tree recorded where it stands. The prefix is what a rule used to
+        print, and the whole hash is what its title used to hold.
+        """
+        tree = "cd"[at] * 40
+        session = await a_session(app, service)
+        await service.checkpointer.supply(session, tree_key(0, at), snapshotted(tree))
+        await answered(service, session, *ANSWERED, *ANSWERED)
+        region = await watched(app, session)
+        assert tree[:8] not in region
 
 
 class TestWhatTheIsolationControlsPost:
@@ -2446,7 +2456,7 @@ class TestOneQuestionAboutFiles:
     """
 
     def test_a_repository_settles_both(self) -> None:
-        assert posted_workspace({"workspace": ["exe-github:blog"]}) == ("exe-github:blog", Filesystem.WORKTREE)
+        assert posted_workspace({"workspace": ["exe-github:blog"]}) == ("exe-github:blog", Filesystem.CHECKOUT)
 
     def test_the_two_that_are_not_a_repository_settle_both(self) -> None:
         assert posted_workspace({"workspace": ["nothing"]}) == (None, Filesystem.NOTHING)
@@ -2462,7 +2472,7 @@ class TestOneQuestionAboutFiles:
         found, level = posted_workspace({"workspace": ["test:nothing"]})
 
         assert found == "test:nothing", "a repository whose key spells a level is still a repository"
-        assert level is Filesystem.WORKTREE
+        assert level is Filesystem.CHECKOUT
 
     def test_an_absent_field_is_the_tightest_answer(self) -> None:
         assert posted_workspace({}) == (None, Filesystem.NOTHING)
@@ -2490,7 +2500,7 @@ class Answering:
     refusing: str | None = None
     asked: list[str] = field(default_factory=list)
 
-    async def __call__(self, plugin: Installed, payload: Payload, worktree: Worktree | None) -> Spoke:
+    async def __call__(self, plugin: Installed, payload: Payload, checkout: Checkout | None) -> Spoke:
         self.asked.append(plugin.qualified)
         if self.refusing == plugin.qualified:
             raise PluginFailed(f"{plugin.qualified} exited 1: saying nothing")

@@ -246,14 +246,14 @@ class Instructions(Record):
     cache, and a forget has just thrown the whole prefix away, so composing again exactly there is
     free. It is also the one moment a reader might reasonably expect edited guidance to be picked up.
 
-    **It holds exactly what the model is sent**, notes about this session's worktree and network
+    **It holds exactly what the model is sent**, notes about this session's checkout and network
     included, because `agent_for` speaks it verbatim. That is what the page draws: a system prompt
     panel reads this rather than digging one out of a turn's recorded messages, so it is there from
     the moment a turn opens instead of only once one has landed.
 
-    Written by a pass rather than by `Service.start`, because composing it reads a worktree the
+    Written by a pass rather than by `Service.start`, because composing it reads a checkout the
     worker is the one to plant. That is the whole of the gap a reader sees: a session's very first
-    turn draws the panel without a prompt in it until the clone and the worktree are there to be
+    turn draws the panel without a prompt in it until the clone and the checkout are there to be
     read, which on a fresh repository is the one slow moment in a session's life.
     """
 
@@ -353,27 +353,33 @@ class Result(Record):
 
 class Tree(Record):
     """
-    What the worktree held before one model request of a turn.
+    The checkout's git state before one model request of a turn: its files, its commit, its branch.
 
     `tree` is `None` for a turn taken with no workspace configured, which is a different thing from a
     request nobody has reached: the record exists either way, so the absence is stated rather than
-    inferred from a missing key.
+    inferred from a missing key. `head` and `branch` are `None` there too, and are otherwise
+    `snapshots.Snapshot`'s: no commit on an orphan branch, no branch on a detached `HEAD`.
+
+    Named for the tree because that is what every reader but one wants - a batch's diff is between
+    two of them - and the one that wants the rest is a fork, which reads it through `parse_snapshot`.
     """
 
     kind: Literal["tree"] = "tree"
     tree: str | None = None
+    head: str | None = None
+    branch: str | None = None
 
 
 class Wrote(Record):
     """
-    The net change one request's tool batch made to the worktree, as a unified diff.
+    The net change one request's tool batch made to the checkout, as a unified diff.
 
     Computed where the two trees are both in hand, which is the moment the *next* request's snapshot is
     taken, and recorded rather than derived. Not because the answer could change: both trees are
     immutable objects in the store, and `git diff` over them would print the same text next year. It
     is recorded because a page is a pure function of already-answered questions, and a diff derived
     at render time would be a page running git; recorded, every later pass replays it and every page
-    reads it, and neither runs anything. The diff is over the whole worktree and across every tool
+    reads it, and neither runs anything. The diff is over the whole checkout and across every tool
     the batch ran, an `edit`, a `create` and a `bash` alike, because that is the one thing only a
     snapshot can see: what `bash` touched is invisible to any of the tools themselves.
 
@@ -479,8 +485,8 @@ class Archived(Record):
     It carries *when* and nothing else. Which directories go is derived from the session, and whether
     they have gone yet is what the disk says; the reconciler reads both rather than being told, so a
     console that died halfway through taking a session off the disk finishes the job on its next
-    pass. The tree the worktree held at the end goes under a key of its own, `archived:tree`, written
-    by that reconciler when it is about to uproot the worktree, since the press cannot know it: a
+    pass. The tree the checkout held at the end goes under a key of its own, `archived:tree`, written
+    by that reconciler when it is about to uproot the checkout, since the press cannot know it: a
     pass may still be writing files when the button is pressed.
     """
 
@@ -736,7 +742,7 @@ class Environment(Record):
     Recorded on the pass that set them up, beside the registrations, and fixed for the session's life
     like them: what a session's commands run under is part of its terms, and a fork sets up again and
     records its own. Empty where nothing asked for anything, whether because no plugin sets the
-    repository up, every switch was off, or the session has no worktree, which are three ways of
+    repository up, every switch was off, or the session has no checkout, which are three ways of
     saying the same thing to a command.
     """
 

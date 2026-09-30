@@ -30,7 +30,7 @@ def repository(tmp_path: Path, bwrap: str) -> Files:
     (tmp_path / "build" / "ignored.py").write_text("needle in ignored output\n")
     (tmp_path / "blob.bin").write_bytes(b"\xff\xfe needle")
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    return Files(roots=(GitTracked(worktree=checkout_in(tmp_path, bwrap)),))
+    return Files(roots=(GitTracked(checkout=checkout_in(tmp_path, bwrap)),))
 
 
 def anchor_of(files: Files, path: str, at: int) -> str:

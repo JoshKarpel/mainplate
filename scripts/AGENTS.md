@@ -96,7 +96,7 @@ the *k-1* requests already recorded. What it exists to answer is
 was a number.
 
 **It is the odd one out here, because it is not downstream of a checkpoint: it writes one.** So it
-drives a real `Service` over a real database and a real git worktree, with only the provider
+drives a real `Service` over a real database and a real git checkout, with only the provider
 standing in - the per-request snapshot leaves the process, behind the real `bwrap`, and a stand-in
 for either would leave the one thing a pass does outside Python out of the measurement. So it needs
 `bwrap` to run at all.

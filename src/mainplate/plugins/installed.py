@@ -2,7 +2,7 @@
 #
 # One mechanism and three places it may be declared. **Bundled** ships in this repository;
 # **user** is named in `config.yaml` by whoever runs the console; **repository** is named in
-# `.mainplate/mainplate.yaml` at the session's own worktree and runs only once granted.
+# `.mainplate/mainplate.yaml` at the session's own checkout and runs only once granted.
 #
 # The three are a **union and never a merge**. Each plugin is declared in exactly one place and
 # carries all of its settings from there, so nothing anywhere resolves one declaration against
@@ -49,7 +49,7 @@ inspectable and as replaceable as anybody else's.
 
 REPOSITORY_FILE: Final = Path(".mainplate") / "mainplate.yaml"
 """
-Where a repository declares its own plugins, relative to the session's worktree root.
+Where a repository declares its own plugins, relative to the session's checkout root.
 
 A directory rather than a dotfile at the root, so a repository that grows a second thing to say to
 this console has somewhere to put it without another top-level file.
@@ -138,7 +138,7 @@ class Installed:
         Whether this plugin runs behind the sandbox, which every repository's does and no other does.
 
         **Fixed and narrow, and never the session's own.** A session on `Filesystem.EVERYTHING` gets
-        a `bash` that reaches `/`; a repository's plugin in that session still reaches the worktree
+        a `bash` that reaches `/`; a repository's plugin in that session still reaches the checkout
         it was handed and nothing else. The isolation a session picked is a decision about what the
         *model* may reach, and a plugin is not the model.
 
@@ -270,9 +270,9 @@ def installed_by(tier: Tier, declared: Mapping[str, Path], relative_to: Path | N
     )
 
 
-def repository_plugins(worktree: Path) -> tuple[Installed, ...]:
+def repository_plugins(checkout: Path) -> tuple[Installed, ...]:
     """
-    What a repository declares about itself, read from the worktree at the moment it was planted.
+    What a repository declares about itself, read from the checkout at the moment it was planted.
 
     **Read once, on the session's first pass, and recorded.** Every pass after replays the record and
     reads no file. Without this a model writes a plugin on turn 4 and the console runs it on turn 5,
@@ -289,15 +289,15 @@ def repository_plugins(worktree: Path) -> tuple[Installed, ...]:
     Nothing at all where the file is absent, which is most repositories, and a grant for one of those
     is inert without anything having been fetched to find that out.
     """
-    found = worktree / REPOSITORY_FILE
+    found = checkout / REPOSITORY_FILE
     try:
         raw = found.read_text(encoding="utf-8")
     except OSError, UnicodeDecodeError:
         return ()
     declared = declared_in(raw, str(REPOSITORY_FILE))
-    here = worktree.resolve()
+    here = checkout.resolve()
     installed: list[Installed] = []
-    for each in installed_by(Tier.REPOSITORY, declared, relative_to=worktree):
+    for each in installed_by(Tier.REPOSITORY, declared, relative_to=checkout):
         if here not in each.path.resolve().parents:
             raise BadDeclaration(f"{REPOSITORY_FILE} declares {each.name!r} at {each.path}, which is outside the tree")
         installed.append(each)

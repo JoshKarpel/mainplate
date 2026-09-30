@@ -22,7 +22,7 @@ the cross-cutting rules the pages cite rather than restate.
 - **[The composer](composer.md)** is everything the box at the bottom of a conversation can do:
   where a message goes, the shelf, `forget`, handoff, steering, and running a command.
 - **[The workspace](workspace.md)** is the git side: where a repository is reached from, the
-  worktree a session gets, and how a tree is snapshotted at every model request.
+  checkout a session gets, and how a tree is snapshotted at every model request.
 - **[How a model reaches a file](tools.md)** is the toolset: which tools a session gets, and the
   content-addressed anchoring scheme behind `read` and `edit`.
 - **[Where a command runs](sandbox.md)** is the mount namespace `bash` runs behind, and the two

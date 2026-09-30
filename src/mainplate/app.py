@@ -200,7 +200,7 @@ async def open_store(
         await migrate(opened)
         await prepare(opened)
         checkpointer = SqliteCheckpointer(opened)
-        # Only where there are workspaces, since a command runs in a session's worktree and a
+        # Only where there are workspaces, since a command runs in a session's checkout and a
         # console keeping none has nowhere to put one. The same pairing the file tools already have,
         # one level out.
         running = Commands(checkpointer=checkpointer, patience=patience) if workspaces is not None else None
@@ -264,7 +264,7 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
     #
     # Reported rather than refused, which is `forge.offers`'s promise and not `catalogue.discover`'s
     # refusal: a console with no sandbox is one whose sessions are offered no `bash` and no
-    # repository, since a worktree's git reads configuration the session writes and has to be
+    # repository, since a checkout's git reads configuration the session writes and has to be
     # confined as surely as a command. Nothing here leaves somebody holding a choice they cannot
     # use, so it is not a reason not to start. Logged because the alternative - a shell and a
     # repository list that quietly are not there - is the state nobody can diagnose.
@@ -278,7 +278,7 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
     logger.info(f"repositories reachable: {len(reaching.current.repositories)}")
     workspaces = Workspaces(
         clones=Clones(root=settings.workspace_root / "clones"),
-        root=settings.workspace_root / "worktrees",
+        root=settings.workspace_root / "checkouts",
         scratch=settings.workspace_root / "scratch",
         reaching=reaching,
         bwrap=bwrap,
@@ -292,7 +292,7 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
     references = References()
     if config.model_reference is not None:
         await refreshed(references, config.model_reference)
-    # Every plugin outside a worktree, which is the bundled set and whatever `config.yaml` installs.
+    # Every plugin outside a checkout, which is the bundled set and whatever `config.yaml` installs.
     # Both are files this process cannot see change, so the *set* is fixed at startup; what each one
     # says is asked per session, on that session's own first pass, so a plugin edited on disk reaches
     # the next new session without the console being restarted. That matters most while somebody is

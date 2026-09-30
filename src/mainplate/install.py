@@ -294,10 +294,10 @@ class Unit:
 
         Deliberately unhardened: no `ProtectSystem`, no `ReadWritePaths`, no `NoNewPrivileges`.
 
-        The agent edits repositories, so the paths it legitimately writes are the worktree root and
+        The agent edits repositories, so the paths it legitimately writes are the checkout root and
         everything beneath it, which is exactly what a `ReadWritePaths` would have to name. The
         boundary that actually holds is `Files.resolved`, which resolves every path a tool is given
-        and refuses one landing outside the session's own worktree; a unit sandbox loose enough to
+        and refuses one landing outside the session's own checkout; a unit sandbox loose enough to
         permit that root protects nothing the tools do not already refuse.
         """
         return UNIT.format(

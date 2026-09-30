@@ -59,7 +59,7 @@ class Settings(BaseSettings):
 
     workspaces: Path | None = None
     """
-    Where this console keeps repositories and the worktrees sessions work in, or beside the
+    Where this console keeps repositories and the checkouts sessions work in, or beside the
     database when not named.
 
     There is no setting naming a *repository*, and that is the design rather than an omission: what
@@ -67,8 +67,8 @@ class Settings(BaseSettings):
     on the session. A process-wide answer would be a second answer to a question each session
     already answers, exactly as a process-wide model would be.
 
-    Clones and worktrees both live under here, in `clones/` and `worktrees/`, and both are outside
-    any repository they hold. A worktree inside its own repository would be captured by the very
+    Clones and checkouts both live under here, in `clones/` and `checkouts/`, and both are outside
+    any repository they hold. A checkout inside its own repository would be captured by the very
     snapshots it exists to take, so every session would hold a copy of every other session's files.
     """
 
@@ -156,18 +156,18 @@ class Settings(BaseSettings):
     @property
     def workspace_root(self) -> Path:
         """
-        Where clones and worktrees go, which is what was named or a directory beside the database.
+        Where clones and checkouts go, which is what was named or a directory beside the database.
 
         Beside the database because the two are the halves of one session: the checkpoint says what
-        was said and the worktree holds what it was said about, so a console pointed at another
-        database gets its own worktrees rather than sharing the first one's.
+        was said and the checkout holds what it was said about, so a console pointed at another
+        database gets its own checkouts rather than sharing the first one's.
 
         **Absolute, always.** A relative path here is not a place, it is a place *plus* whatever
         directory the process happens to be in, and everything below this runs `git` with a `cwd` of
-        its own choosing: a clone is made from the clones root, a worktree is added from the
+        its own choosing: a clone is made from the clones root, a checkout is added from the
         repository. Handing either a relative destination means git resolves it under that `cwd`
         rather than under this root, so the clone lands at `workspaces/clones/workspaces/clones/...`
-        and the worktree lands inside the repository. Worse, the checks that make both operations
+        and the checkout lands inside the repository. Worse, the checks that make both operations
         idempotent then look at the path that was *asked for*, never find it, and every pass tries
         again - which is a `SnapshotFailed` on a session's second turn.
 
@@ -184,7 +184,7 @@ class Settings(BaseSettings):
     How long a command a person runs may take before it is killed.
 
     Bounded because nothing else bounds it: a command that never returns would hold its panel open
-    until the console restarted, and the process tree under it would keep the worktree busy. Ten
+    until the console restarted, and the process tree under it would keep the checkout busy. Ten
     minutes, because the commands worth typing here are builds and test suites rather than one-liners
     and the alternative to waiting is running the thing in a terminal instead.
 

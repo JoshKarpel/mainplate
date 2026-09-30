@@ -75,10 +75,10 @@ async def ran(
     """
     One command, inside a namespace of its own, for at most `seconds`.
 
-    The sandbox is resolved here rather than held, because a worktree does not exist yet when the
+    The sandbox is resolved here rather than held, because a checkout does not exist yet when the
     agent is built: a session's first pass plants it, and the agent that will use it is constructed
     before that happens. Asking git where the clone is costs one short subprocess against a call
-    that is already spawning one, and it is right about a worktree that moved.
+    that is already spawning one, and it is right about a checkout that moved.
 
     `stderr` is folded into `stdout` rather than reported beside it, so what comes back is the
     interleaving the command actually produced. Split into two blocks, a warning and the line it is
@@ -140,7 +140,7 @@ def bash_tools(
 
     Built per session for the same reason the file tools are: what makes a command safe to run is
     the namespace it runs in, and every session picks its own. The confinement is a value rather
-    than a built sandbox because a worktree does not exist yet at this moment - the session's first
+    than a built sandbox because a checkout does not exist yet at this moment - the session's first
     pass plants it, and this runs before that.
 
     `environment` is settled per session too, since it is what the session's plugins recorded at

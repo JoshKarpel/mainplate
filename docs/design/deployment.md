@@ -27,16 +27,16 @@ just added.
 
 There is no `Protect*`/`ReadWritePaths` block, deliberately, and that is not an exception to
 [the sandbox](sandbox.md) but a consequence of it. The agent edits repositories, so the paths it
-legitimately writes are the worktree root and everything under it, which is exactly what a
-`ReadWritePaths` would have to name: a unit sandbox loose enough to permit the worktree protects
+legitimately writes are the checkout root and everything under it, which is exactly what a
+`ReadWritePaths` would have to name: a unit sandbox loose enough to permit the checkout protects
 nothing.
 
 The boundaries that actually hold are both *inside* the process and per session rather than per
 service, which is what a unit setting can never be: `Files.resolved` for the file tools, and a mount
-namespace for `bash`, for a command the person runs, and for every git against a worktree.
+namespace for `bash`, for a command the person runs, and for every git against a checkout.
 
 That is also why the service is not itself confined. It holds the credential, the store, and every
-session's worktree, all of which it needs, so the useful boundary is the one around what a session
+session's checkout, all of which it needs, so the useful boundary is the one around what a session
 reaches and not the one around the console. What that leaves guarding it is who can reach the
 console, since anybody who can may start a session on the whole machine.
 

@@ -444,15 +444,15 @@ on the dashboard answered it. It rides back on the form as a hidden field, so th
 choice and is parsed as it always was, and `change` goes back to the dashboard. On a repository,
 **where to start in it comes first**, above everything else, since it is the question most likely to
 differ from one session to the next; its branches are asked for once the page has arrived, with the
-same fragment a workspace card asks for on the fork page, so the page never waits on the forge.
+`/fragments/branches` swap, so the page never waits on the forge.
 
-**The fork page still asks the workspace as a question**, where a session with no repository may
-attach one. There it is the first group, which is where the rest of this ordering starts.
+**The fork page does not ask the workspace at all**, since a fork works in its parent's files; on a
+repository it leads with the branch the fork carries on instead.
 
 **Ordered widest-first: workspace, network, repository code, endpoint, model, thinking, output
 override**, and then the name. What files a session has is the broadest thing about it and is one
-question rather than two, so it leads; the network follows because it is the other thing deciding
-what the agent can do at all; whether the repository's own code runs is the third question about
+question rather than two, so it leads, answered before the picker on both pages; the network follows
+because it is the other thing deciding what the agent can do at all; whether the repository's own code runs is the third question about
 that same subject, so it sits with them and is drawn only where a repository is picked; the endpoint
 and the model are adjacent because they are a pair, the list being whatever the endpoint above it
 offers; the thinking level and the output override are settings *on* the model, so they sit under
@@ -460,7 +460,7 @@ it, the override last because it is the one almost nobody touches. The name come
 because it is the one question here that decides nothing about how the session runs.
 
 **There is no message box on this page, and its button says `Create session`.** A repository's
-plugins cannot even be named until its worktree is planted, which a pass does, and none of them may
+plugins cannot even be named until its checkout is planted, which a pass does, and none of them may
 be run until somebody has seen the list. So this page decides what a session *is*, the settings step
 decides what it loads, and the box is on the session's own page once there is a conversation to type
 into. See [the settings step](plugins.md#starting-a-session-takes-four-steps).
@@ -780,7 +780,7 @@ than migrated, because it is one press and the alternative is code that reads a 
 console no longer has.
 
 **A panel says what is in it; a rule says what is true of the request or the turn around it.** Which
-turn it is, where the session may be forked from, the worktree a request was made against, and what
+turn it is, where the session may be forked from, the checkout a request was made against, and what
 it spent all belong to the exchange rather than to any one run of blocks, and hung on a panel they
 had to be hung on a chosen one. Usage settles it: it belongs to a `ModelResponse`, and one response
 becomes as many panels as it has kinds of part, so there is no attribution rule from a response to a
@@ -811,12 +811,15 @@ and are now two. That is the point rather than a regression, because a merged pa
 between requests for a rule to stand in, and it is also the more accurate reading.
 
 A turn's first rule carries the turn's own facts as well, which turn it is, where it may be forked
-from, the tree it started on, and what the **whole turn** spent, and the later ones carry only their
-own request's. The tree there comes off the turn's first panel rather than out of request 0, which
-is the same key read a request earlier: `turn:{n}:tree:0` is written *before* the model is asked, so
-a turn whose first answer has not landed yet still says what it started on. Where the figures on one
-rule are a turn's and on the next a request's, the title says which; only `rule--turn` is what the
-dock's turn arrows step, or a turn with four round trips in it would give that column four stops.
+from, and what the **whole turn** spent, and the later ones carry only their own request's. Where
+the figures on one rule are a turn's and on the next a request's, the title says which; only
+`rule--turn` is what the dock's turn arrows step, or a turn with four round trips in it would give
+that column four stops.
+
+**No rule prints a snapshot hash**, although `turn:{n}:tree:{i}` is recorded at exactly the boundary
+each rule stands on. A snapshot is how this console puts a session's files back for a fork and
+nothing a reader handles: the checkout's own git names none of them, so the hash was a detail of the
+mechanism drawn as a fact about the work, and the line is narrower without it.
 
 ## Every panel folds, from its own row
 
@@ -888,7 +891,7 @@ to the repository, and that is [the batch's diff](#the-batchs-diff) below the pa
 own diff or new file, are the fine print a reader opens a call to check. The same for every tool and
 every state, for the reason above: a call drawn shut while it was out and open once it landed would
 be a default that moved, and the morph delivering it would be recorded as the reader opening it.
-The cost, stated: a session with no worktree has no snapshots and so no batch's diff, and there an
+The cost, stated: a session with no checkout has no snapshots and so no batch's diff, and there an
 `edit` or a `create` is drawn shut with nothing standing in for it, so what the model changed is a
 press per call away rather than on the page.
 

@@ -1,6 +1,6 @@
 # What this repository asks a mainplate session working on it to run.
 #
-# The path is relative to the worktree root. Nothing here can name an endpoint, a credential or an
+# The path is relative to the checkout root. Nothing here can name an endpoint, a credential or an
 # isolation level, because the type this is read into has no field for one.
 #
 # `setup` fetches the toolchain the session's own commands need and answers nothing after that.

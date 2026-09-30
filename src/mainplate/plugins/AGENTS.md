@@ -77,9 +77,9 @@ carries line readers for `description:` and `paths:` rather than a YAML parser, 
 translator rather than a library, because a plugin with no dependencies is worth more here than the
 general case of fields nothing else reads.
 
-**A console-tier plugin must not run git against the worktree the ordinary way.** It runs as the
-operator, unconfined, and the worktree's `.git/config` is the session's to write, so `git -C
-<worktree>` runs whatever that configuration names. `bundled/guidance` reads the index through
+**A console-tier plugin must not run git against the checkout the ordinary way.** It runs as the
+operator, unconfined, and the checkout's `.git/config` is the session's to write, so `git -C
+<checkout>` runs whatever that configuration names. `bundled/guidance` reads the index through
 `GIT_INDEX_FILE` against an empty bare repository of its own; copy that rather than disabling one
 setting at a time. See [what runs, and as whom](../../../docs/design/security.md).
 
@@ -98,7 +98,7 @@ by `tests/test_app.py`, which is the one place `open_console` installs them.
   everything beneath it. That is why `instructions` is a `setup` contribution rather than an
   event, and it is why a forget no longer picks up a repository's edited guidance - forking does.
 - **`setup` is the only event with a network, and it must stay the only one.** What makes a connected
-  run safe there is *when* it happens: before the first message, over a worktree holding the commit
+  run safe there is *when* it happens: before the first message, over a checkout holding the commit
   the repository supplied, or in a fork a tree the model wrote, which that branch's own press
   licenses. An event during the conversation with a
   network would be a plugin that has read whatever the model has been writing and can send it
@@ -122,7 +122,7 @@ by `tests/test_app.py`, which is the one place `open_console` installs them.
   them and never sources them, and a line that is not `KEY=value` fails the setup naming the plugin.
   Two plugins writing the same name is refused naming both, because two `PATH` lines cannot both be
   whole.
-- **A plugin outside a worktree is handed no scratch, and that is a decision.** What a scratch answers
+- **A plugin outside a checkout is handed no scratch, and that is a decision.** What a scratch answers
   is having nowhere to write, which only the namespace creates; such a plugin has the operator's
   `$HOME`, their caches, their `/tmp` and their other scripts, and may need all four. Giving it one
   would be two empty directories per session that nothing removes. Something to remember per session
@@ -132,7 +132,7 @@ by `tests/test_app.py`, which is the one place `open_console` installs them.
 - **A fork carries nothing about its parent's plugins**, so it declares, draws the settings step over
   the turns it holds, and runs `setup` again on its own press. That is what lets a session iterate on
   `.mainplate/` by forking, and it is why the setup that installs a session's toolchain can live in a
-  plugin at all: a branch plants a fresh worktree, and an ignored directory does not come across in a
+  plugin at all: a branch plants a fresh checkout, and an ignored directory does not come across in a
   recorded tree. A snapshot is `git add -A`, so the tree a branch is planted at *is* a tree the model
   wrote, and what makes running it legitimate is the press in the branch rather than the parent's.
   Anything that would hand a fork a registration, a declaration or a press is the change to push back

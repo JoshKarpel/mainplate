@@ -8,7 +8,7 @@
 # The cost is one index read per interval on a console with nothing to do, and a session pressed
 # archived keeping its files for up to `archive_every`.
 #
-# What it refuses to do is take a worktree from under a pass. A pass reads the checkpoint at its top
+# What it refuses to do is take a checkout from under a pass. A pass reads the checkpoint at its top
 # and never sees an archive written after, so a session the worker holds is left for the next round;
 # the pass that follows reads the key and stops. A command a person is still running is the same case
 # from the other side. Both are read off live state rather than recorded, since both are true only at
@@ -23,8 +23,8 @@ from collections.abc import Callable
 from datetime import datetime
 from datetime import timedelta
 
-from mainplate import records
 from mainplate.conversation import ARCHIVED_TREE_KEY
+from mainplate.durability import recorded_snapshot
 from mainplate.footprint import Footprints
 from mainplate.footprint import Places
 from mainplate.footprint import measured
@@ -44,33 +44,34 @@ def holding(places: Places, session: Session) -> bool:
 
 async def taken_off(service: Service, places: Places, session: Session) -> None:
     """
-    Every directory that is this session's, off the disk, with the worktree's last tree recorded first.
+    Every directory that is this session's, off the disk, with the checkout's last state recorded first.
 
-    The worktree's last tree is captured first, under `archived:tree`, so a fork from the end of
-    this session plants at the files it actually ended with; the capture puts that tree in the
-    store, and the store is not the session's, so it outlives the worktree.
+    The checkout's last state is captured first, under `archived:tree`, so a fork from the end of
+    this session plants at the commit, the branch and the files it actually ended with; the capture
+    puts the tree and the commit in the store, and the store is not the session's, so both outlive
+    the checkout.
 
     **A capture that fails is logged and the files go anyway.** The usual reason is a session that
     broke its own `.git`, which no later round would fix, so retrying would keep its files for ever.
     Without the key, a fork from the end plants at the newest tree a turn recorded, and what changed
-    after that is lost with the worktree.
+    after that is lost with the checkout.
 
-    Then everything `Places.of` names that is still there, which is the worktree, the scratch and
+    Then everything `Places.of` names that is still there, which is the checkout, the scratch and
     the plugins' scratches.
     """
     workspaces = places.workspaces
     if session.repository is not None and workspaces.clones.cloned(session.repository):
-        worktrees = workspaces.worktrees(session.repository)
-        if worktrees.planted(session.id):
+        checkouts = workspaces.checkouts(session.repository)
+        if checkouts.planted(session.id):
             try:
-                ending = await worktrees.worktree(session.id).capture(f"archived {session.id}")
+                ending = await checkouts.checkout(session.id).capture(f"archived {session.id}")
             except SnapshotFailed as uncaptured:
                 logger.warning(
                     f"archiving {session.id} without its last tree, which could not be captured: {uncaptured}"
                 )
             else:
-                await service.checkpointer.supply(session.id, ARCHIVED_TREE_KEY, records.Tree(tree=ending).recorded())
-            await worktrees.uproot(session.id)
+                await service.checkpointer.supply(session.id, ARCHIVED_TREE_KEY, recorded_snapshot(ending))
+            await checkouts.uproot(session.id)
     for place in places.of(session.id, session.repository):
         if place.is_symlink():
             await asyncio.to_thread(place.unlink)

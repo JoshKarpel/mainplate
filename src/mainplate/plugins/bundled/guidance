@@ -4,15 +4,15 @@
 # Two scopes, and the difference between them is whose voice it is rather than where the file sits.
 # **Console guidance** is the operator's own, in `<config home>/mainplate/guidance/`, and it is true
 # of every session this console answers. **Repository guidance** is the project's own `AGENTS.md`,
-# read out of the worktree the session works in, and it is true of one repository.
+# read out of the checkout the session works in, and it is true of one repository.
 #
 # Each scope has a part that is always said and a part held back until it applies. The operator's
 # files with no `paths:` and the repository's root `AGENTS.md` are in the instructions from the
 # first request; an operator's file naming its globs, and an `AGENTS.md` further down the tree, are
 # listed there by name and handed over whole the first time a file tool names a file they cover.
 #
-# **Nothing read out of a worktree follows a link.** This plugin runs as the operator, outside every
-# sandbox, and everything in a worktree, its `.git` included, is the session's to write; see
+# **Nothing read out of a checkout follows a link.** This plugin runs as the operator, outside every
+# sandbox, and everything in a checkout, its `.git` included, is the session's to write; see
 # `beneath`.
 #
 # **The repository wins where the two disagree**, so it is composed last. That is not a claim about
@@ -77,7 +77,7 @@ def readable(path: Path) -> str | None:
     told", and a file that is unreadable this second is not a reason a session cannot be answered.
 
     **The operator's files only.** This follows links, which is right for a guidance directory that
-    is itself a link into somebody's dotfiles, and is exactly wrong for anything inside a worktree;
+    is itself a link into somebody's dotfiles, and is exactly wrong for anything inside a checkout;
     see `beneath` for those.
     """
     try:
@@ -88,10 +88,10 @@ def readable(path: Path) -> str | None:
 
 def beneath(root: Path, relative: Path) -> bytes | None:
     """
-    What a regular file inside a worktree holds, reached without following a single link.
+    What a regular file inside a checkout holds, reached without following a single link.
 
-    **Everything in a worktree is the session's to write, and this plugin reads as the operator**,
-    outside every sandbox. So a path taken out of a worktree is walked one directory at a time with
+    **Everything in a checkout is the session's to write, and this plugin reads as the operator**,
+    outside every sandbox. So a path taken out of a checkout is walked one directory at a time with
     `O_NOFOLLOW`, and the file at the end is opened the same way and read only if it is a regular
     file. A link anywhere on the way is nothing rather than a file somewhere else: `docs/AGENTS.md`
     committed as a link to one of the operator's own files would otherwise be read as the operator
@@ -129,7 +129,7 @@ def beneath(root: Path, relative: Path) -> bytes | None:
 
 
 def readable_beneath(root: Path, relative: Path) -> str | None:
-    """What a guidance file inside a worktree says, reached as `beneath` reaches it."""
+    """What a guidance file inside a checkout says, reached as `beneath` reaches it."""
     held = beneath(root, relative)
     if held is None:
         return None
@@ -203,26 +203,26 @@ def described(text: str) -> str | None:
 
 def tracked_guidance(root: Path) -> frozenset[Path]:
     """
-    Every guidance path the worktree's index lists, relative to the repository root.
+    Every guidance path the checkout's index lists, relative to the repository root.
 
     Ignored and other untracked files may belong to an environment rather than the repository, so
     none of them may become instructions merely because a tool reached into them: a guidance file
     installed inside a `.venv` is not the repository's. `--cached` asks only what the index knows.
 
     **The index is the session's to write, so it is a filter and not a boundary.** A session can
-    stage whatever it likes, including a path whose file on disk is a link out of the worktree; what
+    stage whatever it likes, including a path whose file on disk is a link out of the checkout; what
     keeps that from reaching the operator's files is that every read of a listed path goes through
     `beneath`. What the index still buys is the `.venv` case above, which is about what a repository
     means rather than about what a session can reach.
 
-    Nothing on a failed command, because a directory that is not a worktree has no repository-owned
+    Nothing on a failed command, because a directory that is not a checkout has no repository-owned
     guidance to contribute.
 
-    **The worktree's index is read through a repository this plugin made**, an empty bare one in a
-    temporary directory, and never through the worktree's own `.git`. A session's worktree owns its
+    **The checkout's index is read through a repository this plugin made**, an empty bare one in a
+    temporary directory, and never through the checkout's own `.git`. A session's checkout owns its
     `.git`: its configuration is the model's to write, and several of its keys name a program git
     runs. Git reads the configuration of whichever repository it is told is its own, so telling it
-    this one means the worktree's is never read at all, whatever keys it holds. The index itself is
+    this one means the checkout's is never read at all, whatever keys it holds. The index itself is
     copied out through `beneath` first, so an index that is a link to somebody else's is no index
     rather than theirs; one that is not an index is a failed command and so no guidance.
     """
@@ -497,7 +497,7 @@ def scoped_index(scoped: tuple[Scoped, ...]) -> str | None:
 
     The same shape as the index of a repository's nested guidance, for the same reason: that a kind
     of file has rules is one line, and what they are is a page delivered when it is wanted. The model
-    cannot open these itself, since they are the operator's and not in any worktree, so the line
+    cannot open these itself, since they are the operator's and not in any checkout, so the line
     says they arrive rather than inviting a read.
     """
     if not scoped:
@@ -618,7 +618,7 @@ def touched_in(messages: list[Any]) -> tuple[str, ...]:
 
     Read off the calls rather than off anything recorded beside them, which is what makes this free:
     a call is already in the history for its own sake. A call naming a `root` is passed over, since
-    the only root that is not the worktree is the scratch and nothing there is the repository's.
+    the only root that is not the checkout is the scratch and nothing there is the repository's.
 
     `bash` is not here and cannot be: its argv is the model's, so a path inside it is a string this
     plugin has no business parsing. That is the hole the index exists to cover.
@@ -697,7 +697,7 @@ def covering(settled: Path, here: Path, tracked: frozenset[Path]) -> tuple[Path,
 
     **Walked downward from the root rather than upward from the directory**, which is the only reading
     that stops at the root: a walk up the parents runs past it, and the directory holding the
-    repository is somebody else's - a checkout inside a checkout, or a worktree planted under the
+    repository is somebody else's - a checkout inside a checkout, or a checkout planted under the
     clone it came from, in which case the next `AGENTS.md` up is a file this session was never given
     and has no name relative to its root.
     """
@@ -794,19 +794,19 @@ def describing(payload: dict[str, Any]) -> dict[str, Any]:
     which knows what it wrote.
     """
     files = operators_files()
-    where = payload.get("worktree")
+    where = payload.get("checkout")
     root = Path(where) if isinstance(where, str) else None
     tracked = tracked_guidance(root) if root is not None else frozenset()
     said = instructing(
         console_guidance(files),
-        # Only where there is a worktree, since a file tool naming a file in one is the only thing
+        # Only where there is a checkout, since a file tool naming a file in one is the only thing
         # that hands a scoped file over: an index promising what never arrives is worse than none.
         scoped_index(scoped_guidance(files)) if root is not None else None,
         repository_guidance(root, tracked) if root is not None else None,
         indexing(root, elsewhere_in(tracked)) if root is not None else None,
     )
     return {
-        # Only where there is a worktree to reach into. A session with no repository has no nested
+        # Only where there is a checkout to reach into. A session with no repository has no nested
         # guidance to hand over, so asking it at every request would be a process per request to be
         # told nothing.
         "events": ["before_request"] if root is not None else [],
@@ -820,7 +820,7 @@ def answer(payload: dict[str, Any]) -> dict[str, Any]:
     if event == "setup":
         return describing(payload)
     if event == "before_request":
-        where = payload.get("worktree")
+        where = payload.get("checkout")
         if not isinstance(where, str):
             return {}
         messages = payload.get("messages")

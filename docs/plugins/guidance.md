@@ -2,7 +2,7 @@
 
 The words a session is answered under, and there are two scopes. **Console guidance** is the
 operator's own, every `.md` file under `<config home>/mainplate/guidance/`, sorted by path.
-**Repository guidance** is the project's own tracked `AGENTS.md`, read out of the worktree the
+**Repository guidance** is the project's own tracked `AGENTS.md`, read out of the checkout the
 session works in. Each scope has a part that goes into the agent's `instructions` and a part held
 back until it applies: an operator's file whose frontmatter names the files it is for with `paths:`
 ([below](#guidance-that-names-its-files)), and an `AGENTS.md` further down the repository's tree
@@ -77,28 +77,29 @@ Five details there are decided:
   cannot be composed twice under one key in a pass, which is why a pass answering two turns of one
   stretch memoises what it composed and a pass crossing a forget composes a second time.
 - **It records exactly what the model is sent**, every running plugin's contribution and the notes
-  about this session's worktree and network included, and `agent_for` speaks it verbatim. Composed out there instead, those notes would be a
+  about this session's checkout and network included, and `agent_for` speaks it verbatim. Composed out there instead, those notes would be a
   sentence the model carried that no record held, so a page could report only what a *turn's*
   messages held, which is nothing until a turn has landed, and they would be recomposed on every
   turn from live state, in front of a cached prefix they are supposed to sit still behind. The
   reason they cannot simply be appended in `agent_for` on top of a record that already holds them is
   the replay: a second pass hands it back the recorded string and would get them twice.
 - **What decides the note and what decides the toolset is one function.** They are read off one
-  `Choice.isolation` and one worktree, and `agent.reaching` answers both at once, because in two
+  `Choice.isolation` and one checkout, and `agent.reaching` answers both at once, because in two
   `match` statements they would be two places to keep in step over one answer and the failure would
   be quiet: a session told it has a scratch directory whose tools cannot reach one.
 - **The key is not turn-prefixed**, deliberately. `before` copies turn-prefixed keys by shape, so a
-  turn-shaped name would carry a parent's instructions into a fork that may have attached a
-  repository the parent never had. Named this way a fork composes its own.
+  turn-shaped name would carry a parent's instructions into a fork that may have turned the network
+  the other way, or whose plugins say something else once set up again. Named this way a fork
+  composes its own.
 - **`working_note` names a session's places and never paths them**, which is `roots.py`'s whole
-  argument said one layer out and a fact about the cache besides. A worktree sits under 32 hex
+  argument said one layer out and a fact about the cache besides. A checkout sits under 32 hex
   characters of session id, so printing the path invites the failure the root names were built to
   prevent; and instructions are the per-request parameter Pydantic AI renders in front of the entire
   cached prefix, so a sentence naming one session's directories makes that session's prefix unlike
   every other's. With the paths out, the note is a pure function of the isolation: two sessions of
   the same shape compose byte-identical instructions, and a fork's first request reads its parent's
   prefix from cache rather than paying full price for the whole conversation again. A relative path
-  already lands in the worktree and `$MAINPLATE_WORKTREE` already names it in a command, so nothing
+  already lands in the checkout and `$MAINPLATE_CHECKOUT` already names it in a command, so nothing
   was given up. `test_what_a_stretch_records_is_exactly_what_its_requests_carried` asserts the path
   is absent beside its control that the note is present, so an emptied note cannot pass it.
 
@@ -142,7 +143,7 @@ is `docs/**`. A `paths:` the reader cannot parse covers nothing rather than ever
 because a scoping mistake should cost the operator a rule that is missing, which they can see, and
 not one that is present in every session, which is the thing scoping was for.
 
-**Only where there is a worktree.** A session reaching nothing has no file tool naming a file in a
+**Only where there is a checkout.** A session reaching nothing has no file tool naming a file in a
 repository, so nothing would ever hand a scoped file over; the index is left out there rather than
 promising what never arrives.
 
@@ -158,7 +159,7 @@ things there are decided:
   worth trusting for this is that `agent_for` speaks it verbatim: nothing is composed on top of it,
   so what a stretch records and what its requests carried are one string.
   `test_what_a_stretch_records_is_exactly_what_its_requests_carried` holds the two ends against each
-  other, with the worktree note as the control, since that is the part that used to be added after
+  other, with the checkout note as the control, since that is the part that used to be added after
   the record was written.
 - **One per stretch, under its own rule.** A forget composes again, so a single panel above
   everything would stand the newest instructions over turns answered under an older one. Under the
@@ -235,21 +236,21 @@ that a directory that is not a git repository contributes no repository guidance
 
 **The index is a filter and not a boundary**, because it is the session's to write: a session can
 stage any path it likes, including one whose file on disk is a link to somewhere outside the
-worktree. What stands between that and the operator's files is how the plugin reads. **Nothing it
-reads out of a worktree follows a link**: each path is walked a directory at a time with
-`O_NOFOLLOW` from the worktree's own root, and read only where it ends at a regular file. So a
+checkout. What stands between that and the operator's files is how the plugin reads. **Nothing it
+reads out of a checkout follows a link**: each path is walked a directory at a time with
+`O_NOFOLLOW` from the checkout's own root, and read only where it ends at a regular file. So a
 committed `docs/AGENTS.md` that links to one of the operator's files, or a `docs` that links to one
 of the operator's directories, is no guidance rather than the operator's file read as the operator
 and handed to the model as instructions. Walking descriptors rather than checking a path and then
 reading it leaves no moment between the two for the session to swap a link in.
 
-**It reads the index without reading the worktree's configuration.** This plugin is console tier,
-so it runs as the operator outside every sandbox, and the worktree's `.git/config` is the session's
-to write and may name a program git runs. So it copies `<worktree>/.git/index` out the same
+**It reads the index without reading the checkout's configuration.** This plugin is console tier,
+so it runs as the operator outside every sandbox, and the checkout's `.git/config` is the session's
+to write and may name a program git runs. So it copies `<checkout>/.git/index` out the same
 link-refusing way, points `GIT_INDEX_FILE` at the copy, and runs `ls-files --cached` with
 `--git-dir` naming an empty bare repository it makes in a temporary directory: git reads the index as
 data and finds only a configuration nothing wrote. See [what runs, and as
-whom](../design/security.md#the-parent-never-runs-git-against-a-worktree).
+whom](../design/security.md#the-parent-never-runs-git-against-a-checkout).
 
 **And the file itself, handed over on approach.** The plugin reads which paths the model has named to
 a file tool and asks for the guidance covering them to be injected: the operator's scoped files

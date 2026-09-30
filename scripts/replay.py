@@ -215,14 +215,14 @@ async def drive(root: Path, requests: int, allowance: int | None) -> Timed:
     """
     Every pass it takes to answer one turn of `requests` round trips, timed a pass at a time.
 
-    Each drive gets a store, a clone and a worktree of its own, so nothing one leaves behind is read
+    Each drive gets a store, a clone and a checkout of its own, so nothing one leaves behind is read
     by the next and the two allowances are compared over identical work.
     """
     provider = Reading(requests=requests)
     origin = await planted(root / "origin")
     workspaces = Workspaces(
         clones=Clones(root=root / "clones"),
-        root=root / "worktrees",
+        root=root / "checkouts",
         scratch=root / "scratch",
         reaching=Reaching(
             current=Reachable(repositories=(Repository(forge=FORGE, key=KEY, name="me/fixture", url=str(origin)),))
@@ -294,7 +294,7 @@ def fitted(passes: tuple[float, ...]) -> Fitted:
     The cost is that it is quadratic in the number of passes, which at the sizes worth measuring is
     still far below the drive it is summarising.
 
-    The first pass is dropped, because it clones the repository and plants the worktree: a cost a
+    The first pass is dropped, because it clones the repository and plants the checkout: a cost a
     session pays once, and not a term in what replay costs.
     """
     points = [(float(at), took) for at, took in enumerate(passes) if at >= 1]

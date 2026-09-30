@@ -1442,8 +1442,8 @@
       );
     };
 
-    // Delegated for the reason `wireSend` is: this block is swapped in whenever a workspace card is
-    // picked, so wiring the element at load would wire the one the page happened to start with.
+    // Delegated for the reason `wireSend` is: this block is swapped in once the page has asked for
+    // its branches, so wiring the element at load would wire the one the page happened to start with.
     const wireBranches = () => {
       document.addEventListener("input", (event) => {
         if (event.target === basisBox()) narrowBranches();

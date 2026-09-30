@@ -217,8 +217,8 @@ doc reaches for when it means the operation.
 
 **Choose the word before the value is durable.** A term that has only ever been in a label costs a
 rename; one that has been written into a checkpoint costs a migration, because the *value* is what
-is in the database. See `Filesystem.WORKTREE`, which was `WORKSPACE`, and took every session written
-until then with it. So a `Disposition` is free to be renamed and a `Choice` field is not, which is
+is in the database. See `Filesystem.CHECKOUT`, which was `WORKTREE` and before that `WORKSPACE`, and
+each rename took every session written until then with it. So a `Disposition` is free to be renamed and a `Choice` field is not, which is
 worth knowing at the moment the word is picked rather than afterwards.
 
 ## Refusing at startup, or promising not to raise

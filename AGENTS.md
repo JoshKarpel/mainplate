@@ -135,35 +135,35 @@ the session on the cheapest model the endpoint lists and say the shortest thing 
 Reach for a frontier model only when the change is about what a frontier model does differently, and
 say so.
 
-## A worktree is a session's to write, so the parent must not run git against it
+## A checkout is a session's to write, so the parent must not run git against it
 
 The console process holds the credential, the store and the service user's whole filesystem; the
-sandbox holds a session's worktree, bound read-write because a session has to work in it. **Anything
-the parent runs against that worktree is running with one side's authority over the other side's
+sandbox holds a session's checkout, bound read-write because a session has to work in it. **Anything
+the parent runs against that checkout is running with one side's authority over the other side's
 input**, and the mistake is never a missing check, it is a program that goes and *finds* something
 rather than being handed it.
 
-Git is the standing example and the reason this has a section. A session's worktree is a complete
+Git is the standing example and the reason this has a section. A session's checkout is a complete
 repository with a `.git` of its own, so its configuration and hooks are the session's to write, and
 several configuration keys name programs git runs (`core.fsmonitor` fires inside `git add`, and the
 list is open-ended). A failing monitor makes git scan normally, so a capture run in the parent would
-succeed and nothing would report that a program ran. So the parent runs no git against a worktree at
-all: `Worktree.git` runs it behind `bwrap`, and what comes back is a listing or a bundle.
+succeed and nothing would report that a program ran. So the parent runs no git against a checkout at
+all: `Checkout.git` runs it behind `bwrap`, and what comes back is a listing or a bundle.
 
 What must hold when adding to the parent:
 
-- **Never run git against a session's worktree in the parent.** Not `git -C <worktree>`, not
-  `--git-dir <worktree>/.git`, not in `snapshots.py`, a tool, a page, a plugin or a script. Reach a
-  worktree through `Worktree.git`, which confines it.
+- **Never run git against a session's checkout in the parent.** Not `git -C <checkout>`, not
+  `--git-dir <checkout>/.git`, not in `snapshots.py`, a tool, a page, a plugin or a script. Reach a
+  checkout through `Checkout.git`, which confines it.
 - **Git in the parent is for the `Store` and nothing else.** `Store.git` names the bare clone with
-  `--git-dir`; `git_at` is for the directory clones are made under and for a worktree still being
+  `--git-dir`; `git_at` is for the directory clones are made under and for a checkout still being
   built, before any session has written to it.
 - **What crosses from a sandbox is data.** A bundle is fetched by the store, refused if it is a link
   or not a regular file, and the tree it carries is read back out of the store rather than taken on
-  the worktree's word. Never take a path out of a worktree and act on it in the parent.
-- **Never carry a session's worktree as a path and rebuild a `Worktree` from it** somewhere that then
+  the checkout's word. Never take a path out of a checkout and act on it in the parent.
+- **Never carry a session's checkout as a path and rebuild a `Checkout` from it** somewhere that then
   runs git with it the ordinary way. Pass the value, which knows its store and its sandbox.
-- **A console-tier plugin runs unconfined**, and is handed the worktree's path. The bundled guidance
+- **A console-tier plugin runs unconfined**, and is handed the checkout's path. The bundled guidance
   plugin reads the index through `GIT_INDEX_FILE` against an empty repository of its own; anything
   else there that runs git has to do the same.
 - **Prefer the sandbox** where the parent has no reason to be the one running it at all. That is the
@@ -189,7 +189,7 @@ change:
   is no rewind.
 - [`docs/design/composer.md`](docs/design/composer.md): dispositions, leaders, the shelf, `forget`,
   handoff, steering, running a command, and pushing.
-- [`docs/design/workspace.md`](docs/design/workspace.md): forges, clones, a session's worktree,
+- [`docs/design/workspace.md`](docs/design/workspace.md): forges, clones, a session's checkout,
   where in it and on what branch, snapshots, where everything a session keeps on disk is and what it
   takes, and archiving, which takes it away while keeping the conversation.
 - [`docs/design/tools.md`](docs/design/tools.md): which tools a session gets, and the
@@ -198,7 +198,7 @@ change:
   the two isolation axes a session picks.
 - [`docs/design/security.md`](docs/design/security.md): the boundary between the parent and the
   sandbox, what is untrusted, and what is deliberately left undefended. **Read it before adding
-  anything to the parent that runs a program against a session's worktree.**
+  anything to the parent that runs a program against a session's checkout.**
 - [`docs/design/durability.md`](docs/design/durability.md): the model-and-tool loop, the steps it
   records, what one pass does, what a session does when a provider says to come back later, and what
   replaying a turn costs, which `just replay` measures rather than asserts.
@@ -252,7 +252,7 @@ Three things follow for anybody changing it:
 
 - **`just dependencies` and never `just setup`**, because the other half of `setup` installs a git
   hook, and whether a session's commits run pre-commit is for that session to decide with `pre-commit
-  install` in its own worktree, from `bash` or the composer's `Run`, rather than something a setup
+  install` in its own checkout, from `bash` or the composer's `Run`, rather than something a setup
   plugin does to every session.
 - **The `PATH` it writes is the session's whole `PATH`.** Leave the system directories on the end,
   or the session's commands lose `sh`.
