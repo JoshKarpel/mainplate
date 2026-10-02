@@ -141,7 +141,7 @@ way into the index, is a digest the test then refuses on every other machine.
 ## `shoot.py`
 
 The browser half of the screenshots, on the same Playwright the suite drives, so a checkout pins one
-Chromium and `just dependencies` fetches it once. It serves the gallery itself on a port the kernel
+Chromium and `just setup` fetches it once. It serves the gallery itself on a port the kernel
 hands it, so a shoot beside a running console needs nothing stopped. It uses the sync binding, which
 the suite cannot: this runs on its own with no event loop to collide with, and `tests/AGENTS.md`
 says why the suite's choice is forced the other way.

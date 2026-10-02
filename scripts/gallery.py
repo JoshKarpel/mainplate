@@ -432,6 +432,7 @@ TIMINGS = {
     "call-6": 0.019,
     "call-7": 12.65,
     "call-9": 0.9,
+    "call-10": 0.073,
     "call-20": 0.006,
     "call-21": 0.004,
     "call-22": 0.031,
@@ -1294,6 +1295,7 @@ TOOL_IN_FLIGHT: list[ModelMessage] = [
             ToolCallPart(
                 tool_name="create", args={"path": CREATED_PATH, "content": CREATED_CONTENT}, tool_call_id="call-6"
             ),
+            ToolCallPart(tool_name="grep", args={"pattern": "overflow-x"}, tool_call_id="call-10"),
             ToolCallPart(tool_name="bash", args={"command": CHECKED, "seconds": 300}, tool_call_id="call-4"),
         ],
         usage=spending(asked=96_900, answered=402, cached=95_600, cost="0.1721"),
@@ -1303,6 +1305,7 @@ TOOL_IN_FLIGHT: list[ModelMessage] = [
         parts=[
             ToolReturnPart(tool_name="edit", content=EDITED, tool_call_id="call-3", metadata={"diff": EDIT_DIFF}),
             ToolReturnPart(tool_name="create", content=CREATED, tool_call_id="call-6"),
+            ToolReturnPart(tool_name="grep", content="no matches", tool_call_id="call-10"),
             ToolReturnPart(tool_name="bash", content=CHECK_SAID, tool_call_id="call-4"),
         ]
     ),
