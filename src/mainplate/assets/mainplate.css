@@ -1212,9 +1212,10 @@ pre .gs {
     white-space: nowrap;
 }
 
-/* How long the call ran, beside the name rather than out at the outcome: it is a fact about this
-   call and the outcome is the column a reader scans down a turn, so the two do not share an edge. */
+/* Keep the duration at the outcome end even when a tool has no subject to take the spare
+   width. A subject still yields that width first, and the outcome stays the last cell. */
 .tool__took {
+    margin-left: auto;
     color: var(--ink-faint);
     font-size: 0.68rem;
 }
@@ -1226,6 +1227,11 @@ pre .gs {
     font-size: 0.68rem;
     text-transform: uppercase;
     letter-spacing: 0.06em;
+}
+
+/* The duration takes the spare width; two auto margins would split it. */
+.tool__took + .tool__outcome {
+    margin-left: 0;
 }
 
 .tool__outcome[data-outcome="success"] {
