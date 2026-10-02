@@ -52,6 +52,12 @@ around it, and `hand_off` refuses anything under `LEAST` characters, which is wh
 that acknowledges the ask instead of answering it. That refusal is a `retry`, since what it turns
 down is correctable from the message.
 
+**The tool stays in the prefix, but an unasked call does not hand off.** The plugin's hidden
+`pending` state is set beside either ask, and the tool returns a refusal when it is absent. A
+successful call clears it. The model sees the tool on every turn for the cache's sake, but its
+availability is not a request to use it; a person who wants one uses `/handoff` rather than ordinary
+chat.
+
 **Neither the ask nor the tool prescribes a shape**, and that is a decision rather than an omission.
 What somebody picking up a refactor needs handed over and what somebody picking up an investigation
 needs are different documents, so a fixed set of headings would have every session filling in the
@@ -108,6 +114,13 @@ again.
 The cost, stated: a model with something genuinely left to do on that turn does not get to do it. That
 is the right trade here and is not obviously right in general, which is why `end` is a plugin's to ask
 for rather than something the console infers from a delivery's boundary.
+
+**An outstanding ask is checked before the turn can end.** A prose-only answer receives one reminder
+inside the turn to check the work and call `hand_off`; the next attempt is allowed to end so a model
+that cannot comply does not spend requests forever. `pending` stays set until a usable document is
+handed over, even if the turn ends, so a later message can steer that outstanding handoff. This
+costs one more model request when the ask is missed, and the session may still be waiting for a
+handoff after a prose-only answer.
 
 **A second `hand_off` in the same response hands nothing over again.** The end stops the turn but not
 its own response: a model that asked for two calls at once has both run before anything stops. So the
@@ -166,14 +179,11 @@ composition root writes, which is [`Noting`](../design/plugins.md#the-effects): 
 *queues* the session, so it is a fact about the queue in front of a pass rather than about answering
 one.
 
-**A turn the plugin opened itself never triggers another**, and that is the whole of what stops this
-recursing. The reserve stays crossed for as long as the context is large, so without it the ask turn,
-whose own context is the conversation it is summarising, would cross it again the instant it ended,
-and so would every turn after that. The payload says what opened the turn and which plugin asked for
-it, and the plugin's own qualified name is in the payload beside it, so the two are compared rather
-than guessed at - which is also why another plugin's note does not stop it. A model that answers the
-ask in prose instead of calling the tool is therefore not asked again until a person says something,
-which is a retry per human action rather than one per turn: the rule a refusal already follows.
+**An outstanding request suppresses another automatic ask.** Even if the model ended without a
+handoff, the plugin waits for the pending document rather than queueing the same ask again at every
+turn boundary. The plugin also never fires on a turn it opened itself; the reserve remains crossed
+while that turn is summarising the full conversation. A reminder at the stop gate costs at most one
+request per turn, so a model that cannot hand off can stop rather than loop indefinitely.
 
 **The settings are read once at the top of a pass**, which is [the console's rule for every
 plugin's](../design/plugins.md#settings-are-already-a-place-so-state-is-a-setting-with-nothing-in-front-of-it):
