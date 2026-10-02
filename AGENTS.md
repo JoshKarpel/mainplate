@@ -63,8 +63,7 @@ section wins for work in this repository.**
 ## Commands
 
 ```console
-$ just setup            # uv sync, the browser, and pre-commit as a git hook
-$ just dependencies     # the same without the hook, which is the half a session's `.mainplate/setup` runs
+$ just setup            # dependencies, browser, and pre-commit as a git hook
 $ just vendor           # every script and face somebody else wrote, fetched and checked against scripts/vendored.toml
 $ just test             # mypy, then pytest
 $ just test -n0 tests/test_console.py::TestTheConsole  # extra args go straight to pytest; -n0 below the whole suite
@@ -245,7 +244,7 @@ the sandbox, with a network only at `setup`, out of a scratch directory nothing 
 
 `.mainplate/setup` is what a mainplate session runs, once, to be able to run `just test` here: it
 installs mise into the session's scratch, `mise install`s the tools `mise.toml` pins, and runs `just
-dependencies` under them. It is the plugin that uses [the two grants a `setup`
+setup` under them. It is the plugin that uses [the two grants a `setup`
 has](docs/design/plugins.md#getting-the-repository-ready-is-a-plugin-too): the session's own scratch
 bound read-write, so what it installs is where the session's commands look for it, and
 `$MAINPLATE_ENV`, whose `KEY=value` lines are what those commands then run under. It declares no
@@ -253,10 +252,9 @@ events and **prints nothing**, so nothing asks it anything again.
 
 Three things follow for anybody changing it:
 
-- **`just dependencies` and never `just setup`**, because the other half of `setup` installs a git
-  hook, and whether a session's commits run pre-commit is for that session to decide with `pre-commit
-  install` in its own checkout, from `bash` or the composer's `Run`, rather than something a setup
-  plugin does to every session.
+- **`just setup` installs the git hook in the session's checkout**, as it does in a fresh clone.
+  A session that enables this repository's setup plugin gets pre-commit checks on its commits;
+  that costs a hook even in sessions that never commit.
 - **The `PATH` it writes is the session's whole `PATH`.** Leave the system directories on the end,
   or the session's commands lose `sh`.
 - **It installs into `$MAINPLATE_SCRATCH` and never `$HOME`.** `$HOME` inside it is the plugin's own
