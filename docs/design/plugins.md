@@ -1375,14 +1375,13 @@ told.
 ### This repository carries the setup example
 
 `.mainplate/setup` installs mise into the session's scratch, runs `mise install` for the tools
-`mise.toml` pins, runs `just dependencies` under them, appends one `PATH` line to
+`mise.toml` pins, runs `just setup` under them, appends one `PATH` line to
 `$MAINPLATE_ENV` putting mise's shims first, then mise's own directory, then the system's, and
 **prints nothing**. So it declares no events and is never asked anything again, and nothing in the
 console knows what a shim is, where mise keeps them, or that Python has an interpreter directory.
-`just dependencies` and not `just setup`, because the other half of that recipe installs a git hook,
-and whether a session's commits run pre-commit is that session's to decide, with `pre-commit install`
-in its own checkout from `bash` or [the composer's `Run`](composer.md#run), rather than something a
-setup plugin does to every session.
+`just setup` also installs pre-commit in the session's checkout. The plugin's switch on the settings
+step chooses whether to prepare the checkout this way; the cost is a hook in every session that
+leaves it on, including ones that never commit.
 
 **Bundled means default, not fixed.** Somebody who writes their own `guidance` installs it beside
 ours and turns ours off with one switch on the settings step. The two are separate plugins with
