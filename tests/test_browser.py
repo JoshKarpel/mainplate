@@ -1418,7 +1418,8 @@ class TestTheDurationOfACallWithoutASubject:
         call = page.locator(".tool", has=page.locator(".tool__name", has_text="grep")).first
         duration = await call.locator(".tool__took").bounding_box()
         outcome = await call.locator(".tool__outcome").bounding_box()
-        assert duration is not None and outcome is not None
+        assert duration is not None
+        assert outcome is not None
         assert abs(duration["y"] - outcome["y"]) < 1
         assert 0 <= outcome["x"] - (duration["x"] + duration["width"]) < 25
 
