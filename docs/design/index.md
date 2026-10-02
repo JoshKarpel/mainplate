@@ -40,6 +40,9 @@ the cross-cutting rules the pages cite rather than restate.
   repository's own plugin runs. Handoff and what a session is told are both plugins, which is what
   makes the pair a test of the protocol rather than two examples of it, and getting a repository
   ready to work in is a third.
+- **[Loading context](context-loading.md)** is the design for guidance, skills and
+  commands: when each body enters the conversation, and what progressive
+  disclosure costs.
 - **[The console](console.md)** is the page: the live connection, the transcript, panels and rules,
   and the controls around them.
 - **[The stylesheet and the grid](assets.md)** is what draws it: the two shapes, the one value

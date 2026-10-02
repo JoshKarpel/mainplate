@@ -101,6 +101,7 @@ from functools import partial
 from itertools import groupby
 from itertools import pairwise
 from itertools import takewhile
+from pathlib import Path
 from typing import Final
 from typing import Literal
 from typing import assert_never
@@ -132,6 +133,11 @@ from mainplate.agent import Wires
 from mainplate.agent import agent_for
 from mainplate.agent import drawing_note
 from mainplate.agent import reaching
+from mainplate.context import BadContext
+from mainplate.context import Entry as ContextEntry
+from mainplate.context import catalogue as context_catalogue
+from mainplate.context import index as context_index
+from mainplate.context import parse_catalogue
 from mainplate.durability import TOOK
 from mainplate.durability import Allowance
 from mainplate.durability import AllowanceSpent
@@ -225,6 +231,9 @@ branch rather than the parent's; see `docs/design/plugins.md`.
 Empty for a session with no repository, for one whose grant was never given, and for a repository
 carrying no such file, which are three states with one meaning and no need to be told apart.
 """
+
+CONTEXT_KEY: StepKey = "context:catalogue"
+"""Names discovered once per session; fork discovers its own rather than inheriting them."""
 
 DECLARED_KEY: StepKey = "plugins:declared:console"
 """
@@ -3234,6 +3243,17 @@ and in `without-durability` already means what the mechanism made of a pass.
 """
 
 
+async def discovering_context(run: Run, config_home: Path, checkout: Checkout | None) -> tuple[ContextEntry, ...]:
+    """Record the names this session offers, not copies of bodies that can be read on demand."""
+
+    async def discover() -> object:
+        return [
+            entry.model_dump() for entry in context_catalogue(config_home, None if checkout is None else checkout.root)
+        ]
+
+    return await run.step(CONTEXT_KEY, discover, parse_catalogue)
+
+
 async def declaring_plugins(
     run: Run, declaring: Declaring, chosen: Choice, checkout: Checkout | None
 ) -> tuple[Installed, ...]:
@@ -3367,6 +3387,7 @@ def conversing(
     tendings: Tendings | None = None,
     storings: Storings | None = None,
     declaring: Declaring | None = None,
+    config_home: Path | None = None,
     delivering: Callable[[str, records.Note], Awaitable[None]] | None = None,
     artifacts: Database | None = None,
 ) -> Callable[[Run], Awaitable[Ended]]:
@@ -3471,6 +3492,14 @@ def conversing(
         # the checkout is planted by a pass. So the first pass of a session plants, reads what is
         # declared, and then blocks with an empty inbox.
         await planting(workspaces, run, chosen, at.turn)
+        # Discovery reads text but runs nothing. Repository files can be inspected even when
+        # the repository's executable plugins were not trusted.
+        try:
+            context = await discovering_context(run, config_home, checkout) if config_home is not None else ()
+        except (BadContext, OSError, UnicodeError) as raised:
+            failed = records.Refused(why=str(raised))
+            await run.step(PLUGINS_REFUSED_KEY, partial(as_recorded, failed), parse_refused)
+            return Stalled()
         # Settled once, so the three readers below cannot come to differ over what a console given no
         # `Declaring` runs: no scripts, no way to speak to one, and nothing a repository may add.
         sourcing = declaring or Declaring()
@@ -3572,6 +3601,7 @@ def conversing(
             #
             # What every plugin contributed is already settled: `setup` ran above this loop, on this
             # pass or an earlier one, and its answer is recorded - so this reads a value.
+            reach = reaching(chosen.isolation, checkout, scratch, bwrap, context)
             said_under = (
                 # What the page draws from a reply, which is the console's to say and the same for
                 # every session: the least specific block there is, so it is first, and constant, so
@@ -3579,7 +3609,8 @@ def conversing(
                 drawing_note(),
                 instructions,
                 *live.instructions(),
-                reaching(chosen.isolation, checkout, scratch, bwrap).note,
+                context_index(context) if reach.roots else "",
+                reach.note,
             )
 
             async def composing(blocks: Sequence[str] = said_under) -> object:
@@ -3608,6 +3639,7 @@ def conversing(
                 scratch=scratch,
                 bwrap=bwrap,
                 plugins=live,
+                context=context,
                 # What the repository's setup asked to have set for this session's commands, read
                 # off the record the setup pass wrote: a value, settled for the session's life.
                 environment=environment_in(run.recorded),

@@ -164,6 +164,7 @@ class InACheckout:
 
     checkout: Checkout
     scratch: Path
+    skills: tuple[Bind, ...] = ()
 
     scratch_named: RootName = "scratch"
     """
@@ -202,11 +203,14 @@ class InAScratch:
     """
 
     scratch: Path
+    skills: tuple[Bind, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class OverEverything:
     """A session's commands over the whole machine, still inside a namespace."""
+
+    skills: tuple[Bind, ...] = ()
 
 
 type Confinement = InACheckout | InAScratch | OverEverything
@@ -223,12 +227,15 @@ command, which is the one place that knows a command is about to run.
 def confined_by(confinement: Confinement) -> Sandbox:
     """The sandbox one confinement means."""
     match confinement:
-        case InACheckout(checkout=checkout, scratch=scratch, scratch_named=named, session_scratch=session):
-            return Sandbox.around(checkout, scratch, named, session)
-        case InAScratch(scratch=scratch):
-            return Sandbox.within(scratch)
-        case OverEverything():
-            return Sandbox.everywhere()
+        case InACheckout(
+            checkout=checkout, scratch=scratch, scratch_named=named, session_scratch=session, skills=skills
+        ):
+            sandbox = Sandbox.around(checkout, scratch, named, session)
+            return sandbox.with_skills(skills)
+        case InAScratch(scratch=scratch, skills=skills):
+            return Sandbox.within(scratch).with_skills(skills)
+        case OverEverything(skills=skills):
+            return Sandbox.everywhere().with_skills(skills)
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -343,6 +350,10 @@ class Sandbox:
 
     places: tuple[Bind, ...]
 
+    def with_skills(self, binds: tuple[Bind, ...]) -> Sandbox:
+        """Bind non-repository skills read-only for commands as well as file tools."""
+        return replace(self, places=(*self.places, *binds)) if binds else self
+
     @classmethod
     def around(
         cls,
@@ -424,11 +435,11 @@ class Sandbox:
         other plugins execute at every turn boundary.
 
         A `CHECKOUT` sandbox binds the checkout read-write whole, `.git` included, its store
-        read-only, and the scratch read-write; a `NOTHING` sandbox binds the scratch alone. So git in
-        here adds, commits, merges and rebases as it would anywhere, and what that costs is that a
-        hook or a configured program the session wrote runs too. It runs *in here*, with the
-        parent's environment cleared and only this session's directories writable, which is what
-        makes it the session's own `bash` over again rather than a way out of it; see
+        read-only, and the scratch read-write; a `NOTHING` sandbox binds the scratch and any
+        read-only skills offered. Git in a checkout adds, commits, merges and rebases as it would
+        anywhere, including running a hook or a configured program the session wrote. It runs
+        *in here*, with the parent's environment cleared and only this session's directories
+        writable, so it can reach no more than the session's own `bash`; see
         `checkout_places`.
 
         A `EVERYTHING` sandbox binds `/` read-write instead, which subsumes all of that and is the point

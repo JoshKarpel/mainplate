@@ -39,6 +39,7 @@ from without_web import query_param
 
 from mainplate import artifacts
 from mainplate.agent import Choice
+from mainplate.context import BadContext
 from mainplate.conversation import BASE_FIELD
 from mainplate.conversation import BRANCH_FIELD
 from mainplate.conversation import DISPOSITION_FIELD
@@ -52,6 +53,7 @@ from mainplate.conversation import parse_disposition
 from mainplate.pages.artifacts import RECENT
 from mainplate.pages.artifacts import artifact_page
 from mainplate.pages.artifacts import catalogue_page
+from mainplate.pages.composer import CONTEXT_LEADER
 from mainplate.pages.composer import PLUGIN_LEADER
 from mainplate.pages.dashboard import dashboard_page
 from mainplate.pages.document import BEFORE_FIELD
@@ -393,6 +395,13 @@ pressing = body(parse_form_press, schema={"type": "object"}, media_type="applica
 
 
 @dataclass(frozen=True, slots=True)
+class ToContext:
+    """An explicit skill or command selection, not a slash parsed from a message."""
+
+    leader: str
+
+
+@dataclass(frozen=True, slots=True)
 class ToPlugin:
     """
     One of this session's plugins, named by the leader it answers to.
@@ -410,7 +419,7 @@ class Sending:
     """What the composer posted: a message, and where it is going."""
 
     said: str
-    where: Disposition | ToPlugin
+    where: Disposition | ToPlugin | ToContext
 
 
 def parse_form_send(raw: bytes) -> Sending:
@@ -431,12 +440,14 @@ def parse_form_send(raw: bytes) -> Sending:
     """
     fields = fields_in(raw)
     named = fields.get(DISPOSITION_FIELD, [""])[0].strip()
-    where: Disposition | ToPlugin | None
+    where: Disposition | ToPlugin | ToContext | None
     if named.startswith(PLUGIN_LEADER):
         # A plugin's own answer, named by the leader it claims. Whether this session has one is not a
         # question this layer can put: what leaders exist is a fact about what that session
         # registered, so the handler asks the service and refuses there.
         where = ToPlugin(leader=named.removeprefix(PLUGIN_LEADER))
+    elif named.startswith(CONTEXT_LEADER):
+        where = ToContext(leader=named.removeprefix(CONTEXT_LEADER))
     else:
         where = Disposition.HERE if not named else parse_disposition(named)
     if where is None:
@@ -445,7 +456,7 @@ def parse_form_send(raw: bytes) -> Sending:
     # **Every console answer demands a message and a plugin's own may not**, which is what `demands`
     # on a declared answer says. This layer cannot tell which, for the reason above, so an empty box
     # is allowed through to the handler and the plugin is what does or does not mind.
-    if not said and not isinstance(where, ToPlugin) and where is not Disposition.PUSH:
+    if not said and not isinstance(where, (ToPlugin, ToContext)) and where is not Disposition.PUSH:
         raise NotAMessage("a message cannot be empty")
     return Sending(said=said, where=where)
 
@@ -1046,6 +1057,16 @@ async def say(service: Service, session: str, sending: Sending, reader: Reader) 
     # A session nobody can answer is refused rather than asked, because a plugin whose delivery
     # nothing will ever answer is a panel that waits for ever - the one state the stall sentence
     # exists to prevent, reached from the other direction.
+    if isinstance(sending.where, ToContext):
+        if stalled_by(found, reader) is not None:
+            return page_response(422, refusal_page(LINKS, 422, f"session {session} cannot be answered"))
+        try:
+            invoked = await service.invoke_context(session, found, sending.where.leader, sending.said)
+        except (BadContext, OSError, UnicodeError) as raised:
+            return page_response(422, refusal_page(LINKS, 422, str(raised)))
+        if not invoked:
+            return page_response(422, refusal_page(LINKS, 422, f"no context named /{sending.where.leader}"))
+        return await redrawn(service, session, reader)
     if isinstance(sending.where, ToPlugin):
         if stalled_by(found, reader) is not None:
             return page_response(422, refusal_page(LINKS, 422, f"session {session} cannot be answered"))

@@ -17,14 +17,9 @@
 # through no sandbox, so what that buys is that an `edit` never becomes a way to rewrite a ref or a
 # config line underneath git's locking.
 #
-# There are *two* places a session may reach, and they are not symmetric. A relative path is inside
-# the checkout unless a call names another root, because what a conversation is about is the
-# repository; anywhere else is reached by naming it rather than by writing a session id out. `list`
-# is the exception to both and
-# stays on the checkout alone: it answers by asking git, and the scratch is deliberately not in git,
-# so extending it would mean a second implementation that walks a directory instead. What `list`
-# earns its keep for is bounding a large repository tree, which a scratch directory does not have,
-# and `ls` under `bash` answers that question there perfectly well.
+# A relative path lands in the checkout or scratch unless another root is named. Bundled and user
+# skills are read-only roots: they are readable on demand, not part of a session's working tree.
+# `list` stays on the checkout alone because it asks git; scratch and skills are not git trees.
 #
 # **A refusal is a `ModelRetry`, not an exception.** Everything a tool turns down here is something
 # the model can fix by trying again with different arguments: an anchor that has moved, a `find`
@@ -269,7 +264,27 @@ class System:
         return ()
 
 
-type Root = GitTracked | Scratch | System
+@dataclass(frozen=True, slots=True)
+class Skills:
+    """Bundled and operator skills, read-only even though file tools run outside bwrap."""
+
+    path: Path
+    label: RootName = "bundled_skills"
+    allowed: frozenset[str] = frozenset()
+    """Only names discovered for this session are readable from the root."""
+
+    @property
+    def name(self) -> RootName:
+        """The same name file tools and commands use for these files."""
+        return self.label
+
+    @property
+    def sealed(self) -> tuple[str, ...]:
+        """No git metadata is present in this root."""
+        return ()
+
+
+type Root = GitTracked | Scratch | System | Skills
 
 
 @dataclass(frozen=True, slots=True)
@@ -383,6 +398,18 @@ class Files:
                         f"{path!r} is inside git's own directory for this session's repository rather "
                         "than a file of the repository. Change it with git through `bash`."
                     )
+                if isinstance(found, Skills):
+                    relative = Path(path)
+                    if (
+                        root != found.name
+                        or relative.is_absolute()
+                        or not relative.parts
+                        or relative.parts[0] not in found.allowed
+                        or ".." in relative.parts
+                    ):
+                        raise Refused(f"{path!r} is not an advertised skill in {found.name}")
+                    if (where / relative.parts[0]).is_symlink():
+                        raise Refused(f"{path!r} is a linked skill, not an advertised directory")
                 return Located(path=here, root=found)
         named = " and ".join(str(each) for each in wheres)
         raise Refused(f"{path!r} is outside this session's workspace. These tools reach {named}")
@@ -437,7 +464,7 @@ class Files:
         """
         found = self.resolved(path)
         match found.root:
-            case Scratch() | System():
+            case Scratch() | System() | Skills():
                 raise Refused(
                     f"{path!r} is not in a repository, and `list` only reads one: it asks git, and "
                     f"nothing there is in git. Use `bash` with `ls` to see what is there."
@@ -453,9 +480,10 @@ class Files:
 
     async def edit(self, path: str, operations: Sequence[Operation], root: str = "") -> Edited:
         located = self.resolved(path, root)
-        # The read and the write are one critical section, not two. Holding this around the write
-        # alone would leave each caller writing out a whole file it read *before* the other one's
-        # edit landed, which is the same lost write with a smaller window.
+        if isinstance(located.root, Skills):
+            raise Refused(f"{path!r} is in read-only skills; use `read` instead")
+        # The read and write are one critical section: two edits must not both overwrite from
+        # an earlier copy of the same file.
         async with self.exclusively(located.path):
             found, text = await asyncio.to_thread(self.loaded, path, root)
             cached_anchor = cache(anchor)
@@ -468,6 +496,8 @@ class Files:
 
     async def create(self, path: str, content: str, root: str = "") -> str:
         located = self.resolved(path, root)
+        if isinstance(located.root, Skills):
+            raise Refused(f"{path!r} is in read-only skills; use `read` instead")
         here = located.path
         text = Text.of(content if content.endswith("\n") else content + "\n")
 
@@ -513,7 +543,10 @@ class Files:
         `create`'s promise with none of its care for lines: no newline is added, since what is written
         is a copy of bytes kept elsewhere and has to come back out as they went in.
         """
-        here = self.resolved(path, root).path
+        located = self.resolved(path, root)
+        if isinstance(located.root, Skills):
+            raise Refused(f"{path!r} is in read-only skills; use `read` instead")
+        here = located.path
 
         def write() -> None:
             here.parent.mkdir(parents=True, exist_ok=True)

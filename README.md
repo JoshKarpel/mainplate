@@ -257,11 +257,12 @@ nothing of the machine still gets a scratch directory of its own, the first thre
 `bash` inside it; without `bubblewrap` it gets no file tools at all, and is a place to talk.
 
 Anywhere there are file tools there is also `bash`, wherever `bubblewrap` is installed to confine it.
-Every command runs in a mount namespace of its own holding exactly what that session reaches and a
-read-only system, so your home directory and the console's configuration are not in it, and the
-network is off unless the session asked for it. What a command does get as its home is the session's
-own scratch directory, which is where a repository's own setup plugin installs whatever a session
-needs to run its tests, once, before the first message.
+Every command runs in a mount namespace of its own holding the session's
+workspace, any offered skills read-only, and a read-only system. Your home
+directory and the console's configuration are not in it. The network is off
+unless the session asked for it. The command's home is the session's own
+scratch directory, where a repository's setup plugin installs the toolchain
+needed to run its tests, once, before the first message.
 
 The checkout's git is the session's own: `add`, `commit`, `rebase`, `stash` and the rest work as
 they would anywhere, and `git fetch` brings the repository's current branches with no network,
@@ -406,6 +407,19 @@ The caret beside Send opens the rest. Each has a name you can type instead: `/` 
 empty box opens the same list, and a space after the whole word takes it, so `/forget ` puts the box
 in that answer's mode with the button beside it saying `Forget` rather than `Send`. Nothing is ever
 inferred from what you typed, so what you are about to press always says what it does.
+
+Skills and commands use the same leaders, named by their directories. A skill
+is indexed for the model, which can `read` its `SKILL.md` and then whichever
+supporting files it needs; `/review ` loads it explicitly from the composer.
+A command is only offered to the person: `/release ` sends its file with the
+text in the box, rather than running a shell process. Bundled, user and
+repository files live respectively under `src/mainplate/bundled-context/`,
+`<config home>/mainplate/` and `.mainplate/`, each with
+`skills/<name>/SKILL.md` or `commands/<name>/COMMAND.md`; each entry carries
+a one-line frontmatter `description`. A name taken by an existing control
+keeps its meaning: `/user:run` can still reach a user command named `run`.
+The [loading-context design](design/context-loading.md) states when each
+body enters the conversation.
 
 - **Next** queues the message behind the reply that is coming instead of putting it to the model
   now. It is the one thing the record cannot decide for you.

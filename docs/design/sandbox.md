@@ -119,6 +119,13 @@ hands to a plugin's own namespace.
 
 Where the file tools may reach. What they *are* is [how a model reaches a file](tools.md).
 
+Bundled and user skills are read-only binds in a session command's namespace,
+under the same paths its file tools call `bundled_skills` and `user_skills`.
+Repository skills are already in the checkout. The bind names only the skill
+directory, not the operator's configuration directory; the model's `read`
+uses the same roots without entering bwrap. See [loading
+context](context-loading.md).
+
 `Files` holds `roots`, a tuple of *typed* places rather than one path and a list of extras. The type
 is what decides: a `GitTracked` is files a conversation is about and is the only kind git can be
 asked about, so it owns `entries` and answers `list` and `grep`; a `Scratch` answers no question git

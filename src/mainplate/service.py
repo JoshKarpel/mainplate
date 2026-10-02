@@ -38,8 +38,15 @@ from mainplate.catalogue import retention_for
 from mainplate.commands import Commands
 from mainplate.commands import Running
 from mainplate.commands import Slot
+from mainplate.context import Entry
+from mainplate.context import body as context_body
+from mainplate.context import expanded as expand_context
+from mainplate.context import leaders as context_leaders
+from mainplate.context import parse_catalogue
 from mainplate.conversation import ARCHIVED_KEY
 from mainplate.conversation import CHOICE_KEY
+from mainplate.conversation import CONTEXT_KEY
+from mainplate.conversation import LEADERS
 from mainplate.conversation import Transcript
 from mainplate.conversation import before
 from mainplate.conversation import choice_of
@@ -381,6 +388,8 @@ class Conversation:
     of. That keeps the one-sidedness intact rather than guessing at a duration.
     """
 
+    context: tuple[Entry, ...] = ()
+    """Names discovered once, available to the composer without rereading a directory."""
     declared: tuple[Installed, ...] | None = None
     """
     Every plugin this session *may* run, read out of files, or nothing while its checkout is planted.
@@ -528,7 +537,6 @@ class Service:
 
     Absent is a console that cannot run one, the way `workspaces` absent is a console with no files.
     """
-
     declaring: Declaring | None = None
     """
     How to run a plugin, for the two events a request handler fires rather than a pass.
@@ -655,12 +663,14 @@ class Service:
         since = None if said.answered_at is None else self.now() - said.answered_at
         registered = registered_in(recorded)
         declared = declared_in(recorded)
+        context = parse_catalogue(recorded[CONTEXT_KEY]) if CONTEXT_KEY in recorded else ()
         attempted = setups_in(recorded)
         return Conversation(
             session=found,
             said=said,
             chosen=chosen,
             plugins=registered,
+            context=context,
             # Read only where there is no registration to read instead, which is what makes a
             # write-once breadcrumb sound: a later pass that succeeded wrote the registration.
             declared=declared,
@@ -1163,6 +1173,18 @@ class Service:
         for note in notes:
             await self.note(session, note)
         return len(notes)
+
+    async def invoke_context(self, session: str, found: Conversation, leader: str, said: str) -> bool:
+        """Deliver exactly the selected body and input as a message, or refuse an unknown leader."""
+        active = running(found.plugins or (), found.session.tending)
+        plugin_leaders = frozenset(name for plugin in active for name, _ in plugin.answers())
+        entry = context_leaders(found.context, frozenset(LEADERS) | plugin_leaders).get(leader)
+        if entry is None:
+            return False
+        checkout = found.checkout if entry.tier == "repository" else None
+        text = context_body(entry, checkout)
+        await self.send(session, expand_context(entry, text, said))
+        return True
 
     async def press(self, session: str, found: Conversation, plugin: str, posted: Mapping[str, str]) -> Enrolled | None:
         """

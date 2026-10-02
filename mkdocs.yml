@@ -89,6 +89,7 @@ nav:
       - What runs, and as whom: design/security.md
       - Durability: design/durability.md
       - Plugins: design/plugins.md
+      - Loading context: design/context-loading.md
       - The console: design/console.md
       - The stylesheet and the grid: design/assets.md
       - Running it as a service: design/deployment.md

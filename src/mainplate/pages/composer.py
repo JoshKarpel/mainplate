@@ -19,8 +19,11 @@ from without_html import span
 from without_html import summary
 from without_html import textarea
 
+from mainplate.context import Entry
+from mainplate.context import leaders as context_leaders
 from mainplate.conversation import DISPOSITION_FIELD
 from mainplate.conversation import KEEP
+from mainplate.conversation import LEADERS
 from mainplate.conversation import Disposition
 from mainplate.pages.document import Placed
 from mainplate.pages.figures import charged
@@ -272,6 +275,27 @@ def plugin_answers(plugins: Sequence[Enrolled]) -> tuple[Answer, ...]:
     )
 
 
+CONTEXT_LEADER: Final = "context:"
+"""A skill or command selected visibly in the composer, not parsed off message text."""
+
+
+def context_answers(entries: Sequence[Entry], plugins: Sequence[Enrolled]) -> tuple[Answer, ...]:
+    """One menu row and mode per manual skill or command invocation."""
+    taken = frozenset(LEADERS) | frozenset(name for plugin in plugins for name, _ in plugin.answers())
+    offered = context_leaders(tuple(entries), taken)
+    bare = frozenset(entry.name for entry in entries if entry.name in offered)
+    visible = {name: entry for name, entry in offered.items() if name in bare or entry.name not in bare}
+    return tuple(
+        Answer(
+            leader=leader,
+            saying=f"Load {entry.kind} {entry.qualified} and send it with what you typed",
+            posts={"type": "submit", "name": DISPOSITION_FIELD, "value": f"{CONTEXT_LEADER}{leader}"},
+            staying=False,
+        )
+        for leader, entry in visible.items()
+    )
+
+
 def sending_answers(
     returning: bool, answering: bool, runs_in: str | None, connected: bool = False
 ) -> tuple[Answer, ...]:
@@ -514,6 +538,7 @@ def sending_control(refusing: bool, answers: Sequence[Answer]) -> Element:
 def composer(
     action: str,
     *,
+    context: Sequence[Entry] = (),
     refusing: bool = False,
     returning: bool = False,
     answering: bool = False,
@@ -569,7 +594,11 @@ def composer(
     scroll past. What is above it is only what the next press depends on - what re-sending costs,
     and what the press will do - and what the session *is* stands in the rail; see `about_card`.
     """
-    answers = (*sending_answers(returning, answering, runs_in, connected), *plugin_answers(plugins))
+    answers = (
+        *sending_answers(returning, answering, runs_in, connected),
+        *plugin_answers(plugins),
+        *context_answers(context, plugins),
+    )
     driving = {
         "hx-post": action,
         "hx-target": f"#{TRANSCRIPT_ID}",
