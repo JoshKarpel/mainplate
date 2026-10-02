@@ -94,6 +94,9 @@ them writes to neither.
 
 DESCRIPTION = """Write down what the next agent needs, and start this conversation's context again.
 
+Call this only when the handoff plugin has asked for a handoff, automatically or through /handoff.
+Never call it on your own initiative.
+
 What you pass becomes the whole of what the model after you is told. Everything said before it stays
 in the transcript for a person to read and none of it is in the context, so the test for the document
 is whether somebody who has read only it, plus the repository, can carry on without asking a question
@@ -113,7 +116,7 @@ How to shape it is yours. What a refactor needs handed over and what an investig
 different documents, and you have read the conversation."""
 
 DESCRIBED: dict[str, Any] = {
-    "events": ["tool", "after_turn", "compose"],
+    "events": ["tool", "before_turn_end", "after_turn", "compose"],
     "tools": [
         {
             "name": "hand_off",
@@ -211,7 +214,9 @@ def answer(payload: dict[str, Any]) -> dict[str, Any]:
     if event == "tool":
         return handing(payload, payload.get("state") or {})
     if event == "compose":
-        return {"deliver": [asked(str(payload.get("said") or ""))]}
+        return {"deliver": [asked(str(payload.get("said") or ""))], "set": {"pending": True}}
+    if event == "before_turn_end":
+        return stopping(payload, payload.get("state") or {})
     if event == "after_turn":
         return crossing(payload, settings, payload.get("state") or {})
     return {}
@@ -219,7 +224,7 @@ def answer(payload: dict[str, Any]) -> dict[str, Any]:
 
 def handing(payload: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     """
-    Five effects out of one call: a correctable refusal, a delivery, an end, a write, and a value back.
+    A requested call delivers the document and ends its turn; an unrequested one returns without either.
 
     `forget` is why this is worth a mechanism at all. A handoff that did not clear the context would
     be a summary of the conversation appended to the conversation, which is the one shape that costs
@@ -234,6 +239,8 @@ def handing(payload: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     both calls run before the turn stops, and the second finds what the first wrote. It is the plugin's
     own state rather than a control, because nobody sets it and no card draws it.
     """
+    if not state.get("pending") and not state.get("handed"):
+        return {"return": "No handoff was requested. Continue the work; /handoff requests one."}
     if state.get("handed"):
         return {
             "return": (
@@ -261,12 +268,27 @@ def handing(payload: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
             }
         ],
         "end": True,
-        "set": {"handed": True},
+        "set": {"handed": True, "pending": None},
         "return": (
             "Recorded. This conversation's context starts again from that document, and everything "
             "said before it stays in the transcript for a person to read. This turn ends here."
         ),
     }
+
+
+def stopping(payload: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    """
+    Give an outstanding handoff one more chance when the model tries to end in prose.
+
+    One reminder is enough to correct a missed tool call without trapping a model that cannot
+    comply in an unbounded chain of requests. The pending request remains open if the turn ends,
+    so a later message can steer the handoff instead of silently losing the permission.
+    """
+    if state.get("pending") and int(payload.get("attempt") or 0) == 0:
+        return {
+            "inject": ["A handoff was requested. Check the work and call hand_off with the document before ending."]
+        }
+    return {}
 
 
 def crossing(payload: dict[str, Any], settings: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
@@ -278,15 +300,11 @@ def crossing(payload: dict[str, Any], settings: dict[str, Any], state: dict[str,
     now, where by the time somebody comes back and types it may not be, and a handoff run is several
     requests over the whole window.
 
-    **A turn this plugin opened never triggers another**, which is the whole of what stops it
-    recursing. The reserve is crossed for as long as the context stays large, so without this the ask
-    turn - whose own context is the conversation it is summarising - would cross it again the instant
-    it ended, and so would the one after that. The payload says what opened the turn and which plugin
-    asked for it, and this plugin's own name is in the payload beside it, so the two can be compared
-    rather than guessed at.
-
-    A model that answered the ask in prose rather than by calling the tool is therefore not asked
-    again until a person says something, which is a retry per human action rather than one per turn.
+    **An outstanding request is not repeated**, even when the model ends its turn without calling
+    the tool. The stop gate gives a prose-only answer one more chance, then allows it to end, leaving
+    `pending` open for a later steer or message. A completed handoff's `handed` flag also prevents
+    another ask at that boundary, where the old context is still large. An ordinary turn opened by
+    this plugin is never automatically asked again either: the payload's `opened_on` names who asked.
 
     **This is also where `handed` is let go**, on every path and whatever else is decided here. What
     that flag guards is two `hand_off` calls in one model response, and the first of them ends the
@@ -294,6 +312,8 @@ def crossing(payload: dict[str, Any], settings: dict[str, Any], state: dict[str,
     there is something to clear, so an ordinary turn boundary still asks for nothing.
     """
     cleared = {"set": {"handed": False}} if state.get("handed") else {}
+    if state.get("pending") or state.get("handed"):
+        return cleared
     if not settings.get("hands_off", True):
         return cleared
     opened = payload.get("opened_on") or {}
@@ -304,7 +324,7 @@ def crossing(payload: dict[str, Any], settings: dict[str, Any], state: dict[str,
     window = payload.get("window")
     if standing(context, int(window) if window is not None else None, reserve) != "due":
         return cleared
-    return dict(cleared, deliver=[asked("")])
+    return {"deliver": [asked("")], "set": {"pending": True}}
 
 
 def main() -> int:

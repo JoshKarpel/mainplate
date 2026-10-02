@@ -100,6 +100,7 @@ from mainplate.sandbox import sandbox_command
 from mainplate.service import Service
 from mainplate.sessions import Session
 from mainplate.sessions import read_tending
+from mainplate.sessions import set_settings
 from mainplate.snapshots import Checkout
 from mainplate.tending import TENDED
 from mainplate.tending import Tending
@@ -1027,7 +1028,7 @@ class TestTheBundledHandoff:
 
     async def test_it_ships_and_describes_itself(self, handoff: Path) -> None:
         described = parse_described("bundled:handoff", await asked(handoff, spoken(event="setup")))
-        assert set(described.events) == {"tool", "after_turn", "compose"}
+        assert set(described.events) == {"tool", "before_turn_end", "after_turn", "compose"}
         assert [each.name for each in described.tools] == ["hand_off"]
         assert [each.leader for each in described.answers] == ["handoff"]
         assert described.answers[0].demands is False, "the one answer whose box may be empty"
@@ -1045,7 +1046,10 @@ class TestTheBundledHandoff:
         """
         written = "x" * 400
         answered = parse_answer(
-            "bundled:handoff", await asked(handoff, spoken(event="tool", tool="hand_off", args={"document": written}))
+            "bundled:handoff",
+            await asked(
+                handoff, spoken(event="tool", tool="hand_off", args={"document": written}, state={"pending": True})
+            ),
         )
         assert answered.retry is None
         assert [(each.said, each.forget, each.tone) for each in answered.deliver] == [(written, True, "strong")]
@@ -1059,10 +1063,12 @@ class TestTheBundledHandoff:
         """
         answered = parse_answer(
             "bundled:handoff",
-            await asked(handoff, spoken(event="tool", tool="hand_off", args={"document": "x" * 400})),
+            await asked(
+                handoff, spoken(event="tool", tool="hand_off", args={"document": "x" * 400}, state={"pending": True})
+            ),
         )
         assert answered.end is True
-        assert answered.setting == {"handed": True}, "so a second call in the same response finds it"
+        assert answered.setting == {"handed": True, "pending": None}, "so a second call in the same response finds it"
 
     async def test_a_second_call_in_one_response_hands_nothing_over_again(self, handoff: Path) -> None:
         """
@@ -1087,11 +1093,69 @@ class TestTheBundledHandoff:
         """A `retry` doing exactly what retries are for: the model is told and writes a real one."""
         answered = parse_answer(
             "bundled:handoff",
-            await asked(handoff, spoken(event="tool", tool="hand_off", args={"document": "Done, I wrote it."})),
+            await asked(
+                handoff,
+                spoken(event="tool", tool="hand_off", args={"document": "Done, I wrote it."}, state={"pending": True}),
+            ),
         )
         assert answered.retry is not None
         assert "acknowledgement" in answered.retry
         assert answered.deliver == ()
+
+    async def test_an_unasked_call_does_not_deliver_a_handoff(self, handoff: Path) -> None:
+        """The tool remains in the cached prefix, but its presence is not permission to use it."""
+        answered = parse_answer(
+            "bundled:handoff",
+            await asked(handoff, spoken(event="tool", tool="hand_off", args={"document": "x" * 400})),
+        )
+        assert answered.deliver == ()
+        assert answered.end is False
+        assert "No handoff was requested" in str(answered.returned)
+
+    @pytest.mark.parametrize("attempt", [0, 1])
+    async def test_a_pending_handoff_gets_only_one_stop_reminder(self, handoff: Path, attempt: int) -> None:
+        """One retry prompts a missed call without trapping a model that cannot make one."""
+        answered = parse_answer(
+            "bundled:handoff",
+            await asked(
+                handoff,
+                spoken(
+                    event="before_turn_end",
+                    turn=4,
+                    opened_on={"kind": "note"},
+                    attempt=attempt,
+                    state={"pending": True},
+                ),
+            ),
+        )
+        assert bool(answered.inject) is (attempt == 0)
+
+    async def test_a_manual_ask_opens_permission(self, handoff: Path) -> None:
+        """The composer records the request in state beside delivering the ask."""
+        answered = parse_answer(
+            "bundled:handoff", await asked(handoff, spoken(event="compose", leader="handoff", said=""))
+        )
+        assert answered.setting == {"pending": True}
+        assert len(answered.deliver) == 1
+
+    async def test_a_pending_request_survives_a_turn_boundary_without_asking_twice(self, handoff: Path) -> None:
+        """A message arriving after a missed handoff may steer the outstanding request."""
+        answered = parse_answer(
+            "bundled:handoff",
+            await asked(
+                handoff,
+                spoken(
+                    event="after_turn",
+                    turn=4,
+                    opened_on={"kind": "prompt"},
+                    context=170_000,
+                    window=200_000,
+                    state={"pending": True},
+                ),
+            ),
+        )
+        assert answered.deliver == ()
+        assert answered.setting == {}
 
     async def test_a_turn_that_crossed_the_reserve_asks_for_one(self, handoff: Path) -> None:
         answered = parse_answer(
@@ -1110,6 +1174,7 @@ class TestTheBundledHandoff:
         )
         assert len(answered.deliver) == 1
         assert answered.deliver[0].forget is False, "the ask carries no boundary; the document does"
+        assert answered.setting == {"pending": True}
 
     @pytest.mark.parametrize(
         ("context", "why"),
@@ -1847,6 +1912,24 @@ async def set_up(
     return session
 
 
+def tending_for(service: Service) -> Any:
+    """Read the session's plugin state on the pass that tests a requested handoff."""
+
+    async def read(session: str) -> Tending:
+        return await read_tending(service.database, session)
+
+    return read
+
+
+def storing_for(service: Service) -> Any:
+    """Apply the plugin's state writes so the test observes the next pass's state."""
+
+    async def store(session: str, plugin: str, values: Mapping[str, object]) -> None:
+        await set_settings(service.database, session, plugin, values)
+
+    return store
+
+
 class TestASessionsPlugins:
     """What the two moments do: read what is declared, load what is on, and record what they asked for."""
 
@@ -1924,6 +2007,7 @@ class TestASessionsPlugins:
         """
         session = await set_up(service, declaring)
         await service.say(session.id, "hello")
+        await set_settings(service.database, session.id, "bundled:handoff", {"pending": True})
         written = "x" * 400
         # Where the notes a plugin asked for go, collected rather than delivered: what this asserts
         # is that the tool's `deliver` reached the console, and an inbox would be a second thing to
@@ -1941,7 +2025,14 @@ class TestASessionsPlugins:
                 ModelResponse(parts=[TextPart("done")]),
             )
         )
-        body = conversing(scripted.endpoints(), INSTRUCTIONS, declaring=declaring, delivering=collecting)
+        body = conversing(
+            scripted.endpoints(),
+            INSTRUCTIONS,
+            declaring=declaring,
+            delivering=collecting,
+            tendings=tending_for(service),
+            storings=storing_for(service),
+        )
         await passing(service, session.id, body)
 
         recorded = await service.checkpointer.load(session.id)
@@ -1949,6 +2040,57 @@ class TestASessionsPlugins:
         assert [each.said for each in delivered] == [written]
         assert delivered[0].plugin == "bundled:handoff", "attributed to whoever asked for it"
         assert delivered[0].forget is True, "and it starts the model's history again"
+
+    async def test_an_unrequested_tool_call_is_recorded_without_delivering_a_document(
+        self, service: Service, declaring: Declaring
+    ) -> None:
+        """A fixed tool prefix does not grant an unsolicited call permission to replace context."""
+        session = await set_up(service, declaring)
+        await service.say(session.id, "hello")
+        scripted = Scripted(
+            script=(
+                ModelResponse(
+                    parts=[ToolCallPart(tool_name="hand_off", args={"document": "x" * 400}, tool_call_id="c1")]
+                ),
+                ModelResponse(parts=[TextPart("back to work")]),
+            )
+        )
+        body = conversing(scripted.endpoints(), INSTRUCTIONS, declaring=declaring)
+        await passing(service, session.id, body)
+        recorded = await service.checkpointer.load(session.id)
+        assert parse_returned(recorded[tool_key(0, "c1")]).ended is False
+        assert "No handoff was requested" in str(parse_returned(recorded[tool_key(0, "c1")]).returned)
+        assert scripted.asked == 2
+        assert "back to work" in str(transcript(recorded))
+
+    async def test_a_pending_handoff_is_reminded_before_prose_can_end_the_turn(
+        self, service: Service, declaring: Declaring
+    ) -> None:
+        """The stop gate prompts one more request inside the same turn, then the call can end it."""
+        session = await set_up(service, declaring)
+        await service.say(session.id, "hello")
+        await set_settings(service.database, session.id, "bundled:handoff", {"pending": True})
+        scripted = Scripted(
+            script=(
+                ModelResponse(parts=[TextPart("I will hand off shortly")]),
+                ModelResponse(
+                    parts=[ToolCallPart(tool_name="hand_off", args={"document": "x" * 400}, tool_call_id="c1")]
+                ),
+            )
+        )
+        body = conversing(
+            scripted.endpoints(),
+            INSTRUCTIONS,
+            declaring=declaring,
+            tendings=tending_for(service),
+            storings=storing_for(service),
+        )
+        await passing(service, session.id, body)
+        recorded = await service.checkpointer.load(session.id)
+        assert scripted.asked == 2
+        assert parse_end(recorded[end_key(0, 0)]).said, "the missed handoff was sent back"
+        assert parse_returned(recorded[tool_key(0, "c1")]).ended is True
+        assert "pending" not in (await read_tending(service.database, session.id)).of("bundled:handoff")
 
     async def test_a_session_that_loaded_none_of_them_answers_all_the_same(
         self, service: Service, declaring: Declaring
@@ -2010,8 +2152,15 @@ class TestEndingATurnFromInsideACall:
         """
         session = await set_up(service, declaring)
         await service.say(session.id, "hello")
+        await set_settings(service.database, session.id, "bundled:handoff", {"pending": True})
         scripted = self.calling()
-        body = conversing(scripted.endpoints(), INSTRUCTIONS, declaring=declaring)
+        body = conversing(
+            scripted.endpoints(),
+            INSTRUCTIONS,
+            declaring=declaring,
+            tendings=tending_for(service),
+            storings=storing_for(service),
+        )
         await passing(service, session.id, body)
 
         assert scripted.asked == 1, "the turn ended on the call rather than asking again"
@@ -2027,8 +2176,15 @@ class TestEndingATurnFromInsideACall:
         after its third call replays two calls and then stops, which a fact about the turn cannot say.
         """
         session = await set_up(service, declaring)
+        await set_settings(service.database, session.id, "bundled:handoff", {"pending": True})
         await service.say(session.id, "hello")
-        body = conversing(self.calling().endpoints(), INSTRUCTIONS, declaring=declaring)
+        body = conversing(
+            self.calling().endpoints(),
+            INSTRUCTIONS,
+            declaring=declaring,
+            tendings=tending_for(service),
+            storings=storing_for(service),
+        )
         await passing(service, session.id, body)
 
         recorded = await service.checkpointer.load(session.id)
@@ -2046,8 +2202,15 @@ class TestEndingATurnFromInsideACall:
         since a provider handed a tool call with no result refuses it outright.
         """
         session = await set_up(service, declaring)
+        await set_settings(service.database, session.id, "bundled:handoff", {"pending": True})
         await service.say(session.id, "hello")
-        body = conversing(self.calling().endpoints(), INSTRUCTIONS, declaring=declaring)
+        body = conversing(
+            self.calling().endpoints(),
+            INSTRUCTIONS,
+            declaring=declaring,
+            tendings=tending_for(service),
+            storings=storing_for(service),
+        )
         await passing(service, session.id, body)
 
         answered = transcript(await service.checkpointer.load(session.id))
@@ -2109,13 +2272,21 @@ class TestRefusingACall:
         declaring = self.declaring()
         session = await set_up(service, declaring)
         await service.say(session.id, "hello")
+        await set_settings(service.database, session.id, "bundled:handoff", {"pending": True})
         delivered: list[records.Note] = []
 
         async def collecting(into: str, note: records.Note) -> None:
             delivered.append(note)
 
         scripted = self.calling("allowed " * 60)
-        body = conversing(scripted.endpoints(), INSTRUCTIONS, declaring=declaring, delivering=collecting)
+        body = conversing(
+            scripted.endpoints(),
+            INSTRUCTIONS,
+            declaring=declaring,
+            delivering=collecting,
+            tendings=tending_for(service),
+            storings=storing_for(service),
+        )
         await passing(service, session.id, body)
 
         recorded = parse_returned((await service.checkpointer.load(session.id))[tool_key(0, "c1")])
@@ -2229,7 +2400,7 @@ class TestKeepingATurnGoing:
         assert asked.read_text() == "0\n1\n", "and a pass that replays a whole turn asks nothing"
 
     async def test_a_session_whose_plugins_want_nothing_of_it_records_nothing(self, service: Service) -> None:
-        """So its keys are exactly what they were before the event existed."""
+        """A bundled handoff now asks at the stop gate even when it has no reminder to give."""
         declaring = Declaring(console=bundled(), speaking=Spawned(environ={}))
         session = await set_up(service, declaring)
         await service.say(session.id, "hello")
@@ -2237,7 +2408,7 @@ class TestKeepingATurnGoing:
         await passing(service, session.id, conversing(provider.endpoints(), INSTRUCTIONS, declaring=declaring))
 
         assert provider.asked == 1
-        assert not any(":end:" in key for key in await service.checkpointer.load(session.id))
+        assert parse_end((await service.checkpointer.load(session.id))[end_key(0, 0)]).said == ()
 
     async def test_what_was_said_is_drawn_while_the_next_answer_is_still_out(self, service: Service) -> None:
         """

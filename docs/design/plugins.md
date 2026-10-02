@@ -25,6 +25,8 @@ And the tool was the smaller half. The whole of it, and what each part became:
 | returned `Recorded. …` to the model | a **return** effect |
 | asked once the reserve was crossed | an **after_turn** event carrying the numbers to decide on |
 | never fired twice running | that payload saying what the turn *opened on*, and who asked for it |
+| an unasked tool call returns without delivering | hidden **state** set beside each ask, read by the tool and cleared on success |
+| a prose-only handoff answer gets one reminder | a **before_turn_end** event with a bounded **inject** |
 | `hands_off` and `reserve` as columns | **settings**, declared once by the card that draws them |
 | its card in the rail | a **card** contribution, whose controls are those settings |
 | `/handoff`, empty box allowed, note appended | an **answer** contribution and a **compose** event |
@@ -1342,27 +1344,25 @@ Not afterwards, and not as a demonstration. Between them **handoff and guidance 
 event, every effect and every contribution**, which is what makes the pair a test rather than a pair
 of examples:
 
-- **Events**: `setup`, `tool`, `before_request`, `after_turn`, `compose`.
-- **Effects**: `return`, `retry`, `deliver`, `inject`.
+- **Events**: `setup`, `tool`, `before_request`, `before_turn_end`, `after_turn`, `compose`.
+- **Effects**: `return`, `retry`, `deliver`, `inject`, `end`, `set`.
 - **Contributions**: tools, instructions, an answer in the composer, a card, and a panel's `label`,
   `title` and `tone`.
 
-Handoff reaches all of it but `before_request`, `inject` and `instructions`; guidance is exactly
-those three. A protocol that cannot carry the two is wrong, and finding that out while porting them
-was far cheaper than hearing it from the first plugin somebody else writes - it is what turned up
-that `compose` and `action` were being fired at plugins that never asked for them.
+Handoff reaches everything there but `before_request` and `instructions`; guidance is exactly
+those two plus an `inject` at `before_request`. A protocol that cannot carry the two is wrong, and
+finding that out while porting them was far cheaper than hearing it from the first plugin somebody
+else writes - it is what turned up that `compose` and `action` were being fired at plugins that
+never asked for them.
 
 What neither reaches is `before_tool` and `refuse`, which no bundled plugin has a reason to want, so
 `tests/plugins/gatekeeper` is the fixture that exercises them: a plugin that turns away any call whose
 arguments say `forbidden`, run for real through the whole pass, so that the refusal being recorded in
 the call's place and replayed without a second asking are claims the suite makes rather than this
-page. Nor `before_turn_end`, which `tests/plugins/stickler` exercises the same way: a plugin that sends
-the model back until `attempt` reaches a number it is told, so that the turn going on inside itself,
-the count on the payload, and a replay asking nothing are the suite's claims too.
-
-Neither of them installs anything, which is the ordinary case and worth saying: a plugin whose
-`setup` is one `return` of a constant is a plugin that had nothing to fetch, not one that skipped a
-step.
+page. `before_turn_end` is exercised by the bundled handoff as a bounded reminder when a model tries
+to stop without its requested document; `tests/plugins/stickler` exercises repeated injections and
+the attempt count, so the turn going on inside itself and a replay asking nothing are claims the
+suite makes too.
 
 **And a third tier is exercised by a fixture rather than by a bundled plugin.** `tests/plugins/git-status`
 is a **bash** script a test repository carries, ported from a `SessionStart` hook: it is declared by
