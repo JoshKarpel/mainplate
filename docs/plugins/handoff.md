@@ -74,10 +74,9 @@ nobody asked for and one somebody typed a paragraph into cannot come to say diff
 what a handoff *is* - and that sharing is internal to the plugin rather than a function two callers
 have to remember to reach for, which is one thing the port made strictly better.
 
-**The box may be empty for this answer and no other**, which is what `demands: false` on the
-declared answer buys. The box is `required`, which is right for a message and would refuse the
-ordinary handoff, so the row's button says it does not need the form's required fields and the
-boundary allows an empty message for this disposition alone. [The composer](
+**The box may be empty for this answer**, which is what `input: "optional"` on the declared answer
+buys. The box is `required`, which would refuse an ordinary handoff, so the submitter carries
+`formnovalidate` and the plugin receives an empty note. [The composer](
 ../design/composer.md#leaders) is where that mechanism is argued.
 
 It sits beside `Forget` in the menu because they are the same family: both end a stretch of context

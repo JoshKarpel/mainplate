@@ -292,21 +292,25 @@ class Declared(Speech):
     schema_: Mapping[str, object] = Field(default_factory=dict, alias="schema")
 
 
+type AnswerInput = Literal["required", "optional", "none"]
+"""How a composer answer uses the box: a message, an optional note, or no text at all."""
+
+
 class Answering(Speech):
     """
     One answer a plugin contributes to the composer, which is a leader somebody types.
 
-    The same three facts `pages.Answer` holds, minus what it posts: where the answer goes is the
+    The composer answer's declaration, minus what it posts: where the answer goes is the
     console's to decide, since a plugin answer posts a value naming the plugin and this leader.
 
-    `demands` is whether the box has to have something in it. False is the handoff's case, where the
-    text is an optional note rather than the message, and it is the one thing a plugin has to be able
-    to say about a control it does not draw.
+    `input` describes the whole relationship to the box. `required` needs text, `optional` offers
+    a mode for a note but accepts an empty box, and `none` submits the leader immediately and
+    refuses text. One field keeps submission timing and input validation in agreement.
     """
 
     leader: str
     saying: str
-    demands: bool = True
+    input: AnswerInput = "required"
 
 
 class Described(Speech):

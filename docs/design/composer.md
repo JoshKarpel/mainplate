@@ -38,9 +38,8 @@ the same input and differs only in where it goes. Parsed at the boundary into an
   where the message goes, and being a `Prompt` is what makes it possible: a boundary between turns
   is the only place one can be, so it must never be folded into a turn already running. See
   [Forget](#forget).
-- `handoff` is the bundled handoff plugin's own leader, and it is **the one answer whose box may be
-  empty**. What it does
-  with the text is point the handoff at something rather than send it anywhere, and the ordinary
+- `handoff` is the bundled handoff plugin's own leader, with an optional note in the box. What it
+  does with the text is point the handoff at something rather than send it anywhere, and the ordinary
   handoff has nothing typed into it, so the button carries `formnovalidate` and the boundary allows
   an empty message for this disposition alone. It shares the family `forget` is in, both ending a
   stretch of context where they stand, and differs in who writes what the next one opens on. See
@@ -69,9 +68,10 @@ drawn as the step-outs they were, because a recorded value is not the console's 
 - `online` is `Service.run` with the network on for that one command, offered where `run` is and
   the session's network is off. See [Online](#online).
 - `push` is `Service.push`, which sends the session's recorded branch to its repository. It is
-  offered where `run` is, and it is the one console answer that takes **nothing** from the box: its
-  button carries `formnovalidate`, the boundary allows an empty message for it, and text typed
-  beside it is a `422`. See [Push](#push).
+  offered where `run` is, and takes **nothing** from the box: its button carries
+  `formnovalidate`, the boundary allows an empty message for it, and text typed beside it is a
+  `422`. Choosing `/push` from the palette sends immediately rather than opening a mode with an
+  empty box and asking for a second press. See [Push](#push).
 - A **steer** is [below](#steer). It is not one of these and never was a choice a form makes: it is
   what becomes of a `here` message that a pass finds while it is working.
 
@@ -81,12 +81,11 @@ plus a caret opening a `<details>` whose items are submit buttons, so the whole 
 script: the fold is how everything else here folds, and a named button has always posted its own
 pair.
 
-**Every answer is one `Answer` value, rendered three times**: as a row in that menu, as the button
-the box shows once a leader has put it in that answer's mode, and as the sentence above the box
-saying what will happen. `sending_answers` is the list and the three renderings are functions of it,
-so what is on offer, what it is called and what it posts cannot come apart between them. That is the
-same bargain the branch field takes in rendering one `branches` argument as a `<datalist>` and as
-the list the script narrows.
+**Every answer is one `Answer` value, rendered from the same declaration**: as a menu row and,
+where it takes text, as the button and sentence of its mode. `sending_answers` and plugin declarations
+feed that list, so what is offered, what it says and what it posts cannot come apart.
+That is the same bargain the branch field takes in rendering one `branches` argument as a
+`<datalist>` and as the list the script narrows.
 
 **One word per answer, and `Answer.named` is `leader.capitalize()` rather than a second field.** The
 word is the menu row's name, the leader typed after `/`, and the value in `data-leading`; where it
@@ -175,9 +174,10 @@ Six things there are decided rather than incidental:
   safe to swallow there where it is nowhere else in this box, because what it would otherwise do is
   break a line in the middle of `/fo`. Two keys and not two mechanisms: the space says the word is
   done and Enter says the *row* is, which are different things to have decided.
-- **A row pressed while a leader is being typed chooses the mode rather than sending.** The rows are
-  submit buttons, so without the capture-phase intercept a press with `/fo` in the box would post
-  `/fo` as the message: both a message nobody wrote and a session nobody asked for.
+- **A row pressed while a leader is being typed chooses its answer.** The capture-phase intercept
+  consumes `/fo` rather than posting that text as a message. The answer's `input` policy says
+  whether the cleared box is submitted at once (`none`) or enters a mode (`required` or
+  `optional`). A plugin's `none` answer also refuses a direct post carrying text.
 - **`Keep` is a mode like the rest and is the one that cannot be a submitter.** It posts nothing at
   all, so it is a `type=button` the shelf listens for, and the keyboard reaches it by pressing it
   rather than through `requestSubmit`. It is also the one mode nothing dispatches a `submit` from,
@@ -191,14 +191,11 @@ Six things there are decided rather than incidental:
   what leaving it does is hide the very button the send is attributed to.
 
 **Which modes exist is read off the buttons the server drew**, not kept in a list in the script. A
-session with no files is offered no `Run`, so there is no `/run` and no `!`, and the two cannot
-drift because there is only the one thing that decides it. What CSS lists by name is which
-`data-leading` shows which button and sentence, the same bargain the card kinds take, and it is the
-one place the answers *can* drift: CSS cannot ask whether a descendant's attribute matches an
-ancestor's, so an answer added without a line there enters a mode that hides `Send` and reveals
-nothing, leaving a composer with no primary button and no sentence.
-`TestNamingAModeFromTheKeyboard` asks it of every button the server drew rather than of a chosen
-one, which is what turns that into a failure rather than a mode nobody can use.
+session with no files is offered no `Run`, so there is no `/run` and no `!`. A `none` answer
+uses its menu row as submitter instead of entering a mode. What CSS lists by name is which
+`data-leading` shows which button and sentence, the same bargain the card kinds take; an answer
+added without a line there enters a mode with no visible primary button or sentence.
+`TestNamingAModeFromTheKeyboard` asks it of the answers that enter a mode.
 
 **A mode is left by Escape, and by a send where the answer is not one that stays.** What makes
 staying safe is what makes the mode safe at all: the button says `Run`, not `Send`.
@@ -335,22 +332,21 @@ transcript, which is what "before any forget" means.
 
 ## Handoff
 
-**A forget whose message the session wrote itself**, and the one answer in the menu whose box may be
+**A forget whose message the session wrote itself**, and an answer in the menu whose box may be
 empty. It is [a bundled plugin](../plugins/handoff.md), so what a handoff is, when one fires on its
 own, and what its card in the rail holds are that page's; what is the composer's is that `/handoff`
-is a leader like any other, and that its row is the one carrying `formnovalidate`.
+is a leader like any other, and that its row carries `formnovalidate`.
 
-**The box may be empty for this answer and no other.** The box is `required`, which is right for a
+**The box may be empty for this answer.** The box is `required`, which is right for a
 message and would refuse the ordinary handoff, so the button says it does not need the form's
 required fields and the boundary allows an empty message for this disposition alone. That is the
 browser's own mechanism rather than the script toggling an attribute under a reader, which is the
 same reason every mode's button is drawn by the server.
 
-`Answer.demands` is where an answer says so, and it is read by *both* renderings: a menu row is a
-submit button exactly as a mode's own button is, so an exception on one of them would be a control
-that refuses from the menu and works from the keyboard. `TestWhereTheComposerSendsTo` drives it in a
-real Chromium, because a form refused before any request leaves and a control that silently does
-nothing look identical in the markup.
+`Answer.input` is where an answer says so, and it is read by *both* renderings: a menu row is a
+submit button exactly as a mode's own button is, so `optional` and `none` both carry
+`formnovalidate`. `TestWhereTheComposerSendsTo` drives this in a real Chromium, because a form
+refused before any request leaves looks like a control that silently does nothing.
 
 It sits beside `Forget` in the menu because they are the same family: both end a stretch of context
 where they stand, and what separates them is who writes what the next one opens on.
@@ -642,8 +638,10 @@ crosses into the store as a bundle unless the store already has it, and the stor
 own configuration. [What runs, and as whom](security.md#a-persons-command-and-a-push) is why.
 
 **It takes nothing from the box.** There is one branch to push and one place to push it, so the
-answer does not demand a message, and text typed beside it is refused rather than quietly dropped: a
-message sent under the wrong answer should come back to the person who typed it.
+answer does not demand a message. The menu row posts directly, and completing `/push` in the
+palette clears the leader and posts that same row. A message typed beside the row is refused rather
+than quietly dropped: a message sent under the wrong answer should come back to the person who typed
+it.
 
 **Never forced.** A remote branch that moved on is git's own refusal, recorded as the result, rather
 than something to override from a button. A person who means to force it has a checkout of their own
