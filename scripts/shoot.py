@@ -5,7 +5,7 @@
 # console loads them. What it is not is a test. Nothing here asserts; it produces PNGs for a person
 # (or an agent that can read one) to look at.
 #
-# The same Playwright the suite drives, so a checkout pins one Chromium and `just dependencies`
+# The same Playwright the suite drives, so a checkout pins one Chromium and `just setup`
 # fetches it once. The sync binding rather than the suite's async one, because this runs on its own
 # with no event loop to collide with; `tests/AGENTS.md` says why the suite cannot make that choice.
 #

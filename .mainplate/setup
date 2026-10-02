@@ -18,10 +18,9 @@
 # is fetched first, into `$HOME/.local/bin`, and its shims are what put the tools on `PATH`: there
 # is no shell rc to `mise activate` in, and a shims directory works in a `sh -c`.
 #
-# **`just dependencies` and not `just setup`**, because the other half of `setup` installs a git
-# hook, and whether a session's commits run pre-commit is that session's to decide, with `pre-commit
-# install` in its own checkout from `bash` or the composer's `Run`, rather than something a setup
-# plugin does to every session.
+# **`just setup` installs the hook in this session's checkout.** The repository's setup switch
+# is the decision to prepare this checkout for work, including running its pre-commit checks on
+# commits. That costs a hook on every session that leaves the plugin on; the switch can turn it off.
 #
 # **What crosses back to the session is what is appended to `$MAINPLATE_ENV`**, one `KEY=value` per
 # line, and nothing else in this environment does. `PATH` is set whole: the shims first, so a `uv`
@@ -55,6 +54,6 @@ mise install --quiet
 SHIMS="$HOME/.local/share/mise/shims"
 export PATH="$SHIMS:$PATH"
 
-just dependencies
+just setup
 
 echo "PATH=$PATH" >> "$MAINPLATE_ENV"
