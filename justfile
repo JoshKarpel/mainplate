@@ -21,18 +21,12 @@ alias l := list
 
 # One Chromium, fetched by Playwright's Python binding, which the suite and `shots` both drive.
 #
-# Split from `setup` because a mainplate session's setup plugin runs this half and must not run the
-# other: whether a session's commits run pre-commit is that session's to decide, with `pre-commit
-# install` in its own checkout, not something a setup plugin does to every session.
-# `.mainplate/setup` is what runs this in a session, and the split is what keeps the two callers on
-# one definition.
-[doc('Fetch the dependencies and the browser, which is the half of setup a session can run')]
-dependencies:
+# One setup for fresh clones and mainplate sessions alike: sync dependencies, fetch Chromium, and
+# install the commit hook. A session that enables the repository's setup plugin gets the same checks.
+[doc('Prepare a fresh clone: dependencies, the browser, and pre-commit as a git hook')]
+setup:
     uv sync
     uv run playwright install chromium
-
-[doc('Prepare a fresh clone: dependencies, the browser, and pre-commit as a git hook')]
-setup: dependencies
     uv run pre-commit install
 
 # Every script this console serves that somebody else wrote, fetched from where it was published

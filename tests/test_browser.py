@@ -1409,6 +1409,21 @@ class TestDrawingAFence:
         assert await panel.get_attribute("data-fresh") is None
 
 
+class TestTheDurationOfACallWithoutASubject:
+    """A subjectless call keeps its duration at the outcome end of the summary row."""
+
+    async def test_grep_duration_stays_right_aligned(self, page: Page, gallery: str) -> None:
+        """Measure the gallery's grep against the outcome, not against an arbitrary column width."""
+        await page.goto(f"{gallery}/session.html", wait_until="load")
+        call = page.locator(".tool", has=page.locator(".tool__name", has_text="grep")).first
+        duration = await call.locator(".tool__took").bounding_box()
+        outcome = await call.locator(".tool__outcome").bounding_box()
+        assert duration is not None
+        assert outcome is not None
+        assert abs(duration["y"] - outcome["y"]) < 1
+        assert 0 <= outcome["x"] - (duration["x"] + duration["width"]) < 25
+
+
 class TestALineThatDoesNotFit:
     """
     A block of lines scrolls sideways rather than wrapping.
@@ -2507,7 +2522,7 @@ class TestTheLineAShutPanelStandsFor:
             "lines => lines.map(line => line.textContent)"
         )
 
-        assert named == ["read", "read", "edit, create, bash", "bash", "bash", "read, read"]
+        assert named == ["read", "read", "edit, create, grep, bash", "bash", "bash", "read, read"]
 
 
 class TestFoldingADocumentTheConsoleHandedOver:
