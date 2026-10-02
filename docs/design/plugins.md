@@ -63,6 +63,10 @@ One entrypoint rather than a file per hook, because **a plugin is a package and 
 scripts**. Handoff is a tool *and* a condition *and* a card *and* a composer answer, and those share
 one string, one setting, and one idea; split across five files wired up separately they would be
 five things somebody has to install in agreement.
+A composer answer declares `leader`, `saying`, and one `input` policy. `required` (the default)
+needs text, `optional` offers a mode for a note but permits an empty box, and `none` sends as soon
+as its leader is completed and refuses text even from a direct post. The cost of `none` is that the
+keyboard has no pause in which to add a note, so an answer that accepts one uses `optional`.
 
 Four properties follow, and they are why this shape rather than in-process Python:
 
@@ -114,7 +118,7 @@ including which events it wants:
 → {"event": "setup", "session": "a1b2", "plugin": "bundled:handoff", "checkout": "/…/a1b2"}
 ← {"events": ["after_turn", "compose"],
    "tools": [{"name": "hand_off", "description": "…", "schema": {…}}],
-   "answers": [{"leader": "handoff", "saying": "hand off and clear the context", "demands": false}],
+   "answers": [{"leader": "handoff", "saying": "hand off and clear the context", "input": "optional"}],
    "card": {"heading": "handoff", "rows": [
      {"switch": {"name": "hands_off", "label": "auto at reserve", "default": true}},
      {"number": {"name": "reserve", "label": "reserve", "unit": "K", "default": 40}}]}}

@@ -31,6 +31,7 @@ from mainplate.pages.moments import timed
 from mainplate.pages.picker import where_it_works
 from mainplate.pages.transcript import TRANSCRIPT_ID
 from mainplate.plugins.installed import Enrolled
+from mainplate.plugins.protocol import AnswerInput
 from mainplate.service import Conversation
 
 # What a send does, which is the same merge plus a scroll: a message just typed is the one thing a
@@ -199,21 +200,8 @@ class Answer:
     saying: str
     posts: Mapping[str, str | int | bool | None]
     staying: bool
-
-    demands: bool = True
-    """
-    Whether this answer needs something in the box, which every one of them does but `handoff`.
-
-    The box is `required`, which is right for a message and wrong for a handoff: what a handoff takes
-    is an optional note saying what to dwell on, and the ordinary one has nothing typed into it. So
-    the answer that does not demand a message says so, and both of its renderings carry
-    `formnovalidate` - the browser's own way of saying that this submitter does not need the form's
-    required fields, which is a mechanism rather than a script toggling an attribute under a reader.
-
-    Both renderings, because both submit: a menu row is a submit button exactly as the mode's own
-    button is, so an exception on one of them would be a control that refuses from the menu and works
-    from the keyboard.
-    """
+    input: AnswerInput = "required"
+    """Required text, an optional note, or no text with immediate submission."""
 
     @property
     def named(self) -> str:
@@ -221,14 +209,16 @@ class Answer:
         return self.leader.capitalize()
 
 
-def dispatched(disposition: Disposition, saying: str, *, staying: bool = False, demands: bool = True) -> Answer:
+def dispatched(
+    disposition: Disposition, saying: str, *, staying: bool = False, input_policy: AnswerInput = "required"
+) -> Answer:
     """One answer that posts a disposition, named after the value it posts."""
     return Answer(
         leader=disposition.value,
         saying=saying,
         posts={"type": "submit", "name": DISPOSITION_FIELD, "value": disposition.value},
         staying=staying,
-        demands=demands,
+        input=input_policy,
     )
 
 
@@ -252,9 +242,9 @@ def plugin_answers(plugins: Sequence[Enrolled]) -> tuple[Answer, ...]:
     it. That is what stops a plugin's control drifting from the console's the first time anything is
     restyled, and it is the whole argument for a card being declared rather than drawn.
 
-    `demands` is the one thing a plugin has to be able to say about a control it does not draw: the
-    box is `required`, which is right for a message and wrong for an answer whose text is an optional
-    note. Both renderings carry `formnovalidate` where it says so, because both submit.
+    `input` is the plugin's one choice: required message, optional note, or no text at all.
+    The last submits the menu row as soon as the leader is chosen; the route refuses text if a
+    caller posts directly. The optional answer keeps its mode for a note.
     """
     return tuple(
         Answer(
@@ -265,7 +255,7 @@ def plugin_answers(plugins: Sequence[Enrolled]) -> tuple[Answer, ...]:
             # the box stays in, and it stays because a session that reaches for it reaches again a
             # line later; nothing here can claim that of somebody else's answer.
             staying=False,
-            demands=declared.demands,
+            input=declared.input,
         )
         for plugin in plugins
         for leader, declared in plugin.answers()
@@ -284,19 +274,18 @@ def sending_answers(
     of the menu. `connected` is whether the session's commands already have the network, which is
     what leaves `Online` out: with it on, `Run` is already that.
 
-    **Declared once and rendered three times**: as a row in the menu, as the button the box shows
-    once it is in that answer's mode, and as the sentence above the box saying what will happen. The
-    three cannot disagree about what is on offer, what it is called or what it posts, which is the
-    same bargain the branch field takes in rendering one list as a `<datalist>` and a narrowed list.
+    **Declared once and rendered from the same answer**: the menu row posts directly, and the
+    button and sentence of a mode use that answer too. `Push` needs no mode: the answer says to
+    submit it when its leader is chosen. No list of words in the script decides that.
 
     Ordered by how far the text travels: waiting for the next turn keeps it here and merely later,
     `Forget` keeps it here and drops what the model was told, a `Handoff` keeps it here and has the
     session write down what the model should be told instead, `Parent` reaches the conversation this
     one came out of, `Run` is not a message at all, `Online` is `Run` that can reach past the machine,
     `Commit` is a `Run` whose command is written for you and whose message is what you typed, `Push`
-    takes nothing from the box and reaches the repository, and `Keep` sends it nowhere. `Commit` and
-    `Push` are shortcuts for what `Run` and the store would do anyway, and neither stages anything:
-    what goes in a commit is the person's, the model's, or a plugin's to decide.
+    takes nothing from the box and goes at once to the repository, and `Keep` sends it nowhere.
+    `Commit` and `Push` are shortcuts for what `Run` and the store would do anyway, and neither
+    stages anything: what goes in a commit is the person's, the model's, or a plugin's to decide.
 
     **Nothing here forks.** A fork happens at a turn boundary through the link on a rule, where what
     it plants at is settled; an answer that forked the end of a live conversation was the same as
@@ -364,7 +353,7 @@ def sending_answers(
                 dispatched(
                     Disposition.PUSH,
                     f"Push the session's branch in {runs_in} to its repository, as you",
-                    demands=False,
+                    input_policy="none",
                 ),
             )
             if runs_in is not None
@@ -394,7 +383,8 @@ def sending_option(answer: Answer, refusing: bool) -> Element:
             **answer.posts,
             "disabled": refusing,
             "data-leader": answer.leader,
-            "formnovalidate": not answer.demands,
+            "formnovalidate": answer.input != "required",
+            "data-immediate": answer.input == "none",
         },
         children=[
             span(
@@ -429,7 +419,7 @@ def sending_leader(answer: Answer, refusing: bool) -> Element:
             "disabled": refusing,
             "data-leader": answer.leader,
             "data-staying": answer.staying,
-            "formnovalidate": not answer.demands,
+            "formnovalidate": answer.input != "required",
             "title": "Shift-Enter \N{MIDDLE DOT} Escape to go back to a message",
         },
         children=answer.named,
@@ -472,10 +462,10 @@ def sending_control(refusing: bool, answers: Sequence[Answer]) -> Element:
     present, typing `/forget ` into an empty box - or `! `, which is `/run`'s own key - turns the box
     into that answer's box: the button beside it says `Forget`, and a sentence above it says what
     will happen. **The space is what commits it**, and until it is pressed the word is ordinary text with
-    the menu open beside it, so nothing happens on a keystroke somebody was in the middle of. That is
-    the whole safety property, and it is why every mode's button is rendered here rather than made out
-    of `Send` by the script. The server parses no leader out of what was posted, so a paragraph that
-    opens with `/` is a paragraph, and the menu is what works with the file absent.
+    the menu open beside it, so nothing happens on a keystroke somebody was in the middle of. The
+    answers taking no text post on that press instead of showing an empty mode. The
+    server parses no leader out of what was posted, so a paragraph that opens with `/` is a
+    paragraph, and the menu is what works with the file absent.
     """
     send = button(
         # Classed rather than found by position, because the script has to name it: it is the

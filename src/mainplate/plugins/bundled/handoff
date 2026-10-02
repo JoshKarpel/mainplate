@@ -137,10 +137,9 @@ DESCRIBED: dict[str, Any] = {
         {
             "leader": "handoff",
             "saying": ("Have it write down where it has got to and carry on from that, dwelling on anything you typed"),
-            # The one answer whose box may be empty: what a handoff takes is an optional note saying
-            # what it should dwell on, and the ordinary one has nothing typed into it.
-            "demands": False,
-        }
+            # An optional note names what to dwell on; without one the handoff still has an ask.
+            "input": "optional",
+        },
     ],
     "card": {
         "heading": "handoff",

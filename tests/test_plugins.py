@@ -55,6 +55,7 @@ from mainplate.forge import Workspaces
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.asking import Live
 from mainplate.plugins.asking import asked_to_set
+from mainplate.plugins.asking import parse_registration
 from mainplate.plugins.asking import running
 from mainplate.plugins.installed import BUNDLED_ROOT
 from mainplate.plugins.installed import BadDeclaration
@@ -574,6 +575,52 @@ class TestWhenTwoPluginsWantOneName:
         assert [each.qualified for each in running(both, TENDED)] == ["user:mine"]
 
 
+class TestComposerAnswerInput:
+    @pytest.mark.parametrize("value", ["required", "optional", "none"])
+    def test_the_declaration_accepts_each_input_policy(self, value: str) -> None:
+        """The three policies are distinct choices rather than combinations of flags."""
+        answer = Described.model_validate(
+            {"answers": [{"leader": "refresh", "saying": "refresh the index", "input": value}]}
+        ).answers[0]
+        assert answer.input == value
+
+    def test_a_missing_input_policy_requires_text(self) -> None:
+        """A declaration without an input policy keeps ordinary messages required."""
+        answer = Described.model_validate({"answers": [{"leader": "refresh", "saying": "refresh"}]}).answers[0]
+        assert answer.input == "required"
+
+    @pytest.mark.parametrize("value", ["sometimes", "immediate"])
+    def test_an_unknown_input_policy_is_refused(self, value: str) -> None:
+        """Unrecognized policies must not silently become required messages."""
+        with pytest.raises(ValueError, match="input"):
+            Described.model_validate({"answers": [{"leader": "refresh", "saying": "refresh", "input": value}]})
+
+    @pytest.mark.parametrize("field", ["demands", "immediate"])
+    def test_obsolete_flags_are_refused(self, field: str) -> None:
+        """Two descriptions of the same policy cannot be accepted in a declaration."""
+        with pytest.raises(ValueError, match=field):
+            Described.model_validate({"answers": [{"leader": "refresh", "saying": "refresh", field: False}]})
+
+    @pytest.mark.parametrize(
+        ("flags", "policy"),
+        [({}, "required"), ({"demands": False}, "optional"), ({"demands": False, "immediate": True}, "none")],
+    )
+    def test_a_recorded_older_answer_is_still_readable(self, flags: dict[str, bool], policy: str) -> None:
+        """A session keeps its recorded plugin declaration across a console upgrade."""
+        registration = records.Registered(
+            plugins=(
+                records.Enrolled(
+                    name="fixture",
+                    tier="user",
+                    path="/nowhere",
+                    described={"answers": [{"leader": "refresh", "saying": "refresh", **flags}]},
+                ),
+            )
+        )
+        (plugin,) = parse_registration(registration.recorded())
+        assert plugin.described.answers[0].input == policy
+
+
 class TestWhatARepositoryMayDeclare:
     def test_a_file_declaring_nothing_but_plugins_is_all_there_is_to_declare(self, tmp_path: Path) -> None:
         """
@@ -1031,7 +1078,7 @@ class TestTheBundledHandoff:
         assert set(described.events) == {"tool", "before_turn_end", "after_turn", "compose"}
         assert [each.name for each in described.tools] == ["hand_off"]
         assert [each.leader for each in described.answers] == ["handoff"]
-        assert described.answers[0].demands is False, "the one answer whose box may be empty"
+        assert described.answers[0].input == "optional", "handoff can take an optional note"
         assert described.card is not None
         assert described.settings == {"hands_off": True, "reserve": 40}
 

@@ -1549,7 +1549,7 @@ ENROLLED: tuple[Enrolled, ...] = (
                             "Have it write down where it has got to and carry on from that, dwelling on "
                             "anything you typed"
                         ),
-                        "demands": False,
+                        "input": "optional",
                     }
                 ],
                 "card": {
