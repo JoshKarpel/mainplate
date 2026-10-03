@@ -21,6 +21,7 @@ This console's is the rest:
 | Key | Holds | Written by |
 |---|---|---|
 | `choice` | The endpoint, model, repository, base, branch, isolation, thinking level and output override | `Service.start` and `Service.fork`, before the first message |
+| `context:catalogue` | Skill and command names, descriptions and paths discovered for this session, not their bodies | The session's first pass |
 | `result:{entry}` | What the command delivered under `{entry}` exited with, said and took | `Commands`, when it finishes |
 | `instructions:{n}` | What the stretch of context beginning at turn `n` is answered under, exactly as the model is sent it | The first pass to reach it, before its first request, and replayed by every later one |
 | `turn:{n}:opened` | The entry this turn took | `Run.receive`, in the conversation body |
@@ -144,6 +145,11 @@ and read by [the settings step](plugins.md#starting-a-session-takes-four-steps);
 `plugins:console` and `plugins:repository` hold what those plugins said when they were *run*, written
 by the pass that follows that step being answered. A fork carries none of the four and reads and
 runs both tiers again, out of the tree it is planted at.
+
+`context:catalogue` is session-level: a fork re-discovers its own index, since
+its checkout may carry different files. Bodies are read on demand; the tool
+return or expanded inbox message records the actual text that was read. See
+[loading context](context-loading.md).
 
 `setup:environment` is written on that same pass, before the two registrations and under the same
 rule that nothing is recorded until every setup has answered: it holds what this session's repository

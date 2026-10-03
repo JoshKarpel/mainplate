@@ -50,7 +50,11 @@ from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Offering
 from mainplate.catalogue import retention_for
 from mainplate.console import LINKS
+from mainplate.context import Entry as ContextEntry
+from mainplate.context import catalogue as context_catalogue
+from mainplate.context import parse_catalogue as parse_context_catalogue
 from mainplate.conversation import ARCHIVED_KEY
+from mainplate.conversation import CONTEXT_KEY
 from mainplate.conversation import Result
 from mainplate.conversation import before
 from mainplate.conversation import commit_command
@@ -1709,8 +1713,14 @@ def fixtures() -> tuple[Fixture, ...]:
     if carried_on.forked is None:  # pragma: no cover - the fixture says it is, and this is what reads it
         raise ValueError("the gallery's carried-on session is a fork, and it records no origin")
     closed = {**settled_checkpoint(), ARCHIVED_KEY: records.Archived(at=archived.archived).recorded()}
+    sample = next(
+        entry
+        for entry in context_catalogue(Path("/nonexistent"), None)
+        if entry.tier == "bundled" and entry.name == "review"
+    )
+    indexed = {CONTEXT_KEY: [sample.model_dump()]}
     return (
-        Fixture.of(parent, ON_SONNET, settled_checkpoint()),
+        Fixture.of(parent, ON_SONNET, {**settled_checkpoint(), **indexed}),
         # Branched at turn 1 and answered on a different model, so it carries turn 0 and nothing
         # after it.
         Fixture.of(branch, ON_OPUS, recorded(CONVERSATION)),
@@ -1752,6 +1762,7 @@ def showing(
     since: timedelta | None = SINCE,
     plugins: tuple[Enrolled, ...] | None = ENROLLED,
     declared: tuple[Installed, ...] | None = DECLARED,
+    context: tuple[ContextEntry, ...] = (),
 ) -> Conversation:
     """
     One session as a page sees it.
@@ -1788,6 +1799,7 @@ def showing(
         chosen=chosen,
         answerable=answerable,
         plugins=plugins,
+        context=parse_context_catalogue(written[CONTEXT_KEY]) if CONTEXT_KEY in written else context,
         declared=declared,
         refused=refused,
         failed=failed,

@@ -188,6 +188,7 @@ async def open_store(
     patience: timedelta = DEFAULT_PATIENCE,
     declaring: Declaring | None = None,
     footprints: Footprints | None = None,
+    config_home: Path | None = None,
 ) -> AsyncIterator[Service]:
     """
     The file, migrated, as the service both halves read and write through.
@@ -342,6 +343,7 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
         settings.patience,
         declaring,
         footprints,
+        settings.config_home,
     ) as service:
         answering = work(
             service.durable,
@@ -370,6 +372,7 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
                         tendings=partial(read_tending, service.database),
                         storings=partial(set_settings, service.database),
                         declaring=declaring,
+                        config_home=settings.config_home,
                         # The whole `Durable` rather than the checkpointer a pass already holds,
                         # because a note put in an inbox *queues* the session as well as being
                         # recorded: an entry appended mid-pass is invisible to the pass that appended
