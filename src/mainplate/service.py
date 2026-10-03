@@ -776,10 +776,25 @@ class Service:
         while either holds the session, the checkout is a moving thing, and what a capture of it
         would record is a mixture nothing ever saw. The reconciler asks this before taking a checkout
         away, and a fork from the end asks it before capturing one.
+
+        Membership of `holding` rather than a reading of its own, so the two cannot come to disagree
+        about what holding a session means. The cost, stated: one session's question reads every
+        session's claim, which is a statement over a table with a row per pass in flight.
         """
-        if isinstance(await self.attention(session), Claimed):
-            return True
-        return self.commands is not None and any(slot.session == session for slot in self.commands.running.values())
+        return session in await self.holding()
+
+    async def holding(self) -> frozenset[str]:
+        """
+        Every session something is writing in right now, a pass or a command a person ran, at once.
+
+        What the fetch loop asks every round, since a session somebody is working in is one whose
+        `origin/main` is about to be read, merged, or rebased onto; see `fetching.py`. One statement
+        for every claim, beside the commands this process holds, rather than `held` per session,
+        because the loop asks about all of them every few seconds.
+        """
+        claimed = {session for session, attention in (await self.attending()).items() if isinstance(attention, Claimed)}
+        running = {slot.session for slot in self.commands.running.values()} if self.commands is not None else set()
+        return frozenset(claimed | running)
 
     async def token(self, session: str) -> str:
         """

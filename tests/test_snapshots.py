@@ -730,10 +730,10 @@ class TestStartingSomewhereInParticular:
         round, and no loop runs here at all. So starting a session is where a person gets to say
         when this console catches up, and it has to work for the common case of naming nothing.
 
-        Saying nothing is the arm that catches the subtle half. A fetch writes
-        `refs/remotes/origin/`, so a plant that read the store's own `HEAD` commit would refresh the
-        refs and then check out the stale commit beside them - a round trip that changes nothing.
-        Resolving the *default branch by name* through the same path a base takes is what fixes it.
+        Saying nothing is the arm that catches the subtle half. It plants at the store's `HEAD`, which
+        is current only because a fetch mirrors the remote's branches over the store's own; a fetch
+        that wrote anywhere else would refresh refs nothing reads and then check out the commit the
+        clone left - a round trip that changes nothing.
         """
         body = conversing(provider.endpoints(), INSTRUCTIONS, workspaces)
         first = await started(planting, "hello", on_fixture)

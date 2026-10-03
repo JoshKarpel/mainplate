@@ -95,9 +95,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 - **A session's checkout is a repository of its own, and git works in it.** It has its own `.git`, so
   `add`, `commit`, `rebase`, `stash` and the rest work from `bash` against that session's refs and
-  nobody else's, and `git fetch` brings the repository's current branches with no network, since
-  `origin` is the console's own clone, which is fetched every five minutes (`MAINPLATE_FETCH_EVERY`)
-  while any session not archived works in it. Its objects are borrowed from that clone, read-only,
+  nobody else's, and `git fetch`, by name or not, brings the repository's current branches with no
+  network, since `origin` is the console's own clone, which is fetched every fifteen seconds while a
+  turn or a command is working in one of its sessions (`MAINPLATE_FETCH_HELD_EVERY`) and every five
+  minutes otherwise (`MAINPLATE_FETCH_EVERY`), while any session not archived works in it. Its
+  objects are borrowed from that clone, read-only,
   rather than copied. Snapshots move into the clone under refs of the session's own, so a rebase in
   the session rewrites nothing a fork plants from. Every git against a checkout, the console's own
   snapshots and `list` included, now runs behind the same sandbox as `bash`, because a checkout's git

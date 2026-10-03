@@ -67,9 +67,10 @@ things make that cheap and keep it apart:
   a checkout costs its files rather than a clone. The store is bound read-only wherever the
   checkout is, so the borrowing cannot run the other way; a hardlinked copy would have let a session
   `chmod` its way into the store's own object files.
-- **`origin` is the store**, fetching the store's `refs/remotes/origin/*`, which are the ones this
-  console refreshes. `git fetch` in a session brings the repository's current branches with no
-  network and no credential, and nothing can be pushed there.
+- **`origin` is the store**, with the refspec `git clone` would have written, since the store's
+  branches are the remote's (below). Every way of fetching a model reaches for, `git fetch`, `git
+  fetch origin main`, `git pull`, brings the repository's current branches with no network and no
+  credential, and nothing can be pushed there.
 - **It is built beside where it goes and renamed into place**, with the operator's `user.name` and
   `user.email`, read once at startup, copied in so a commit carries the name the person pushing it
   would give it. A crash part-way leaves a directory nothing names rather than a checkout half made.
@@ -172,28 +173,39 @@ Five things there are decided rather than incidental:
   is never handed two. The cost of the pre-filled name, stated: the fork and its parent are two
   checkouts under one branch, so nothing collides until both push, and then the second is refused,
   since a push is never forced.
-- **The store is fetched on a timer while any session works in it, and again when one is
-  planted.** A session's own `git fetch` reads the store and not the forge, since `origin` in a
-  checkout is the store, which needs no network and no credential; so the store is the whole of how
-  current `origin/main` is in there. `fetching.py` fetches
-  every repository an unarchived session works in, every `fetch_every` (five minutes), off the
-  request path; that is what lets a session an hour in rebase onto the `main` of now, and see a
-  commit somebody else pushed to its branch. Planting fetches as well, because a new session is the
-  moment somebody is waiting on current code and a fast-moving repository can move a lot in five
-  minutes. A failed round is logged and changes nothing, since the store keeps the refs it last
-  fetched. The cost, stated: a round trip per repository per interval whether or not anything moved.
-  `Clones.refresh` fetches into `refs/remotes/origin/` and never over `refs/heads/`, which keeps the
-  store's own branches as old as the clone and one namespace apart from the fresh ones; a store just
-  cloned copies its heads there itself, with no network, so a checkout's `git fetch` finds them from
-  the start.
+- **The store is fetched on a timer while any session works in it, faster while one is being worked
+  in, and again when one is planted.** A session's own `git fetch` reads the store and not the forge,
+  since `origin` in a checkout is the store, which needs no network and no credential; so the store
+  is the whole of how current `origin/main` is in there. `fetching.py` fetches every repository an
+  unarchived session works in, off the request path: every `fetch_held_every` (fifteen seconds)
+  while a pass or a command holds one of its sessions, and every `fetch_every` (five minutes)
+  otherwise. Held is the moment that matters, because a held session is the one about to read
+  `origin/main`: a model told to merge the latest `main` fetches seconds into its turn. The loop
+  reads which sessions are held off the same live state the reconciler does, rather than being told
+  when work starts, so the worker and the command runner know nothing about it; the cost of that is
+  that a session waking from an idle stretch is noticed within one short interval rather than at
+  once, and a `git fetch` inside that interval gets a copy up to five minutes old. Planting fetches
+  as well, because a new session is the moment somebody is waiting on current code. A failed round
+  is logged and changes nothing, since the store keeps the refs it last fetched. The cost, stated: a
+  round trip every fifteen seconds per repository somebody is working in, whether or not anything
+  moved.
 
-    **The no-base arm is the one that is easy to get wrong**, and it was wrong first: a fetch writes
-    `refs/remotes/origin/` and leaves the store's own `HEAD` pointing at the stale `refs/heads/`, so
-    planting at `rev-parse HEAD` refreshed the refs and then checked out the commit beside them, a
-    round trip that changes nothing, which is worse than not making it. `Checkouts.default_branch`
-    reads the *name* out of the store's `HEAD` symref and `resolve` turns that into the current
-    commit, so both arms go down one path. `test_snapshots.py` parametrises over naming a base and
-    naming nothing for exactly that reason.
+    **`Clones.refresh` mirrors the remote's branches over the store's own `refs/heads/`**, so the
+    store's `main` is the remote's `main` as of the last fetch, its `HEAD` names it, and a session's
+    checkout can carry the stock refspec. Nothing else writes a branch in a store: a session's work
+    arrives as a bundle under `refs/mainplate/sessions/`, and a push goes from the store straight to
+    the remote. The cost, stated: `--prune` takes a branch the remote deleted out of the store too.
+
+    Fetching *beside* the clone's branches, into `refs/remotes/origin/`, is the design that reads
+    as the careful one, since it overwrites nothing, and it is the one to not go back to. It leaves
+    two commits answering to every branch name, one current and one frozen at the clone, and git
+    resolves a name to the frozen one everywhere it is not told otherwise: the store's `HEAD`
+    planted new sessions on a `main` as old as the clone until the no-base arm was taught to look
+    the other way, and a session's `git fetch origin main` fetched the frozen `main` and merged a
+    copy a day stale, inside a sandbox where nothing of this console's could intervene.
+    `test_snapshots.py` still parametrises planting over naming a base and naming nothing, and
+    `test_fetching.py` fetches by name from inside a checkout, because those are the two readers
+    that found the frozen copy.
 
     Two cases skip the fetch and both would be round trips that cannot change an answer: a store
     that has just been cloned is current by construction, and a fork plants at a recorded

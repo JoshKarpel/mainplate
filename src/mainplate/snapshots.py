@@ -278,7 +278,7 @@ class Store:
     """
     One repository's store, the bare clone this console made: the trusted half of every session on it.
 
-    It holds what the forge said the repository is, the refreshed `refs/remotes/origin/*`, and every
+    It holds what the forge said the repository is, its branches mirrored under `refs/heads/`, and every
     tree any session on it has snapshotted, so it is what a fork plants from and what a push goes out
     through. Nothing in a sandbox can write it: a session's checkout borrows its objects read-only,
     and what a session made reaches it only as a bundle this process fetched.
@@ -319,19 +319,19 @@ class Store:
 
     async def upstream(self) -> tuple[str, ...]:
         """
-        Every commit the store's refreshed branches are at, which a bundle has no need to carry.
+        Every commit the store's mirrored branches are at, which a bundle has no need to carry.
 
         What a session reaches with `git fetch` in its checkout, since `origin` there is this store,
         so a session that rebased onto `origin/main` or merged it built on these. A bundle made thin
         against the session's base alone would send every one of those commits back to the store that
         handed them out; made thin against these too, it sends what the session made on top.
 
-        Read from the store rather than from the checkout's `refs/remotes/origin/*`, which are the
-        session's to rewrite: a bundle requiring a commit the store lacks is a refused fetch. The
-        cost, stated: one exclusion per branch the remote has, all on one `git bundle` argv.
+        Read from the store's `refs/heads/` rather than from the checkout's `refs/remotes/origin/*`,
+        which are the session's to rewrite: a bundle requiring a commit the store lacks is a refused
+        fetch. The cost, stated: one exclusion per branch the remote has, all on one `git bundle` argv.
         """
-        listed = await self.demand("for-each-ref", "--format=%(objectname)", "refs/remotes/origin/")
-        return tuple(dict.fromkeys(object_id(line, "refs/remotes/origin") for line in listed.splitlines() if line))
+        listed = await self.demand("for-each-ref", "--format=%(objectname)", "refs/heads/")
+        return tuple(dict.fromkeys(object_id(line, "refs/heads") for line in listed.splitlines() if line))
 
     async def fetched(self, bundle: Path, head: str, into: str) -> str:
         """
@@ -745,32 +745,16 @@ class Checkouts:
         """
         return self.at(session).is_dir()
 
-    async def default_branch(self) -> str | None:
-        """
-        What this repository calls its default branch, or nothing where its `HEAD` names no branch.
-
-        Read from the store's own `HEAD`, which `git clone --bare` sets as a symbolic ref to whatever
-        the remote's default was. It is the *name* that is wanted rather than the commit: the commit
-        under `refs/heads/` is as old as the clone, and the name is what `resolve` turns into the
-        current one by preferring the fetched `refs/remotes/origin/` side.
-
-        `None` is a store whose `HEAD` is detached, which `--bare` does not produce from an ordinary
-        remote. It is read as "there is no branch name to resolve" and the caller falls back to the
-        raw `HEAD`, which is parsing the two shapes a `HEAD` can have rather than a second mechanism.
-        """
-        named = await self.store.git("symbolic-ref", "--short", "--quiet", "HEAD")
-        return named.out or None if named.ok else None
-
     async def resolve(self, base: str) -> str:
         """
         The commit something a person typed names, as the hash it is.
 
-        `origin/<base>` first and the bare name second, and that ordering is what makes "start at
-        `main`" mean today's `main`. The store keeps the branches it was cloned with under
-        `refs/heads/`, and those are as old as the clone; a fetch writes the current ones under
-        `refs/remotes/origin/`. So the same word names two commits here, and the fresher of them is
-        the one somebody typing a branch name means. A tag, a hash and anything with revision syntax
-        in it are not under `origin/` at all and fall through to the second try.
+        A branch first and anything else second, because git's own reading of a bare name tries
+        `refs/tags/` before `refs/heads/`, and what the page offers beside the field is the
+        repository's branches: somebody who picked `v2` from that list means the branch even where a
+        tag shares its name. A tag, a hash, `HEAD` and anything with revision syntax in it are not
+        under `refs/heads/` and fall through to the second try. The store's branches are the remote's
+        as of the last fetch, so the branch found is the current one; see `Clones.refresh`.
 
         `^{commit}` so a tag object resolves to what it points at rather than to itself, since a
         checkout is planted at a commit and an annotated tag is not one.
@@ -779,7 +763,7 @@ class Checkouts:
         name rather than git printing the string back and this planting a checkout at a ref that
         does not exist.
         """
-        found = await self.store.git("rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{base}^{{commit}}")
+        found = await self.store.git("rev-parse", "--verify", "--quiet", f"refs/heads/{base}^{{commit}}")
         if found.ok and found.out:
             return found.out
         return await self.store.demand("rev-parse", "--verify", "--quiet", f"{base}^{{commit}}")
@@ -794,10 +778,11 @@ class Checkouts:
 
         - `snapshot` is a **fork**, and the commit its parent stood on wins over everything.
         - `base` is what a session was started at, resolved through `resolve` above.
-        - Neither is the repository's default branch, resolved through the *same* call, which is what
-          makes a session that said nothing start where the repository is *now*. A fork of a parent
-          whose `HEAD` named no commit lands here too, which is the one commit that means nothing in
-          particular about the files laid over it.
+        - Neither is the store's `HEAD`, which `git clone --bare` made a symbolic ref to the remote's
+          default branch, and which is therefore that branch as of the last fetch: a session that said
+          nothing starts where the repository is *now*. A fork of a parent whose `HEAD` named no
+          commit lands here too, which is the one commit that means nothing in particular about the
+          files laid over it.
 
         Whichever it is becomes the session's `base` ref in the store, which keeps it reachable and is
         what every capture's bundle is thin against.
@@ -825,8 +810,8 @@ class Checkouts:
             return self.checkout(session)
         if snapshot is not None and snapshot.head is not None:
             commit = snapshot.head
-        elif (named := base if base is not None else await self.default_branch()) is not None:
-            commit = await self.resolve(named)
+        elif base is not None:
+            commit = await self.resolve(base)
         else:
             commit = await self.store.demand("rev-parse", "HEAD")
         planted = self.checkout(session)
@@ -849,18 +834,20 @@ class Checkouts:
         """
         A new `.git` under `building`, borrowing the store's objects and fetching from the store.
 
-        `origin` is the store and the fetch refspec reads its `refs/remotes/origin/*`, which are the
-        ones this console refreshes, so `git fetch` in a session brings the repository's current
-        branches without a network or a credential. Nothing can be pushed there: the store is bound
-        read-only. The identity this was handed is copied in, so a commit a session makes carries the
-        name the person pushing it would give it.
+        `origin` is the store, with the refspec `git clone` would have written, because the store's
+        branches are the remote's (see `Clones.refresh`): every way of fetching a model or a person
+        reaches for, `git fetch`, `git fetch origin main`, `git pull`, brings the repository's
+        current branches without a network or a credential, and none of them needs to know the
+        remote is a copy. Nothing can be pushed there: the store is bound read-only. The identity this
+        was handed is copied in, so a commit a session makes carries the name the person pushing it
+        would give it.
         """
         await git_at(self.root, "init", "--quiet", str(building))
         gitdir = building / POINTER
         (gitdir / "objects" / "info" / "alternates").write_text(f"{self.store.path / 'objects'}\n")
         configured: list[tuple[str, str]] = [
             ("remote.origin.url", str(self.store.path)),
-            ("remote.origin.fetch", "+refs/remotes/origin/*:refs/remotes/origin/*"),
+            ("remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"),
             *self.identity,
         ]
         for key, value in configured:
