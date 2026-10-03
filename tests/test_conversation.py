@@ -282,6 +282,7 @@ EVERY_RECORD: tuple[records.Step, ...] = (
     records.End(said=("the quality checks are failing:",), at=2),
     records.Environment(values={"PATH": "/opt/mise/shims:/usr/bin"}),
     records.Archived(at=WHEN + timedelta(hours=5)),
+    records.Listening(port=3917),
 )
 
 
@@ -323,11 +324,12 @@ class TestWhatAStepHolds:
 
         Subclassing `Record` is what nobody can forget, because it is how a record is declared at
         all. So the list nothing may leave out is derived from that, and what is stated here is only
-        the exception: `Named` and `Enrolled` are members of `Declared` and `Registered` and are
-        never a checkpoint value on their own, which is a thing no schema says and this has to.
+        the exception: `Named`, `Enrolled` and `Job` are members of `Declared`, `Registered` and
+        `Command` and are never a checkpoint value on their own, which is a thing no schema says and
+        this has to.
         """
         arms = {each.__name__ for each in get_args(get_args(records.Step.__value__)[0])}
-        nested = {"Named", "Enrolled"}
+        nested = {"Named", "Enrolled", "Job"}
 
         assert {each.__name__ for each in records.Record.__subclasses__()} - arms == nested
 

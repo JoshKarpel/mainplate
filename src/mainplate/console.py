@@ -17,10 +17,14 @@ from typing import Final
 from typing import assert_never
 from urllib.parse import parse_qs
 from urllib.parse import unquote
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from pydantic_ai.settings import ThinkingLevel
+from without_asgi import HttpScope
+from without_asgi import RawHeaders
 from without_asgi import Response
+from without_asgi import headers
 from without_asgi import html_content
 from without_asgi.sse import event_stream
 from without_asgi.sse import with_heartbeat
@@ -32,6 +36,7 @@ from without_web import Route
 from without_web import body
 from without_web import get
 from without_web import header_param
+from without_web import http_scope
 from without_web import once
 from without_web import optional
 from without_web import path_param
@@ -111,6 +116,8 @@ artifact_id = path_param("artifact", STR)
 turn_number = path_param("turn", INT)
 call_id = path_param("call", STR)
 picture_index = path_param("index", INT)
+# Which job of a session, as the inbox entry it was started under, which is its name everywhere.
+entry_id = path_param("entry", STR)
 # The endpoint whose models to render, which is the value of the select that asks for them.
 of_endpoint = query_param("endpoint", once(str), schema={"type": "string"})
 # Which workspace's branches to offer, which is the value of the card that asks for them. A query
@@ -1263,6 +1270,79 @@ async def archive(service: Service, session: str) -> Response:
     return seeing(LINKS.to_session(session))
 
 
+def opened_at(scheme: str, sent: RawHeaders, port: int) -> str:
+    """
+    Where a browser opens a job serving on `port`: the host it reached this console at, on that port.
+
+    The host the *browser* used, which behind a proxy is `X-Forwarded-Host` rather than `Host`, and
+    the scheme likewise, since an HTTPS proxy in front of a plain-HTTP console is the ordinary case
+    and a link that dropped to `http` would not be opened through it. Read from the request because
+    it is the one place the answer is: nothing on this machine knows what name it is reached by.
+
+    Trusting those headers is safe here for what this does: a client that sets them sends itself to
+    an address of its own choosing.
+    """
+    forwarded = headers.first(sent, b"x-forwarded-host") or headers.first(sent, b"host") or b"localhost"
+    proto = headers.first(sent, b"x-forwarded-proto")
+    named = urlsplit("//" + forwarded.decode("latin-1").split(",")[0].strip()).hostname or "localhost"
+    host = f"[{named}]" if ":" in named else named
+    return f"{proto.decode('latin-1') if proto is not None else scheme}://{host}:{port}/"
+
+
+@get(t"/sessions/{session_id}/jobs/{entry_id}", session_id, entry_id, http_scope(), summary="Open a job that serves")
+async def open_job(service: Service, session: str, entry: str, scope: HttpScope) -> Response:
+    """
+    Send the browser to one of this session's jobs that serves, at this console's host on its port.
+
+    **A route rather than the link itself**, because the host is the request's answer and a page may
+    ask nothing: the panel links here, and this is where the host is read. A job that has ended is a
+    page saying so rather than a redirect to a port nothing listens on.
+    """
+    port = await service.opened_on(session, entry)
+    if port is None:
+        return page_response(404, refusal_page(LINKS, 404, f"job {entry} of session {session} is not serving"))
+    return Response(status=303, headers=((LOCATION, opened_at(scope.scheme, scope.headers, port).encode()),))
+
+
+@post(t"/sessions/{session_id}/jobs/{entry_id}/stop", session_id, entry_id, summary="Stop a job")
+async def stop_job(service: Service, session: str, entry: str) -> Response:
+    """
+    Stop one of this session's jobs, and go back to its panel, which now says how it ended.
+
+    A form answered with a `303` for `archive`'s reason, and harmless twice for the same one: a job
+    already stopped has its result, and stopping it again changes nothing.
+    """
+    if await service.read(session) is None:
+        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    await service.stop(session, entry)
+    return seeing(f"{LINKS.to_session(session)}#ran-{entry}")
+
+
+@get(t"/sessions/{session_id}/jobs/{entry_id}/output", session_id, entry_id, summary="What a job has printed")
+async def job_output(service: Service, session: str, entry: str) -> Response:
+    """
+    What one running job has printed so far, as plain text, for a person reading its log.
+
+    **Out of the process rather than the checkpoint**, since a job's output is recorded only once it
+    ends, and that is the one thing about a running job a reader wants. Bytes a session's program
+    wrote, served as text and nothing else: `nosniff` and a sandboxing policy keep a job that printed
+    markup from having it run.
+    """
+    said = service.printed(session, entry)
+    if said is None:
+        return page_response(404, refusal_page(LINKS, 404, f"job {entry} of session {session} is not running"))
+    return Response(
+        status=200,
+        body=said.encode(),
+        headers=(
+            (b"content-type", b"text/plain; charset=utf-8"),
+            (b"content-security-policy", PICTURE_POLICY),
+            (b"x-content-type-options", b"nosniff"),
+            (b"cache-control", b"no-store"),
+        ),
+    )
+
+
 # What an artifact's bytes are served under, which is the sandbox itself rather than a hope that
 # every page showing them frames them in one. `sandbox allow-scripts` makes the document an opaque
 # origin wherever it is opened, frame or tab, so it cannot read this console's cookies, storage or
@@ -1403,6 +1483,9 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     press,
     rename_session,
     archive,
+    open_job,
+    stop_job,
+    job_output,
     artifact_catalogue,
     show_artifact,
     artifact_content,
@@ -1426,6 +1509,9 @@ LINKS = Links(
     press=press,
     rename=rename_session,
     archive=archive,
+    job=open_job,
+    stop_job=stop_job,
+    job_output=job_output,
     artifacts=artifact_catalogue,
     artifact=show_artifact,
     artifact_content=artifact_content,

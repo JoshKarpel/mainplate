@@ -73,6 +73,14 @@ kept and the same file being edited take one lock. They are console tools rather
 because what they keep is served by the console's own pages, which a plugin has no way to add. See
 [Artifacts](../../../docs/design/artifacts.md).
 
+**The job tools go wherever `bash` does**, because a job runs in the sandbox a command runs in. They
+run nothing: `start_job` appends a record and asks the console's `Jobs` to start it, which is what
+makes a replayed call find its own job rather than start a second. `tools/jobs` declares the protocol
+it needs rather than importing `jobs.py`, which reaches `agent.py` and so would be a cycle. **Their
+descriptions are the model's whole picture of how a job behaves here**, idempotency included: a
+change to how one is reached, ported, restarted or told about is a change to what they say, in the
+same edit. See [Jobs](../../../docs/design/jobs.md).
+
 **There is no git tool.** A checkout owns its `.git`, so git in `bash` does everything a session
 needs, confined like every other command; a tool wrapping a subset of it would be a second git
 surface to keep safe for nothing the shell does not already do.

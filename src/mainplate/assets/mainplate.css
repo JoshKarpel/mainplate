@@ -1564,6 +1564,33 @@ pre.lines > code {
     letter-spacing: 0.06em;
 }
 
+/* What started a job where that was not the person, in the same shape as `push`, so it reads as a
+   fact about the run rather than as part of the command. */
+.ran__started {
+    color: var(--person-edge);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+/* A running job's panel: what it has printed, where to open it, and the disclosure that stops it. Not
+   a `.ran__body`, which is a band that shuts the panel on a press; everything here is a control. */
+.ran__running {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: 0 var(--space-4) var(--space-4);
+}
+
+.ran__where {
+    margin: 0;
+    color: var(--ink-faint);
+}
+
+.ran__where a {
+    color: var(--person-edge);
+}
+
 /* The status as words, out at the edge where a reader scans down a turn. `exit 0` and `exit 2`
    rather than a colour alone, because a status nobody can name is one a screen reader cannot read
    out; one shape for every status, so the colour is the whole of what sets the non-zero ones apart. */

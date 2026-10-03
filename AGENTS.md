@@ -197,6 +197,9 @@ change:
   beside the checkpoint, the tools that keep and export one, and how a version is served sandboxed.
 - [`docs/design/sandbox.md`](docs/design/sandbox.md): the mount namespace `bash` runs behind, and
   the two isolation axes a session picks.
+- [`docs/design/jobs.md`](docs/design/jobs.md): jobs, the one thing a session runs that outlives
+  the call, how the checkpoint says which should be running, why a job must be idempotent, and how a
+  port is handed into a sandbox with no network rather than found in one.
 - [`docs/design/security.md`](docs/design/security.md): the boundary between the parent and the
   sandbox, what is untrusted, and what is deliberately left undefended. **Read it before adding
   anything to the parent that runs a program against a session's checkout.**
@@ -240,7 +243,7 @@ and its reasoning on the page, rather than either in both.
 `.mainplate/mainplate.yaml` declares a repository-tier plugin like anybody else's: it runs behind
 the sandbox, with a network only at `setup`, out of a scratch directory nothing else can write.
 
-### `setup` fetches the toolchain
+### `setup` fetches the toolchain and asks for the demo
 
 `.mainplate/setup` is what a mainplate session runs, once, to be able to run `just test` here: it
 installs mise into the session's scratch, `mise install`s the tools `mise.toml` pins, and runs `just
@@ -248,9 +251,15 @@ setup` under them. It is the plugin that uses [the two grants a `setup`
 has](docs/design/plugins.md#getting-the-repository-ready-is-a-plugin-too): the session's own scratch
 bound read-write, so what it installs is where the session's commands look for it, and
 `$MAINPLATE_ENV`, whose `KEY=value` lines are what those commands then run under. It declares no
-events and **prints nothing**, so nothing asks it anything again.
+events, so nothing asks it anything again.
 
-Three things follow for anybody changing it:
+**Its answer is one [job](docs/design/jobs.md), `.mainplate/demo`**: the demo console on the seeded
+fixtures, under `watchfiles`, so a session changing the console has one of its own to look at. It
+starts against `.mainplate/standin`, an endpoint on the sandbox's own loopback that lists one model
+and answers nothing, because the session may have no network and cannot see the operator's
+configuration. Like every job it must be safe to run twice, since a console restart runs it again.
+
+Four things follow for anybody changing it:
 
 - **`just setup` installs the git hook in the session's checkout**, as it does in a fresh clone.
   A session that enables this repository's setup plugin gets pre-commit checks on its commits;
@@ -260,6 +269,8 @@ Three things follow for anybody changing it:
 - **It installs into `$MAINPLATE_SCRATCH` and never `$HOME`.** `$HOME` inside it is the plugin's own
   directory, which the session's commands cannot see; the two names are different on purpose and
   [the table](docs/design/plugins.md#what-is-in-the-environment) is which is which.
+- **Its answer goes to the stdout saved as `3`**, since everything else it runs is sent to stderr;
+  a line of progress on stdout would be an answer the console cannot read.
 
 It is not run by the suite, since what it does is fetch a toolchain.
 

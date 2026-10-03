@@ -165,6 +165,9 @@ class Links:
     press: Reversible
     rename: Reversible
     archive: Reversible
+    job: Reversible
+    stop_job: Reversible
+    job_output: Reversible
     artifacts: Reversible
     artifact: Reversible
     artifact_content: Reversible
@@ -289,6 +292,23 @@ class Links:
     def to_archive(self, session: str) -> str:
         """Where the press that closes a session goes, which is a plain form post answered with a redirect."""
         return url_for(self.archive, {"session": session})
+
+    def to_job(self, session: str, entry: str) -> str:
+        """
+        Where a job that serves is opened: a route that sends the browser on to its port.
+
+        A route rather than the job's own address, because the address is this console's host as the
+        browser reached it, which only the request knows and a page may not ask.
+        """
+        return url_for(self.job, {"session": session, "entry": entry})
+
+    def to_stop_job(self, session: str, entry: str) -> str:
+        """Where the press that stops a job goes, a plain form post answered with a redirect."""
+        return url_for(self.stop_job, {"session": session, "entry": entry})
+
+    def to_job_output(self, session: str, entry: str) -> str:
+        """What a running job has printed so far, as plain text."""
+        return url_for(self.job_output, {"session": session, "entry": entry})
 
     def to_artifacts(self, before: int | None = None) -> str:
         """Every artifact, newest first; `before` continues a listing from the last one it held."""

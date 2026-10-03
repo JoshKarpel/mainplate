@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+"""
+An endpoint that lists one model and answers nothing, for the demo console to start against.
+
+The demo console refuses to start without an endpoint it can ask what it serves, and the job running
+it has no network to reach a real one. Every page it shows is drawn from fixtures `just seed` plants,
+so nothing ever asks this model anything; the listing is the whole of what is needed. On the
+Anthropic wire, because its listing is one GET of `/v1/models` and needs no credential.
+
+Run by the machine's `python3`, so it is held to the grammar the bundled plugins are.
+"""
+
+import json
+import sys
+from http.server import BaseHTTPRequestHandler
+from http.server import HTTPServer
+
+LISTING = json.dumps(
+    {
+        "data": [
+            {
+                "type": "model",
+                "id": "stand-in",
+                "display_name": "Stand-in (answers nothing)",
+                "created_at": "2025-01-01T00:00:00Z",
+            }
+        ],
+        "has_more": False,
+        "first_id": "stand-in",
+        "last_id": "stand-in",
+    }
+).encode()
+
+
+class Listing(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path.split("?")[0] != "/v1/models":
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(LISTING)))
+        self.end_headers()
+        self.wfile.write(LISTING)
+
+    def log_message(self, *args):
+        pass
+
+
+HTTPServer(("127.0.0.1", int(sys.argv[1])), Listing).serve_forever()

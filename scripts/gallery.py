@@ -65,12 +65,15 @@ from mainplate.conversation import fork_branch
 from mainplate.conversation import heard_key
 from mainplate.conversation import instructing
 from mainplate.conversation import instructions_key
+from mainplate.conversation import listening_key
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import opened_key
 from mainplate.conversation import picture_in
 from mainplate.conversation import recorded_command
 from mainplate.conversation import recorded_instructions
+from mainplate.conversation import recorded_job
+from mainplate.conversation import recorded_listening
 from mainplate.conversation import recorded_messages
 from mainplate.conversation import recorded_prompt
 from mainplate.conversation import recorded_push
@@ -1695,6 +1698,36 @@ def settled_checkpoint() -> dict[str, object]:
     return written
 
 
+def stopped_job() -> dict[str, object]:
+    """
+    A job that served, which a plugin's setup started and somebody then stopped: the state of one a
+    settled session can hold.
+
+    Drawn as the command it ran, with what started it, what it printed and why it ended. A running
+    one is on the in-flight page, for the reason a running command is, and for one more: a job with
+    no result in the demo database is one its console would go and start, with nothing behind it.
+    Entry 2, the one after the conversation's own message.
+    """
+    return {
+        inbox_key(2): recorded_job(
+            "python3 -m http.server $PORT --bind 127.0.0.1", port=3917, plugin="repository:setup"
+        ),
+        listening_key(inbox_key(2)): recorded_listening(3917),
+        result_key(inbox_key(2)): recorded_result(
+            Result(
+                status=-9,
+                output=(
+                    "Serving HTTP on 127.0.0.1 port 3917 (http://127.0.0.1:3917/) ...\n"
+                    '127.0.0.1 - - [12/Mar/2031 15:12:04] "GET / HTTP/1.1" 200 -\n'
+                    '127.0.0.1 - - [12/Mar/2031 15:12:04] "GET /favicon.ico HTTP/1.1" 404 -\n'
+                    "\n[stopped from the console]\n"
+                ),
+                took=timedelta(minutes=4, seconds=12),
+            )
+        ),
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class Fixture:
     """
@@ -1763,7 +1796,7 @@ def fixtures() -> tuple[Fixture, ...]:
         # A branch of that branch, at turn 2, on the other wire entirely: turns 0 and 1 come across,
         # and turn 2 is its own, answered the way that wire answers.
         Fixture.of(deeper, ON_GPT, recorded(CONVERSATION, TOOL_IN_FLIGHT, THOUGHT_INLINE)),
-        Fixture.of(other, ON_SONNET, recorded(CONVERSATION)),
+        Fixture.of(other, ON_SONNET, {**recorded(CONVERSATION), **stopped_job()}),
         # What `Service.fork` carries from the end of the archived session below, through the same
         # `before`, so it holds every turn and waits for the next message rather than re-asking one;
         # and settled as a fork is, carrying its parent's branch on, which is what the fork page's box
@@ -1933,8 +1966,13 @@ def pages(links: Links = LINKS) -> dict[str, str]:
     answering = dict(waiting)
     # And a command still running beside it, which is the third of a command's states and the one
     # that belongs on a page where something is still happening: a command with no result under a
-    # settled turn would be one that never finishes.
-    answering[inbox_key(11)] = recorded_command("just shots")
+    # settled turn would be one that never finishes. A job, as everything typed into `Run` is now, so
+    # it carries what it has printed and a stop.
+    answering[inbox_key(11)] = recorded_job("just shots")
+    # And a job the model started that serves, still running, for the same reason: a job with no
+    # result in a settled session is one the demo's console would try to start, with nothing behind it.
+    answering[inbox_key(12)] = recorded_job("npm run dev -- --port $PORT", port=5173, asked="2:call-9")
+    answering[listening_key(inbox_key(12))] = recorded_listening(5173)
     answering[opened_key(2)] = inbox_key(8)
     answering[heard_key(2, 0)] = inbox_key(8)
     answering[model_key(2, 0)] = records.Response(

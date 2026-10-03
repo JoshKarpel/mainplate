@@ -45,6 +45,7 @@ from without_http import serving
 
 from mainplate import artifacts
 from mainplate.agent import ANTHROPIC_RETENTION
+from mainplate.app import Ports
 from mainplate.app import build_app
 from mainplate.app import open_store
 from mainplate.catalogue import Catalogues
@@ -55,6 +56,7 @@ from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import opened_key
 from mainplate.conversation import recorded_command
+from mainplate.conversation import recorded_job
 from mainplate.conversation import recorded_result
 from mainplate.conversation import recorded_steer
 from mainplate.conversation import result_key
@@ -3059,8 +3061,11 @@ async def working(
     A second fixture rather than workspaces on the first, because the one above is deliberately a
     console with none: what most of these drive is a conversation, and giving every one of them a
     real repository would put a clone and a checkout behind tests that never look at either.
+
+    With jobs, since a command the person runs is one; no range of ports, since nothing here serves.
     """
-    async with open_store(tmp_path / "mainplate.db", LEASE, catalogues, workspaces) as service:
+    ports = Ports(host="127.0.0.1", lowest=0, highest=0)
+    async with open_store(tmp_path / "mainplate.db", LEASE, catalogues, workspaces, ports=ports) as service:
         async with serving(build_app(already(service), assets), port=0) as server:
             yield f"http://{server.host}:{server.port}", service
 
@@ -3197,7 +3202,7 @@ class TestTurningTheBoxIntoACommandBox:
         await expect(page.locator("#transcript")).to_contain_text("echo from the keyboard")
         recorded = await service.checkpointer.load(session)
         delivered = [held for key, held in recorded.items() if key.startswith(INBOX)]
-        assert delivered[-1] == recorded_command("echo from the keyboard")
+        assert delivered[-1] == recorded_job("echo from the keyboard")
         assert len(delivered) == 2, "a command is not a message, so it queued nothing for a model"
 
     async def test_a_session_with_no_files_has_no_command_box_to_turn_into(

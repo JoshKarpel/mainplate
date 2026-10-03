@@ -52,6 +52,14 @@ which is no session's. `list_artifacts` is in every session, and the two that mo
 a file and an artifact wherever there are files to move it between. See
 [Artifacts](artifacts.md#which-tools-a-session-gets).
 
+**The job tools go where `bash` goes**, `start_job`, `list_jobs`, `read_job`, `wait_job` and
+`stop_job`, because a job runs in the sandbox a command runs in. They run nothing themselves:
+`start_job` records that a job should be running and the console makes it so, which is what keeps a
+replayed call from starting a second one. `start_job`'s description is long on purpose, since a job
+here differs from a background process in a terminal in exactly the ways a model would otherwise get
+wrong, and it is where the model is told a job must be idempotent. See
+[Jobs](jobs.md#what-the-model-is-told).
+
 **Bundled and user skills add read-only roots** wherever the session has file
 tools. `read` opens an advertised `SKILL.md` or its supporting files under
 `bundled_skills` or `user_skills`; `edit` and `create` refuse there. Repository
