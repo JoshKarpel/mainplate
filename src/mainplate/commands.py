@@ -34,9 +34,15 @@ from pathlib import Path
 
 from without_durability.interfaces import Checkpointer
 
+from mainplate import records
 from mainplate.conversation import Result
+from mainplate.conversation import command_tree_key
+from mainplate.conversation import posted_in
 from mainplate.conversation import recorded_result
 from mainplate.conversation import result_key
+from mainplate.conversation import unfinished_in
+from mainplate.durability import recorded_snapshot
+from mainplate.ownership import owning
 from mainplate.processes import reaped
 from mainplate.sandbox import InACheckout
 from mainplate.sandbox import Venue
@@ -278,7 +284,7 @@ class Commands:
         This is the control-plane argument the worker already answers for cloning, one step along: a
         POST records an intention and something else does the slow part.
         """
-        self.scheduled(slot, lambda holding: ran(said, running, self.patience, holding))
+        self.scheduled(slot, lambda holding: ran(said, running, self.patience, holding), running.confinement.checkout)
 
     def push(self, slot: Slot, checkout: Checkout, url: str, branch: str) -> None:
         """
@@ -289,20 +295,59 @@ class Commands:
         crosses into the store and the store pushes it, so no configuration the session wrote is read
         by anything holding a credential. See `Checkout.push`.
         """
-        self.scheduled(slot, lambda holding: pushing(checkout, url, branch, holding))
+        self.scheduled(slot, lambda holding: pushing(checkout, url, branch, holding), checkout)
 
-    def scheduled(self, slot: Slot, work: Callable[[bytearray], Awaitable[Result]]) -> None:
+    def scheduled(self, slot: Slot, work: Callable[[bytearray], Awaitable[Result]], checkout: Checkout) -> None:
         """
         Start one run as a task this holds until it ends, which is what `start` and `push` share.
 
         Held by slot so `aclose` can say what became of a task that never started, and dropped by the
         task's own callback so what is held is only ever what is still running.
         """
-        task = asyncio.create_task(self.record(slot, work), name=f"command {slot.session} {slot.entry}")
+        task = asyncio.create_task(self.serialized(slot, work, checkout), name=f"command {slot.session} {slot.entry}")
         self.running[task] = slot
         task.add_done_callback(lambda done: self.running.pop(done, None))
 
-    async def record(self, slot: Slot, work: Callable[[bytearray], Awaitable[Result]]) -> None:
+    async def serialized(self, slot: Slot, work: Callable[[bytearray], Awaitable[Result]], checkout: Checkout) -> None:
+        """
+        Wait outside an unfinished turn, then retain ownership through command and capture.
+
+        A pass releases the OS lock between requests. The checkpoint supplies the longer turn
+        lifetime, so a command cannot slip into that gap. Cancellation leaves an unfinished result
+        rather than starting work that was merely waiting for ownership.
+        """
+        while True:
+            async with owning(checkout.root.parent, slot.session):
+                recorded = await self.checkpointer.load(slot.session)
+                if "archived" in recorded:
+                    await self.result(
+                        slot, self.stopped(bytearray(), "the session was archived before this command ran")
+                    )
+                    return
+                earlier = any(
+                    isinstance(entry.what, records.Command)
+                    and entry.key < slot.entry
+                    and result_key(entry.key) not in recorded
+                    for entry in posted_in(recorded)
+                )
+                if not unfinished_in(recorded) and not earlier:
+                    came = await self.record(slot, work)
+                    try:
+                        ending = await checkout.capture(f"command {slot.entry} ended")
+                        await self.checkpointer.supply(
+                            slot.session, command_tree_key(slot.entry), recorded_snapshot(ending)
+                        )
+                    except (SnapshotFailed, OSError) as failed:
+                        came = Result(
+                            status=came.status,
+                            output=f"{came.output}\n[ending capture failed: {failed}]\n",
+                            took=came.took,
+                        )
+                    await self.result(slot, came)
+                    return
+            await asyncio.sleep(0.05)
+
+    async def record(self, slot: Slot, work: Callable[[bytearray], Awaitable[Result]]) -> Result:
         """
         The whole of one run: do it, then say what happened, whichever way it ended.
 
@@ -343,7 +388,7 @@ class Commands:
             came = self.stopped(holding, f"this could not be pushed: {failed}")
         except OSError as failed:
             came = self.stopped(holding, f"this could not be run: {failed!r}")
-        await self.result(slot, came)
+        return came
 
     def stopped(self, holding: bytearray, why: str = "the console stopped while this was running") -> Result:
         """A run that produced no exit status, said as one, with whatever it managed to write."""

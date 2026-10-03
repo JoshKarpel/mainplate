@@ -622,7 +622,10 @@ class Stopping(Payload):
 
 class Ending(Payload):
     """
-    A turn that has just been recorded, with the numbers a plugin decides on.
+    A turn whose model loop has ended, with the numbers a plugin decides on.
+
+    End plugins run before the ending snapshot and completed messages are published, so their file
+    changes belong to that completed boundary. Their deliveries are dispatched after the pass.
 
     **The payload that has to be rich, and where the constrained vocabulary is paid for.** A plugin
     can only decide on what it is handed, so unless this carries the recorded context size and the

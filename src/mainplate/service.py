@@ -52,11 +52,13 @@ from mainplate.conversation import before
 from mainplate.conversation import choice_of
 from mainplate.conversation import declared_in
 from mainplate.conversation import deferred_in
+from mainplate.conversation import end_forkable
 from mainplate.conversation import environment_in
 from mainplate.conversation import failure_in
 from mainplate.conversation import fork_branch
 from mainplate.conversation import fork_point
 from mainplate.conversation import opening_tree_key
+from mainplate.conversation import openings
 from mainplate.conversation import plugins_refused_in
 from mainplate.conversation import recorded_choice
 from mainplate.conversation import recorded_command
@@ -68,7 +70,11 @@ from mainplate.conversation import registered_in
 from mainplate.conversation import setup_key
 from mainplate.conversation import setup_refused_in
 from mainplate.conversation import setups_in
+from mainplate.conversation import stopped_in
+from mainplate.conversation import stopping_in
 from mainplate.conversation import transcript
+from mainplate.conversation import turns_in
+from mainplate.conversation import unfinished_in
 from mainplate.footprint import Footprints
 from mainplate.forge import Fetched
 from mainplate.forge import Reachable
@@ -252,6 +258,14 @@ class Conversation:
     said: Transcript
     chosen: Choice | None
     answerable: bool
+    can_fork_end: bool = False
+    """Whether the whole visible end has captured files, rather than a pre-request approximation."""
+    stopping: bool = False
+    """A targeted Stop is waiting for the unfinished turn to finish its current work and capture."""
+    stopped: bool = False
+    """The last completed turn accepted Stop; a delayed press alone does not make this true."""
+    active_turn: int | None = None
+    """The opened unfinished turn named by Stop, excluding messages merely waiting in the inbox."""
 
     refused: records.Refused | None = None
     """
@@ -672,6 +686,10 @@ class Service:
         return Conversation(
             session=found,
             said=said,
+            can_fork_end=end_forkable(recorded),
+            stopping=unfinished_in(recorded) and stopping_in(recorded, turns_in(recorded)),
+            stopped=not unfinished_in(recorded) and stopped_in(recorded, turns_in(recorded) - 1),
+            active_turn=turns_in(recorded) if unfinished_in(recorded) else None,
             chosen=chosen,
             plugins=registered,
             context=context,
@@ -994,11 +1012,9 @@ class Service:
         # Recorded here rather than planted here for the reason `start` clones nothing: this is a
         # request, and planting a checkout is not.
         #
-        # Forking the *end* has no turn to re-ask and so no opening state to carry, and planting at
-        # the repository's head there would hand the branch files the conversation never saw. So it
-        # plants at the newest state the parent recorded - the one the reconciler captured on the way
-        # to archiving it, which is the end the rule offers, or the last request's for an end reached
-        # by URL. Both halves are `fork_point`'s rule, which the fork page reads through `fork_branch`.
+        # The end carries a completed turn or command's state, or the archived capture. Historical
+        # checkpoints retain their pre-request approximation, which no live end control offers.
+        # Both carrying the files and pre-filling the branch read the same `fork_point` rule.
         started_on = fork_point(recorded, at)
         if started_on is not None:
             await self.checkpointer.supply(forked.id, opening_tree_key(at), started_on)
@@ -1046,6 +1062,20 @@ class Service:
             return None
         await self.checkpointer.supply(session, ARCHIVED_KEY, records.Archived(at=self.now()).recorded())
         return await read_session(self.database, session)
+
+    async def stop(self, session: str, turn: int) -> bool:
+        """
+        Deliver cooperative control input for one opened turn, never text for the model.
+
+        The target remains the one the control named even if the turn finished before this press.
+        Delivery wakes a yielded pass; a pass already in flight checks the live inbox at its next
+        complete exchange. Commands remain queued until the ending state is captured.
+        """
+        recorded = await self.checkpointer.load(session)
+        if turn < 0 or turn >= len(openings(recorded)):
+            return False
+        await self.durable.deliver(session, records.Stop(turn=turn).recorded())
+        return True
 
     async def run(self, session: str, said: str, *, online: bool = False) -> str | None:
         """

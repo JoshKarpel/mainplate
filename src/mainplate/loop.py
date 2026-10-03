@@ -256,6 +256,8 @@ class Agent:
         ending = 0
         corrected = 0
         while True:
+            if await scope.should_stop():
+                return tuple(messages[start:])
             await self.before_request(scope, messages)
             response = await self.request(scope, messages, tools)
             messages.append(response)
@@ -272,6 +274,8 @@ class Agent:
                     return tuple(messages[start:])
                 continue
 
+            if await scope.should_stop():
+                return tuple(messages[start:])
             if said_something(response):
                 if keeping is None:
                     return tuple(messages[start:])

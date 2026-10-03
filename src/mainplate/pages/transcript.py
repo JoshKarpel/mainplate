@@ -18,9 +18,11 @@ from typing import assert_never
 from without_html import Child
 from without_html import Element
 from without_html import a
+from without_html import button
 from without_html import code
 from without_html import details
 from without_html import div
+from without_html import form
 from without_html import p
 from without_html import pre
 from without_html import span
@@ -1276,14 +1278,25 @@ def transcript_region(links: Links, reader: Reader, showing: Conversation) -> El
     # actually looks like. A call still out is already drawn working on its own panel, so the dots are
     # left off there and the sentence is not: a pass can fall over with a call outstanding.
     waiting = None if stalled is not None else waiting_for(showing)
-    # A fork from the end, on a rule of its own after the last turn, where every other fork sits on
-    # the rule opening the turn it re-asks. It carries every turn and re-asks none, so what the branch
-    # opens on is an empty box. Only on an archived session, because it is how one comes back and
-    # the one control such a session has left: on a live one, carrying on is typing into the box, and
-    # the composer's own `fork` covers wanting to carry on somewhere else. A turn the pass never
-    # finished comes across too and is what the branch resumes, so nothing said in it is lost.
-    if session and said.turns > 0 and showing.session.archived is not None:
+    # The end is usable only with a completed snapshot, never a pre-request approximation.
+    if session and said.turns > 0 and showing.can_fork_end:
         drawn.append(end_rule(links, session, said.turns))
+    if session and showing.active_turn is not None and showing.session.archived is None:
+        drawn.append(
+            form(
+                cls="rule",
+                attrs={"method": "post", "action": links.to_stop(session, showing.active_turn)},
+                children=button(
+                    cls="rule__fork",
+                    attrs={"type": "submit", "disabled": showing.stopping},
+                    children="Stopping" if showing.stopping else "Stop",
+                ),
+            )
+        )
+        if showing.stopping:
+            drawn.append(p(cls="stalled", children="Stopping after the current request and tool batch finish."))
+    elif showing.stopped:
+        drawn.append(p(cls="stalled", children="Stopped. File changes are kept."))
     if stalled is not None:
         drawn.append(p(cls="stalled", children=stalled))
     elif waiting is not None:

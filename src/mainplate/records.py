@@ -56,6 +56,9 @@ type StepKind = Literal[
     "prompt",
     "note",
     "steer",
+    "stop",
+    "ending",
+    "stopped",
     "command",
     "result",
     "opened",
@@ -353,12 +356,11 @@ class Result(Record):
 
 class Tree(Record):
     """
-    The checkout's git state before one model request of a turn: its files, its commit, its branch.
+    The checkout's git state at a request or completed-operation boundary: files, commit and branch.
 
-    `tree` is `None` for a turn taken with no workspace configured, which is a different thing from a
-    request nobody has reached: the record exists either way, so the absence is stated rather than
-    inferred from a missing key. `head` and `branch` are `None` there too, and are otherwise
-    `snapshots.Snapshot`'s: no commit on an orphan branch, no branch on a detached `HEAD`.
+    `tree` is `None` with no workspace configured, distinct from a boundary nobody reached: the
+    record exists either way. `head` and `branch` are `None` there too, and otherwise follow
+    `snapshots.Snapshot`: no commit on an orphan branch, no branch on a detached `HEAD`.
 
     Named for the tree because that is what every reader but one wants - a batch's diff is between
     two of them - and the one that wants the rest is a fork, which reads it through `parse_snapshot`.
@@ -750,7 +752,26 @@ class Environment(Record):
     values: dict[str, str] = {}
 
 
-type Delivered = Annotated[Prompt | Note | Steer | Command, Field(discriminator="kind")]
+class Stopped(Record):
+    """The stop decision at a complete exchange, fixed so replay cannot stop earlier or later."""
+
+    kind: Literal["stopped"] = "stopped"
+    requested: bool
+
+
+class Stop(Record):
+    """
+    A durable request to finish one turn after its current request and tool batch.
+
+    Targeting a turn prevents a delayed press from ending its successor. This is control input,
+    never model text, and carries no instruction that a provider must interpret or obey.
+    """
+
+    kind: Literal["stop"] = "stop"
+    turn: int
+
+
+type Delivered = Annotated[Prompt | Note | Steer | Command | Stop, Field(discriminator="kind")]
 """
 What one inbox entry holds: a message that must open a turn, one a plugin asked for, one that
 may join the running one, or something the person ran.
@@ -795,6 +816,8 @@ type Step = Annotated[
     | Note
     | Steer
     | Command
+    | Stop
+    | Stopped
     | Result
     | Tree
     | Response

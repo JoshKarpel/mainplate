@@ -538,7 +538,7 @@ Each carries its own payload and takes its own effects. They are a short list th
 | `before_tool` | the model called any tool, and it has not run yet | `tool`, `args` | `refuse`, `deliver`, `set` |
 | `before_request` | a model request is about to be sent | `messages` | `inject`, `deliver`, `set` |
 | `before_turn_end` | the model has answered and the turn would end | `turn`, `opened_on`, `attempt` | `inject`, `deliver`, `set` |
-| `after_turn` | a turn was recorded | `turn`, `opened_on`, `context`, `window` | `deliver`, `set` |
+| `after_turn` | the model loop ended, before its ending capture and completed messages | `turn`, `opened_on`, `context`, `window` | `deliver`, `set` |
 | `compose` | its answer was submitted | `said` | `deliver`, `set` |
 | `action` | a control on its card was pressed | `control`, `value` | `deliver`, `set` |
 

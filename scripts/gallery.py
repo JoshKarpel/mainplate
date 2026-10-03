@@ -57,7 +57,10 @@ from mainplate.conversation import ARCHIVED_KEY
 from mainplate.conversation import CONTEXT_KEY
 from mainplate.conversation import Result
 from mainplate.conversation import before
+from mainplate.conversation import command_tree_key
 from mainplate.conversation import commit_command
+from mainplate.conversation import end_forkable
+from mainplate.conversation import ending_tree_key
 from mainplate.conversation import fork_branch
 from mainplate.conversation import heard_key
 from mainplate.conversation import instructing
@@ -65,6 +68,7 @@ from mainplate.conversation import instructions_key
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import opened_key
+from mainplate.conversation import posted_in
 from mainplate.conversation import recorded_command
 from mainplate.conversation import recorded_instructions
 from mainplate.conversation import recorded_messages
@@ -73,9 +77,13 @@ from mainplate.conversation import recorded_push
 from mainplate.conversation import recorded_result
 from mainplate.conversation import recorded_steer
 from mainplate.conversation import result_key
+from mainplate.conversation import stopped_in
+from mainplate.conversation import stopping_in
 from mainplate.conversation import tool_key
 from mainplate.conversation import transcript
 from mainplate.conversation import tree_key
+from mainplate.conversation import turns_in
+from mainplate.conversation import unfinished_in
 from mainplate.conversation import wrote_key
 from mainplate.durability import TOOK
 from mainplate.durability import ModelResponseTypeAdapter
@@ -1656,6 +1664,11 @@ def settled_checkpoint() -> dict[str, object]:
     )
     written[inbox_key(1)] = recorded_prompt(opening(TOOL_IN_FLIGHT), forget=True)
     written[instructions_key(1)] = recorded_instructions(INSTRUCTIONS)
+    for turn in range(2):
+        written[ending_tree_key(turn)] = records.Tree(tree=None).recorded()
+    for entry in posted_in(written):
+        if isinstance(entry.what, records.Command):
+            written[command_tree_key(entry.key)] = records.Tree(tree=None).recorded()
     return written
 
 
@@ -1796,6 +1809,10 @@ def showing(
     return Conversation(
         session=session,
         said=said,
+        can_fork_end=end_forkable(written),
+        active_turn=turns_in(written) if unfinished_in(written) else None,
+        stopping=unfinished_in(written) and stopping_in(written, turns_in(written)),
+        stopped=not unfinished_in(written) and stopped_in(written, turns_in(written) - 1),
         chosen=chosen,
         answerable=answerable,
         plugins=plugins,
@@ -1860,6 +1877,7 @@ CAPTIONS: Final[dict[str, str]] = {
     "failed.html": "A pass that fell over, with the worker waiting out the lease before trying again.",
     "deferred.html": "A session held off until the moment a rate limit named.",
     "dropped.html": "Nothing answering the session and nothing scheduled to.",
+    "stopping.html": "A cooperative Stop waiting for the current request and tool batch to finish.",
     "archived.html": "An archived session, muted, with the fork from its end as the one control left.",
     "forking.html": "Forking at a turn: what is carried over and what is left behind.",
     "forking-no-repository.html": "Forking a session that works in no repository, which has no branch to carry on.",
@@ -2063,6 +2081,13 @@ def pages(links: Links = LINKS) -> dict[str, str]:
         ),
         "waiting.html": session_page(links, READER, LISTED, showing(parent.session, waiting), REACHABLE),
         "answering.html": session_page(links, READER, LISTED, showing(parent.session, answering), REACHABLE),
+        "stopping.html": session_page(
+            links,
+            READER,
+            LISTED,
+            showing(parent.session, {**answering, inbox_key(99): records.Stop(turn=turns_in(answering)).recorded()}),
+            REACHABLE,
+        ),
         "handed-off.html": session_page(links, READER, LISTED, showing(parent.session, handed), REACHABLE),
         "stalled.html": session_page(links, READER, LISTED, stalled, REACHABLE),
         "refused.html": session_page(links, READER, LISTED, turned_down, REACHABLE),

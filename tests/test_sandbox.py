@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import shlex
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
@@ -45,6 +47,46 @@ def scratch(tmp_path: Path) -> Path:
     a fixture that made it first would hide a tool that never did.
     """
     return tmp_path / "scratch" / "session"
+
+
+@pytest.fixture
+async def local_server() -> AsyncIterator[str]:
+    """
+    Serve a distinctive response on the runner's loopback, with no external network dependency.
+
+    The connected command is the control for the same client and endpoint used by the confined
+    command. Comparing the two proves isolation even when the runner has no routes or DNS.
+    """
+    tasks: set[asyncio.Task[None]] = set()
+
+    async def respond(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        """Close each accepted connection after the response so the client can read through EOF."""
+        try:
+            writer.write(b"mainplate loopback control\n")
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    def accepted(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        """Retain handlers until teardown so a passing assertion cannot leave sockets behind."""
+        task = asyncio.create_task(respond(reader, writer))
+        tasks.add(task)
+
+    server = await asyncio.start_server(accepted, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    script = (
+        "import socket; "
+        f"connection = socket.create_connection(('127.0.0.1', {port}), timeout=1); "
+        "print(connection.makefile().read(), end=''); connection.close()"
+    )
+    try:
+        yield f"python3 -c {shlex.quote(script)}"
+    finally:
+        server.close()
+        await server.wait_closed()
+        if tasks:
+            await asyncio.gather(*tasks)
 
 
 async def inside(checkout: Checkout, scratch: Path, bwrap: str, command: str) -> str:
@@ -196,12 +238,16 @@ class TestWhatACommandCanReach:
 
         assert "DENIED" in said
 
-    async def test_there_is_no_network(self, checkout: Checkout, scratch: Path, bwrap: str) -> None:
-        said = await inside(
-            checkout, scratch, bwrap, "getent hosts example.com >/dev/null 2>&1 && echo REACHED || echo DENIED"
-        )
+    async def test_there_is_no_network(self, checkout: Checkout, scratch: Path, bwrap: str, local_server: str) -> None:
+        """A reachable runner-local server becomes unreachable in a separate network namespace."""
+        place = InACheckout(checkout=checkout, scratch=scratch)
+        connected = await ran(place, bwrap, Venue.CONNECTED, local_server, seconds=20)
+        assert "mainplate loopback control\n" in connected
+        assert "exit 0" in connected
 
-        assert "DENIED" in said
+        confined = await ran(place, bwrap, Venue.CONFINED, local_server, seconds=20)
+        assert "exit 1" in confined
+        assert "ConnectionRefusedError" in confined
 
     async def test_nothing_persists_between_two_calls(self, checkout: Checkout, scratch: Path, bwrap: str) -> None:
         """
@@ -497,13 +543,17 @@ class TestReachingTheWholeMachine:
 
         assert "VISIBLE" in said
 
-    async def test_the_network_is_still_off_unless_the_session_asked(self, bwrap: str) -> None:
+    async def test_the_network_is_still_off_unless_the_session_asked(self, bwrap: str, local_server: str) -> None:
         """
         The reason `EVERYTHING` is still a sandbox rather than no sandbox.
 
         Dropping it for this arm would take the network switch with it, so the whole machine would
         silently imply the whole internet and one of the two axes would stop being expressible.
         """
-        reaching = "getent hosts example.com >/dev/null 2>&1 && echo REACHED || echo DENIED"
+        connected = await ran(OverEverything(), bwrap, Venue.CONNECTED, local_server, seconds=20)
+        assert "mainplate loopback control\n" in connected
+        assert "exit 0" in connected
 
-        assert "DENIED" in await ran(OverEverything(), bwrap, Venue.CONFINED, reaching, seconds=20)
+        confined = await ran(OverEverything(), bwrap, Venue.CONFINED, local_server, seconds=20)
+        assert "exit 1" in confined
+        assert "ConnectionRefusedError" in confined

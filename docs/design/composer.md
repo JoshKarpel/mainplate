@@ -460,12 +460,13 @@ typed here can reach; `git commit`, `rebase` and the rest work, and pushing is [
 **Recorded and not told**, which is the split [the key scheme](checkpoints.md#the-key-scheme) rests
 on: what a command exited with is settled the moment it exits, and nothing will ever rewrite it.
 
-**Two keys and a background task, because a `pytest` is minutes and somebody is waiting on the
-POST.** `Service.run` appends the command to the inbox and returns; `Commands` runs the thing and
-writes `result:{entry}` when it is over. The panel is drawn from the entry the instant it lands and
-`Command.result is None` is the whole of "still running", exactly as `ToolUse.returned is None` is
-the whole of "still out". That is the control-plane argument the worker already answers for cloning,
-one step along. The cost, stated: **no live output.** The panel says running and then shows the
+An inbox entry, an ending snapshot and a background task, because a `pytest` is minutes and
+somebody is waiting on the POST. `Service.run` appends the command and returns; `Commands` waits
+for the unfinished model turn and earlier commands, then owns the checkout while the command runs
+and its ending snapshot is captured. Only then is `result:{entry}` published. A command remains
+pending while queued as well as while executing; its record cannot promise a completed end before
+the matching files are durable.
+The cost, stated: **no live output.** The panel says pending and then shows the
 whole result, which is right for `git commit` and irritating for a watch; live output needs a
 channel outside the checkpoint, which is a different feature.
 
