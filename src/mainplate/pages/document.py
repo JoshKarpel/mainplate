@@ -21,6 +21,7 @@ from without_html import body
 from without_html import dd
 from without_html import div
 from without_html import dt
+from without_html import element
 from without_html import h1
 from without_html import head
 from without_html import html
@@ -30,6 +31,7 @@ from without_html import p
 from without_html import render
 from without_html import script
 from without_html import span
+from without_html import svg
 from without_html import title
 from without_web import Reversible
 from without_web import url_for
@@ -208,7 +210,8 @@ class Links:
         A query parameter for the reason `to_endpoint_models` uses one: it narrows what a single
         connection reports on rather than picking a resource out. The stream is the page's, and the
         session is what the page happens to be looking at. A page looking at no session, which is the
-        start page, names none and is sent the one region every page has, the session list.
+        start page, names none and is sent the one region every page holding a stream has, the
+        session list.
 
         **The shape rides along because the page is the only thing that knows it.** The stream sends
         whichever regions the page's shape has, and a page still drawing the settings step has no
@@ -384,8 +387,9 @@ def stream_element(links: Links, session: str | None, shape: Shape | None = None
 
     On every page that draws the session list, the start page included, because the list is a region
     of every one of them and it moves when any session does: a session answered while somebody was
-    choosing what to start next is the case. A page with no list, which is a refusal, holds none, since
-    a connection with nothing to report on would be a held socket and a heartbeat.
+    choosing what to start next is the case. A page with no list, which is a refusal or an artifact's
+    page, holds none, since a connection with nothing to report on would be a held socket and a
+    heartbeat.
 
     The connection is let go while the page's tab is hidden and taken up again when it is shown, which
     is htmx's own `pauseOnBackground` and not anything this console does: a hidden page is not being
@@ -440,7 +444,7 @@ def document(
     `shape` is which shape the page was drawn in where the stream has to know it, and it goes on the
     stream element; see `Links.to_stream`. `live` is whether the page
     holds that connection at all, which every page with the session list on it does and a refusal
-    does not; see `stream_element`.
+    and an artifact's page do not; see `stream_element`.
 
     `session` is on the body because what the reader has decided about a conversation, which is
     which kinds they set aside and what they have kept unsent, belongs to that conversation and
@@ -588,6 +592,35 @@ def working(*, saying: str = "working", extra: str | None = None, identified: st
 
 type Placed = Element | VoidElement | None
 """One thing a caller hands the composer to put above or below the box, or nothing at all."""
+
+
+def home(links: Links) -> Element:
+    """
+    The console's mark and name, as the way back to the dashboard from wherever a page is.
+
+    **This is the one piece of navigation every page owes a reader**, rather than the session list:
+    the dashboard is where every other place is reached from, so a page with this on it is never a
+    dead end, and a page whose subject is not a conversation can leave the list off without leaving
+    somebody stranded. The session list draws it at its head and an artifact's bar draws it at its
+    left, as one element, so the way home looks the same from both.
+
+    A link that reads as where you are rather than a button that reads as something to do, since
+    the presses that start something are on the dashboard's cards. The mark is drawn by reference
+    rather than as an `<img>`, so the stylesheet can hand the plate the theme's colours: an image
+    only ever sees the OS's.
+    """
+    return a(
+        cls="home",
+        attrs={"href": links.to_home()},
+        children=[
+            svg(
+                cls="home__mark",
+                attrs={"viewBox": "0 0 512 512", "aria-hidden": "true"},
+                children=element("use", attrs={"href": f"{links.to_asset('icon.svg')}#plate"}),
+            ),
+            span(cls="home__name", children=DASHBOARD),
+        ],
+    )
 
 
 def refusal_page(links: Links, status: int, why: str) -> str:

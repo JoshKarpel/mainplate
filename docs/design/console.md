@@ -47,8 +47,8 @@ the composer; a session still on that step is the step, which has neither of tho
 `settling`, decides both which shape the page is drawn in and which partials the stream sends, so the
 two cannot disagree - and they must not, because a partial naming a target that is not there is
 dropped in silence, which is a spinner that never resolves. **The session list rides every message
-on every page**, the dashboard and the new-session page included, because it is a region of every
-page and it moves when any session does: the token the stream polls has a half for the list, three
+on every page that draws it**, the dashboard and the new-session page included, because it moves
+when any session does: the token the stream polls has a half for the list, three
 aggregates over the store, beside the session's own. The dashboard's sessions that want attention
 are read off the same rows, so they ride the same half and need no token of their own; the dashboard
 says so by connecting with `shape=dashboard`, the other page with no session sends nothing, and each

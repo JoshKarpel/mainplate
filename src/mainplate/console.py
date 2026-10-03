@@ -228,7 +228,7 @@ def cookie_value(name: str, values: tuple[bytes, ...]) -> str | None:
 
 
 # What this request's browser has said about its reader, off the cookies the script writes. On every
-# route that renders a moment, which is every page with the session list on it, and on the stream,
+# route that renders a moment, which is every page but a refusal, and on the stream,
 # which renders the same regions from the same functions and would otherwise swap UTC into a page
 # drawn in Chicago.
 reading = header_param("cookie", reader_in, schema={"type": "string"})
@@ -989,7 +989,7 @@ async def stream(service: Service, session: str | None, shape: Shape | None, rea
     page-level connection which one that page is showing. What comes back is `<hx-partial>`
     elements naming their own targets, so a second region joins the same connection rather than
     opening another. A page showing no session, which is the start page, names none and is sent
-    the session list, which is the region every page has.
+    the session list, which is the region every page holding a stream has.
 
     The page says which shape it was drawn in, for the same reason it says which session: the stream
     sends what that shape has somewhere to put, and says once when the shape is over. See
@@ -1383,7 +1383,7 @@ async def show_artifact(
         return page_response(404, refusal_page(LINKS, 404, named))
     history = await artifacts.history(service.database, artifact, before)
     listed = await service.listed()
-    return page_response(200, artifact_page(LINKS, reader, listed, service.reachable, selected, history))
+    return page_response(200, artifact_page(LINKS, reader, listed, selected, history))
 
 
 async def served(service: Service, artifact: str, version: int, *, saving: bool) -> Response:

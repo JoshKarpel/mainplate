@@ -284,18 +284,21 @@ body {
     gap: var(--space-2);
 }
 
-/* The mark and the name at the head of the list, which is the way back to the dashboard. Drawn as
-   the console's name rather than as a button: it is where you are, and the presses that start
-   something are on the dashboard. */
-.sessions .home {
+/* The mark and the name, which is the way back to the dashboard from every page, at the head of the
+   list here and at the left of an artifact's bar. Drawn as the console's name rather than as a
+   button: it is where you are, and the presses that start something are on the dashboard. */
+.home {
     display: flex;
     align-items: center;
     gap: var(--space-3);
-    padding: 0.35rem 0.6rem;
     color: var(--ink);
     font-weight: 700;
     font-size: 1.05rem;
     text-decoration: none;
+}
+
+.sessions .home {
+    padding: 0.35rem 0.6rem;
 }
 
 .home__mark {
@@ -307,8 +310,8 @@ body {
     flex: none;
 }
 
-.sessions .home:hover .home__name,
-.sessions .home:focus-visible .home__name {
+.home:hover .home__name,
+.home:focus-visible .home__name {
     text-decoration: underline;
 }
 
@@ -2448,45 +2451,110 @@ pre.lines > code {
     color: var(--mark);
 }
 
-/* One artifact's page is the dashboard's column: the same measure, and the same scroll, since the
-   preview is taller than a phone and the versions are under it. */
+/* One artifact's page is a bar and the document under it, and the document takes the whole of the
+   window the bar leaves. The page itself never scrolls: the frame is the one thing that does, which
+   is what lets it be the window's height rather than capped short of it. The height is the shell's
+   own, keyboard and all, for the shell's reason. */
 .artifact {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-4);
-    width: 100%;
-    max-width: var(--wide);
-    margin: 0 auto;
-    padding-block: var(--gap);
-    min-height: 0;
-    overflow-y: auto;
+    display: grid;
+    grid-template-rows: auto 1fr;
+    height: var(--visible-height, 100dvh);
 }
 
-.artifact__head {
+/* One line on a wide window, wrapping on a narrow one rather than shedding anything: where the page
+   is in the console at the left, what this version is and where it came from at the right. */
+.artifact__bar {
     display: flex;
-    align-items: baseline;
-    gap: var(--space-4);
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-5);
+    padding: var(--space-3) var(--gap);
+    border-bottom: 1px solid var(--edge);
+}
+
+/* The way up and the title after it read as a path, home to here. The slashes are drawn rather than
+   written, with no text for a screen reader, which reads three links and a heading without them. */
+.artifact__up,
+.artifact__title {
+    display: flex;
+    align-items: center;
+    gap: var(--space-5);
+    min-width: 0;
+}
+
+.artifact__up::before,
+.artifact__title::before {
+    content: "/" / "";
+    color: var(--edge);
+    font-weight: 400;
+}
+
+.artifact__up {
+    color: var(--ink-faint);
+    text-decoration: none;
+}
+
+.artifact__up:hover,
+.artifact__up:focus-visible {
+    text-decoration: underline;
 }
 
 .artifact__title {
     margin: 0;
-    min-width: 0;
-    font-size: 1.1rem;
-    overflow-wrap: break-word;
+    font-size: 1rem;
+    overflow-wrap: anywhere;
 }
 
-.artifact__back {
-    margin-left: auto;
-    flex: none;
+/* The disclosure the history hangs from, the composer menu's shape: a `<details>`, its marker drawn
+   as a caret after the words, and its panel laid over the document rather than pushing it down. */
+.artifact__versions {
+    position: relative;
+}
+
+.artifact__which {
+    color: var(--ink-faint);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    list-style: none;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.artifact__which::-webkit-details-marker {
+    display: none;
+}
+
+.artifact__which::after {
+    content: " \25BE" / "";
+}
+
+.artifact__which:hover,
+.artifact__versions[open] .artifact__which {
+    color: var(--ink);
+}
+
+.artifact__history {
+    position: absolute;
+    top: calc(100% + var(--space-3));
+    left: 0;
+    z-index: 5;
+    width: max-content;
+    min-width: 16rem;
+    max-width: min(26rem, 90vw);
+    box-shadow: 0 6px 20px light-dark(rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0.5));
+}
+
+/* Pushed to the right, so on one line the facts about this version stand apart from the path. */
+.artifact__from {
+    margin: 0 0 0 auto;
     color: var(--ink-faint);
     font-size: 0.8rem;
 }
 
-.artifact__from,
 .artifact__download {
     margin: 0;
     color: var(--ink-faint);
-    font-size: 0.85rem;
+    font-size: 0.8rem;
 }
 
 .artifact__from a,
@@ -2494,16 +2562,14 @@ pre.lines > code {
     color: var(--ink);
 }
 
-/* The document in its sandbox. Tall enough to read a page in without the frame scrolling inside a
-   page that also scrolls, and never taller than the window, so the download under it stays in reach.
-   No background of its own: a document that sets none is drawn on whatever its browser gives an
-   opaque origin, which is the same ground it gets when it is saved and opened. */
+/* The document in its sandbox, edge to edge. No background of its own: a document that sets none is
+   drawn on whatever its browser gives an opaque origin, which is the same ground it gets when it is
+   saved and opened. */
 .artifact__preview {
     display: block;
     width: 100%;
-    height: min(75dvh, 60rem);
-    border: 1px solid var(--edge);
-    border-radius: var(--radius);
+    height: 100%;
+    border: 0;
 }
 
 /* --- The workspace a new session is in --------------------------------- */
@@ -4787,6 +4853,31 @@ main:has(> .forking) {
 
         .sessions .home {
             padding: var(--space-3) var(--space-5);
+        }
+
+        /* The mark alone on an artifact's bar, which is still the way home and is what lets the path
+           and the version share the first row; spelled out, the name pushed the title onto a row of
+           its own and the bar took a fifth of the screen. The link keeps the name as its label. */
+        .artifact__bar .home__name {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            clip-path: inset(50%);
+            white-space: nowrap;
+        }
+
+        .artifact__bar {
+            column-gap: var(--space-4);
+        }
+
+        .artifact__up,
+        .artifact__title {
+            gap: var(--space-4);
+        }
+
+        .artifact__from {
+            margin-left: 0;
         }
 
         .panel {

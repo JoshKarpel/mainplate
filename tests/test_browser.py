@@ -421,6 +421,32 @@ class TestAnArtifactRunsInASandbox:
         await expect(opened).to_have_attribute("data-fetched", "blocked")
 
 
+async def framed_to_the_foot(page: Page, gallery: str) -> None:
+    """Open an artifact's page and hold that the frame ends where the window does, with nothing scrolling."""
+    await page.goto(f"{gallery}/artifact.html", wait_until="load")
+    room = await page.evaluate(
+        "() => ({ foot: document.querySelector('.artifact__preview').getBoundingClientRect().bottom,"
+        " window: innerHeight, page: document.documentElement.scrollHeight })"
+    )
+    assert room["foot"] == room["window"] == room["page"]
+
+
+class TestAnArtifactTakesTheWindow:
+    """
+    An artifact's page is a bar and the document, and the document runs to the foot of the window.
+
+    A browser, because a frame capped short of the window, or a page that scrolls past it, is a
+    correct rendering of some page: what is wrong with it is a measurement, and a still only shows it
+    to somebody who already knows to look.
+    """
+
+    async def test_on_a_wide_window(self, page: Page, gallery: str) -> None:
+        await framed_to_the_foot(page, gallery)
+
+    async def test_on_a_phone(self, phone: Page, gallery: str) -> None:
+        await framed_to_the_foot(phone, gallery)
+
+
 class TestWhereTheReaderIs:
     """
     At most one panel is ever drawn as where the reader is, however they arrived at it.
