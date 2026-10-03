@@ -311,10 +311,10 @@ def sending_answers(
     `Commit` and `Push` are shortcuts for what `Run` and the store would do anyway, and neither
     stages anything: what goes in a commit is the person's, the model's, or a plugin's to decide.
 
-    **Nothing here forks.** A fork happens at a turn boundary through the link on a rule, where what
-    it plants at is settled; an answer that forked the end of a live conversation was the same as
-    typing into it, and the one end worth forking, an archived session's, has that link on the rule
-    under its last turn.
+    **Nothing here forks.** A fork happens through the link on a boundary's rule, where its
+    conversation prefix and checkout state are settled. The rule at a completed live end or an
+    archived end carries the whole conversation and asks nothing again; the composer only sends
+    what is typed into the chosen conversation.
 
     **A plugin's own answers are not here**, and they are appended by `composer` rather than merged
     into this list: what a session offers depends on what it loaded, where these are the

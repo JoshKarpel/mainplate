@@ -155,12 +155,15 @@ from mainplate.durability import parse_refused
 from mainplate.durability import parse_returned
 from mainplate.durability import parse_snapshot
 from mainplate.durability import parse_took
+from mainplate.durability import parse_tree
 from mainplate.durability import parse_wrote
+from mainplate.durability import snapshotting
 from mainplate.durability import stepping
 from mainplate.forge import Workspaces
 from mainplate.loop import Agent
 from mainplate.loop import CannotGoOn
 from mainplate.loop import Keeping
+from mainplate.ownership import owning
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.asking import Live
 from mainplate.plugins.asking import ending
@@ -723,7 +726,7 @@ def branch_at(recorded: Mapping[str, object], turn: int) -> str | None:
     inbox = posted_in(recorded)
     opened = openings(recorded)
     queued = queued_in(recorded, inbox, opened, listening=False)
-    opening = (*opened, *(at.key for at in queued if not isinstance(at.what, records.Command)))
+    opening = (*opened, *(at.key for at in queued if not isinstance(at.what, records.Command | records.Stop)))
     return opening[turn] if turn < len(opening) else None
 
 
@@ -739,6 +742,8 @@ def entry_of(key: StepKey) -> str | None:
         return key
     if key.startswith(RESULTS):
         return key.removeprefix(RESULTS)
+    if key.startswith("command-tree:"):
+        return key.removeprefix("command-tree:")
     return None
 
 
@@ -2335,7 +2340,9 @@ def unread_in(
     # A turn still being answered reaches everything up to the first message it may not fold in; one
     # that has finished reaches no message at all, and still owns the commands run beside it.
     reaching = (
-        (lambda at: not records.opens(at.what)) if listening else (lambda at: isinstance(at.what, records.Command))
+        (lambda at: not records.opens(at.what))
+        if listening
+        else (lambda at: isinstance(at.what, records.Command | records.Stop))
     )
     reachable = tuple(takewhile(reaching, unread))
     return tuple(at.what.said for at in reachable if isinstance(at.what, records.Steer)), unread[len(reachable) :]
@@ -2352,9 +2359,9 @@ def queued_in(
     waiting for a turn is drawn beside that message rather than back in the turn before it.
     """
     if not opened:
-        return tuple(inbox)
+        return tuple(at for at in inbox if not isinstance(at.what, records.Stop))
     _, queued = unread_in(recorded, held_in(inbox, opened, len(opened) - 1), len(opened) - 1, listening=listening)
-    return queued
+    return tuple(at for at in queued if not isinstance(at.what, records.Stop))
 
 
 def result_in(recorded: Mapping[str, object], entry: str) -> Result | None:
@@ -2519,20 +2526,85 @@ def archived_in(recorded: Mapping[str, object]) -> records.Archived | None:
     return None if said is None else parse_archived(said)
 
 
+def ending_tree_key(turn: int) -> str:
+    """Name the completed boundary separately from snapshots preceding model requests."""
+    return f"{turn_prefix(turn)}:ending"
+
+
+def command_tree_key(entry: str) -> str:
+    """Keep a command's ending state beside its result, independent of turn numbering."""
+    return f"command-tree:{entry}"
+
+
+def stopping_in(recorded: Mapping[str, object], turn: int) -> bool:
+    """Read targeted control input without turning a Stop into model text or a queued message."""
+    return any(isinstance(at.what, records.Stop) and at.what.turn == turn for at in posted_in(recorded))
+
+
+def stopped_in(recorded: Mapping[str, object], turn: int) -> bool:
+    """Distinguish a stop the loop accepted from a press that arrived after completion."""
+    prefix = f"{turn_prefix(turn)}:stopped:"
+    return any(
+        records.Stopped.model_validate(value).requested for key, value in recorded.items() if key.startswith(prefix)
+    )
+
+
+def end_forkable(recorded: Mapping[str, object]) -> bool:
+    """
+    Offer a live end only when all visible work has a corresponding ending capture.
+
+    Older checkpoints have no completed-end capture and remain forkable at turn openings. Archived
+    checkpoints keep their final capture rule; silently substituting a pre-request tree for a new
+    live end would pair a whole conversation with older files.
+    """
+    if archived_in(recorded) is not None:
+        return True
+    if unfinished_in(recorded) or not openings(recorded):
+        return False
+    if any(
+        not isinstance(entry.what, records.Command | records.Stop)
+        for entry in queued_in(recorded, posted_in(recorded), openings(recorded), listening=False)
+    ):
+        return False
+    for entry in posted_in(recorded):
+        if isinstance(entry.what, records.Command) and command_tree_key(entry.key) not in recorded:
+            return False
+    return ending_tree_key(turns_in(recorded) - 1) in recorded
+
+
+def unfinished_in(recorded: Mapping[str, object]) -> bool:
+    """
+    Keep commands outside an opened turn, including passes yielding between requests.
+
+    Historical completed turns lack an ending capture; their messages still prove completion. New
+    turns write their ending state before messages, so completion cannot release files prematurely.
+    """
+    return len(openings(recorded)) > turns_in(recorded)
+
+
 def latest_tree(recorded: Mapping[str, object]) -> object | None:
     """
     The newest tree this session recorded, as the record holding it, or nothing where none was.
 
-    What a fork from the *end* of a conversation plants at. A turn's own opening tree is the state
-    before it did anything, which is right for re-asking that turn and wrong for carrying on after
-    the last one. The end the console offers is an archived session's, and the reconciler captured
-    that checkout on the way to taking it off the disk, so the archived tree wins where there is one:
-    it holds everything, what a person ran after the last request and what a plugin fixed at the
-    turn's end included. The last request's tree of the last turn is the answer for an end reached by
-    URL on a live session, which no control offers, and it predates both of those.
+    The archived capture wins because it precedes removing the checkout. Otherwise a completed
+    command or turn supplies the ending state, ordered by the inbox boundaries that serialized their
+    execution. Historical checkpoints have neither and retain their pre-request snapshot behavior;
+    a live end control is not offered for that approximation.
     """
     if (held := recorded.get(ARCHIVED_TREE_KEY)) is not None:
         return held
+    opened = openings(recorded)
+    for turn in range(len(opened) - 1, -1, -1):
+        held = held_in(posted_in(recorded), opened, turn)
+        for entry in reversed(held):
+            if (
+                entry.key > opened[turn]
+                and isinstance(entry.what, records.Command)
+                and (tree := recorded.get(command_tree_key(entry.key))) is not None
+            ):
+                return tree
+        if (tree := recorded.get(ending_tree_key(turn))) is not None:
+            return tree
     newest: object | None = None
     for behind in range(turns_in(recorded), -1, -1):
         at = 0
@@ -2822,6 +2894,8 @@ def said_by(turn: int, said: records.Delivered) -> Panel:
     about to be handed it.
     """
     noted = said if isinstance(said, records.Note) else None
+    if isinstance(said, records.Stop):
+        raise ValueError("a stop request cannot open a turn")
     return Panel(
         turn=turn,
         at=0,
@@ -3070,7 +3144,7 @@ async def opening_turn(run: Run, turn: int) -> records.Delivered:
     """
     after = since_last(run.recorded, turn - 1) if turn else ""
     available = run.delivered(after or None, None)
-    said = [at for at, what in enumerate(taken(available)) if not isinstance(what, records.Command)]
+    said = [at for at, what in enumerate(taken(available)) if not isinstance(what, records.Command | records.Stop)]
     took = await run.receive(opened_key(turn), after=after or None, limit=said[0] + 1 if said else 0)
     return taken(took)[-1]
 
@@ -3549,6 +3623,15 @@ def conversing(
             halting=ending_turn,
         )
         while True:
+            if (
+                at.turn > 0
+                and not unfinished_in(run.recorded)
+                and any(
+                    isinstance(entry.what, records.Command) and result_key(entry.key) not in run.recorded
+                    for entry in posted_in(await run.checkpointer.load(run.workflow))
+                )
+            ):
+                return Progressed()
             asked = await opening_turn(run, at.turn)
             # A session that declares plugins and has loaded none has nothing to answer with, and
             # answering anyway would put a turn in the cached prefix under a harness nobody chose. So
@@ -3566,6 +3649,8 @@ def conversing(
             # what the step confirms is executing somebody's program, and there is none to execute.
             if enrolled is None and declared:
                 return Unconfirmed()
+            if isinstance(asked, records.Stop):
+                raise ValueError("a stop request cannot open a turn")
             # Read off the message this pass just parked on rather than by asking the store again,
             # which is the whole reason the boundary rides on the message itself: a pass carries its
             # history forward between turns, so a marker delivered beside the message while it was
@@ -3667,7 +3752,36 @@ def conversing(
             # What the plugins say each time the model tries to stop, recorded per attempt under this
             # turn, so a resumed pass replays the turn being kept going rather than asking again.
             keeping = keeping_through(run, live, at.turn, opening_of(asked))
+            stop_checks: dict[int, bool] = {}
+
+            async def stop_at(request: int, turn: int = at.turn, stop_checks: dict[int, bool] = stop_checks) -> bool:
+                """
+                Record control input at each exchange boundary, checking the live inbox once.
+
+                A provider can finish after Stop arrived in this pass. Acceptance is recorded before
+                ending; a recorded next response proves the boundary was passed without stopping.
+                Only acceptance needs its own record, so false checks do not grow the checkpoint.
+                """
+                if request not in stop_checks:
+                    key = f"{turn_prefix(turn)}:stopped:{request}"
+                    if key in run.recorded:
+                        stop_checks[request] = records.Stopped.model_validate(run.recorded[key]).requested
+                    elif model_key(turn, request) in run.recorded:
+                        stop_checks[request] = False
+                    else:
+                        recorded = await run.checkpointer.load(run.workflow)
+                        requested = stopping_in(recorded, turn)
+                        if requested:
+                            await run.step(
+                                key,
+                                partial(as_recorded, records.Stopped(requested=True)),
+                                records.Stopped.model_validate,
+                            )
+                        stop_checks[request] = requested
+                return stop_checks[request]
+
             with stepping(run, turn_prefix(at.turn), checkout, pricer, draining, spending, injecting, gating) as scope:
+                scope.stopping = stop_at
                 try:
                     answered = await answering_turn(agent, asked.said, at.history, scope, keeping)
                 except AllowanceSpent:
@@ -3704,13 +3818,9 @@ def conversing(
                     # way round.
                     await scope.refuse(scope.at("model"), records.Refused(why=error.why))
                     return Stalled()
-            said = await run.step(messages_key(at.turn), recording(answered), parse_messages)
-            ended, at = at.turn, Reached(turn=at.turn + 1, history=(*at.history, *said))
-            # After the turn is recorded rather than before, so the numbers this is asked against are
-            # the ones the turn actually left behind, and so a crash between the two loses nothing:
-            # the pass that resumes replays the step, reaches here, and asks the same question of the
-            # same numbers. The window is asked for now rather than at the top of the pass because
-            # the reference under it is reloadable configuration, exactly as the rates are.
+            ended = at.turn
+            # End plugins see the responses the loop produced, before the completed boundary is
+            # published. Their file changes belong in the ending snapshot too.
             #
             # `opened_on` is what stops a plugin firing on its own delivery for ever while the
             # condition that fired it stays true: a plugin is told what opened the turn and which
@@ -3720,13 +3830,36 @@ def conversing(
                 live,
                 ended,
                 opening_of(asked),
-                spent_on(responses_in(said)).context,
+                spent_on(responses_in(answered)).context,
                 facts.context if facts is not None else None,
             )
+            await run.step(ending_tree_key(ended), snapshotting(checkout, f"turn {ended} ended"), parse_tree)
+            said = await run.step(messages_key(ended), recording(answered), parse_messages)
+            at = Reached(turn=ended + 1, history=(*at.history, *said))
             if notes:
                 return Noting(notes)
 
-    return converse
+    async def serialized(run: Run) -> Ended:
+        """
+        Own session files through a pass, refreshing the checkpoint after any command finishes.
+
+        Passes yield between requests, but commands also respect the durable unfinished turn. This
+        keeps a long provider turn from occupying a worker while waiting for unrelated commands.
+        """
+        if workspaces is None:
+            return await converse(run)
+        while True:
+            async with owning(workspaces.root, run.workflow):
+                run.recorded.update(await run.checkpointer.load(run.workflow))
+                pending_commands = any(
+                    isinstance(entry.what, records.Command) and result_key(entry.key) not in run.recorded
+                    for entry in posted_in(run.recorded)
+                )
+                if unfinished_in(run.recorded) or not pending_commands:
+                    return await converse(run)
+            await asyncio.sleep(0.05)
+
+    return serialized
 
 
 async def deferring(run: Run, turn: int, deferred: RequestDeferred) -> None:

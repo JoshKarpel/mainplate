@@ -498,6 +498,13 @@ class Stepping:
     draining: Draining | None = None
     injecting: Injecting | None = None
     gating: Gating | None = None
+    stopping: Callable[[int], Awaitable[bool]] | None = None
+    """The console's cooperative stop check, indexed by the next model request for replay."""
+
+    async def should_stop(self) -> bool:
+        """Check only at a complete exchange; tools already in the response must finish first."""
+        return self.stopping is not None and await self.stopping(self.at("model"))
+
     allowance: Allowance = field(default_factory=lambda: Allowance(limit=None))
 
     halted: bool = False

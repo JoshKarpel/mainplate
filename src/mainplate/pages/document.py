@@ -164,6 +164,7 @@ class Links:
     press: Reversible
     rename: Reversible
     archive: Reversible
+    stop: Reversible
     artifacts: Reversible
     artifact: Reversible
     artifact_content: Reversible
@@ -283,6 +284,10 @@ class Links:
     def to_turn(self, session: str, turn: int) -> str:
         """One turn of a session, as the session's page with the turn's rule as its target."""
         return f"{self.to_session(session)}#{rule_id(turn)}"
+
+    def to_stop(self, session: str, turn: int) -> str:
+        """Target the turn printed on the control, so a late press cannot stop another."""
+        return f"{url_for(self.stop, {'session': session})}?at={turn}"
 
     def to_archive(self, session: str) -> str:
         """Where the press that closes a session goes, which is a plain form post answered with a redirect."""

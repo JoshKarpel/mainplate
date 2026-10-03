@@ -116,6 +116,24 @@ Six things there are decided rather than incidental:
   where money is counted, which is the priced turn on the [cost page](cost.md), not a count of round
   trips.
 
+## Stop is cooperative control input
+
+Stop appends an inbox record targeting the turn printed on its control. It is not message text and
+is never put to the provider. The loop checks it before a new request and after a response without
+tools; a response with tools runs its whole batch first. A stop accepted at that exchange is
+recorded under the next request's position, so replay finishes the same recorded work and stops at
+the same boundary. A delayed press cannot end a later turn.
+
+The current work is allowed to finish. The cost is the remainder of the provider request or tool
+batch, bounded by its existing timeout rather than cancelled by the button. The page says
+`Stopping` until the turn's end plugins and ending capture finish, then `Stopped`. File changes
+remain; Stop is not rollback. A person-requested stop bypasses the plugin gate that would otherwise
+ask the model to keep going, while end notifications still run.
+
+The check reads the live inbox at a complete exchange, not just the pass's initial snapshot, so a
+press during a final provider request does not need another request to take effect. Recorded model
+responses are replayed before the new stop decision; a later press cannot truncate earlier work.
+
 ## Carrying the turn on, and stopping
 
 **A pass that returns is `Completed`, which the worker answers by doing nothing**, so `readying` in

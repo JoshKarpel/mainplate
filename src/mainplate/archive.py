@@ -28,6 +28,7 @@ from mainplate.durability import recorded_snapshot
 from mainplate.footprint import Footprints
 from mainplate.footprint import Places
 from mainplate.footprint import measured
+from mainplate.ownership import owning
 from mainplate.service import Service
 from mainplate.sessions import Footprint
 from mainplate.sessions import Session
@@ -42,7 +43,7 @@ def holding(places: Places, session: Session) -> bool:
     return any(place.is_symlink() or place.exists() for place in places.of(session.id, session.repository))
 
 
-async def taken_off(service: Service, places: Places, session: Session) -> None:
+async def removing(service: Service, places: Places, session: Session) -> None:
     """
     Every directory that is this session's, off the disk, with the checkout's last state recorded first.
 
@@ -77,6 +78,17 @@ async def taken_off(service: Service, places: Places, session: Session) -> None:
             await asyncio.to_thread(place.unlink)
         elif place.exists():
             await asyncio.to_thread(shutil.rmtree, place)
+
+
+async def taken_off(service: Service, places: Places, session: Session) -> None:
+    """
+    Wait for checkout work and its capture before removing session files.
+
+    The durable worker claim alone does not cover commands. Sharing their filesystem ownership
+    prevents archiving from capturing a command halfway through or removing its working directory.
+    """
+    async with owning(places.workspaces.root, session.id):
+        await removing(service, places, session)
 
 
 async def reconciled(

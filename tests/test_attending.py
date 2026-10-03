@@ -50,6 +50,23 @@ NOW = 1_000_000.0
 unset would read as `now` rather than as something distinguishable from it."""
 
 
+async def queued_session(service: Service, said: str) -> str:
+    """
+    Establish an already-due row without racing Python and SQLite clock precision.
+
+    Scheduler writes use microseconds while SQLite status reads resolve milliseconds. These tests
+    exercise status queries, not delivery latency, so place the row safely in the database's past.
+    """
+    session = await started(service, said)
+    await service.database.run(
+        lambda connection: connection.execute(
+            "UPDATE workflow_queue SET visible_at = unixepoch('now', 'subsec') - 1 WHERE workflow = :workflow",
+            {"workflow": session.id},
+        )
+    )
+    return session.id
+
+
 @asynccontextmanager
 async def in_state(service: Service, state: str) -> AsyncIterator[str]:
     """
@@ -65,7 +82,7 @@ async def in_state(service: Service, state: str) -> AsyncIterator[str]:
             await enrol(service.database, settled)
             yield settled.id
         case "queued":
-            yield (await started(service, "waiting its turn")).id
+            yield await queued_session(service, "waiting its turn")
         case "delayed":
             session = await started(service, "held back")
             await service.database.run(
@@ -143,23 +160,23 @@ class TestReadingItOutOfTheStore:
         `say` appends the message and queues the session in one commit, so this is the state a
         session is in from the moment somebody types into it.
         """
-        session = await started(service, "hello")
+        session = await queued_session(service, "hello")
 
-        assert await service.attention(session.id) == Queued()
+        assert await service.attention(session) == Queued()
 
     async def test_a_session_under_a_pass_reads_as_claimed(self, service: Service) -> None:
         """
         The claim a pass holds is exactly what this has to see, so it is taken the way a pass takes
         one rather than written into the table.
         """
-        session = await started(service, "hello")
-        holder = await claimed(service.checkpointer, session.id)
+        session = await queued_session(service, "hello")
+        holder = await claimed(service.checkpointer, session)
         try:
-            assert await service.attention(session.id) == Claimed()
+            assert await service.attention(session) == Claimed()
         finally:
             await service.checkpointer.release(holder)
 
-        assert await service.attention(session.id) == Queued(), "and stops being claimed when released"
+        assert await service.attention(session) == Queued(), "and stops being claimed when released"
 
     async def test_a_stopped_heartbeat_ends_a_claim_before_its_budget(self, service: Service) -> None:
         session = await started(service, "hello")
@@ -187,7 +204,7 @@ class TestReadingItOutOfTheStore:
         one under a pass, the one waiting for its first, and the one nothing is coming for.
         """
         answering = await started(service, "being answered")
-        waiting = await started(service, "waiting its turn")
+        waiting = await queued_session(service, "waiting its turn")
         settled = Session(id="ab" * 16, created_at=WHEN, title="nothing queued, ever")
         await enrol(service.database, settled)
         holder = await claimed(service.checkpointer, answering.id)
@@ -195,7 +212,7 @@ class TestReadingItOutOfTheStore:
             listed = {session.id: session.attention for session in await service.listed()}
         finally:
             await service.checkpointer.release(holder)
-        assert listed == {answering.id: Claimed(), waiting.id: Queued(), settled.id: Idle()}
+        assert listed == {answering.id: Claimed(), waiting: Queued(), settled.id: Idle()}
 
     @pytest.mark.parametrize(
         ("state", "arm"), [("claimed", Claimed), ("queued", Queued), ("delayed", Delayed), ("idle", Idle)]

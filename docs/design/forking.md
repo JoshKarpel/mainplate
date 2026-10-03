@@ -42,25 +42,30 @@ under the reader's hand, and there would be one per turn.
 
 ## Forking the end
 
-**A fork at `turns` carries every turn and re-asks none**, so the branch opens on an empty box. The
-one control that offers it is the rule under the last turn of an [archived
-session](workspace.md#archiving), because that is the one end worth forking: carrying on a live
-session is typing into it, and an archived one can only be carried on this way. The composer offered
-the same fork with a message typed, for a while, and it went for that reason; the route still accepts
-`at == turns`, so the end of a live session is reachable by URL and offered by nothing.
+A fork at `turns` carries every turn and re-asks none, so the branch opens on an empty box.
+The rule under the last turn offers it on an archived session or a completed live end.
+Typing into the original continues one conversation; forking preserves that position while two
+sessions continue independently, with their own model and settings.
+The cost is another checkout and another settings step, rather than changing the original in place.
 
-**It plants at the state the conversation ended with.** A turn's own opening snapshot is the state
-before the turn did anything, which is right for re-asking it and wrong for carrying on after the
-last one; with no turn to re-ask there is no opening snapshot to carry, and planting at the
-repository's head would hand the branch files the conversation never saw. So `latest_tree` decides:
-the snapshot the reconciler captured on the way to archiving the checkout, which holds everything,
-what a person ran or committed after the last request and what a plugin fixed at the turn's end
-included; and the last request's snapshot of the last turn where there is none, which is the end
-reached by URL on a live session. The cost, stated:
-that second case predates both of those, because snapshots are taken before model requests and
-nothing captures after the last one. A capture in the fork request would close it, and was built and
-taken out again, since a control that captured while nothing held the session and fell back while
-something did was two behaviours behind one word, which is what took the composer's fork out too.
+The files come from the completed boundary, not the repository's head or the last pre-request tree.
+Every turn records an ending snapshot after its end plugins return, before its completed messages
+are published. Commands run outside model turns and record their own ending snapshots before their
+results are published, including commands that exit unsuccessfully: failure does not undo writes.
+The archived capture takes precedence where present.
+
+The end control waits until all visible work has an ending capture and no message is queued for a
+new turn. It also waits while a command is queued or running. A failed command capture preserves the
+output with the failure stated, but does not offer the live end as though its files were recorded.
+Historical checkpoints without ending captures retain their pre-request tree behavior for an end
+reached by URL; that approximation is not offered as a live end control.
+
+Checkout work is serialized per session across processes. A pass owns the checkout while it runs,
+and an opened, unfinished turn keeps commands waiting even between passes. Commands run in inbox
+order and own the checkout through their ending capture. Different sessions remain independent.
+The cost is that a command cannot inspect or fix files during a model turn; the person's way to
+regain them is [Stop](durability.md#stop-is-cooperative-control-input), which finishes the current
+request and tool batch, captures the ending state and releases the checkout.
 
 ## What a fork does not inherit
 

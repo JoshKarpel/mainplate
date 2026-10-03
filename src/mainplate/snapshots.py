@@ -570,12 +570,11 @@ class Checkout:
         not an object: it goes through `parse_branch`, and a name that is not one records a
         detached `HEAD`, which only costs the fork form a pre-filled box.
 
-        **Call this only where the agent is quiescent**, which means at a model-request boundary
-        rather than after each tool call. A model may issue several calls in one response and they
-        may run at once, and while they do there is no coherent state to capture: `git add -A`
-        walks a tree somebody is still writing to, so what it records is a mixture that never
-        existed. Between one model request and the next, every tool of the previous batch has
-        returned by construction, so the quiescence costs nothing to arrange.
+        **Call this only where checkout work is quiescent**, under the session's ownership.
+        A model-request boundary has every tool of the previous batch returned by construction;
+        a completed turn or command has finished its work too. Capturing after individual calls
+        instead lets `git add -A` walk a tree the other calls in that batch are still writing,
+        recording a mixture that never existed. Ownership must span both work and capture.
         """
         base = await self.store.commit_at(self.base_ref)
         if base is None:

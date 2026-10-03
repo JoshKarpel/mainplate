@@ -529,10 +529,8 @@ class TestRunningOne:
         assert "the console stopped" in came.output
 
 
-# How many IPv4 routes a command can see: none in a network namespace of its own, and the machine's
-# where it shares the host's. Routes rather than interfaces, because tunnel devices like `gre0` are
-# created in every new namespace on a machine with the module loaded.
-ROUTES = "tail -n +2 /proc/net/route | wc -l"
+NETWORK_NAMESPACE = "readlink /proc/self/ns/net"
+"""Namespace identity proves isolation even on a host with no routes or external connectivity."""
 
 
 class TestRunningOneOnline:
@@ -547,13 +545,14 @@ class TestRunningOneOnline:
         self, running: Service, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
         session = await planted(running, workspaces, on_fixture)
-        confined = await ran(running, session, ROUTES)
-        assert confined.output.strip() == "0", "the control: a session's own command has no route anywhere"
+        confined = await ran(running, session, NETWORK_NAMESPACE)
+        host_namespace = str(Path("/proc/self/ns/net").readlink())
+        assert confined.output.strip() != host_namespace
 
-        entry = await running.run(session, ROUTES, online=True)
+        entry = await running.run(session, NETWORK_NAMESPACE, online=True)
 
         assert entry is not None
-        assert int((await settled(running, session, entry)).output) > 0
+        assert (await settled(running, session, entry)).output.strip() == host_namespace
 
     async def test_it_is_recorded_as_having_run_online(
         self, running: Service, workspaces: Workspaces, on_fixture: Choice

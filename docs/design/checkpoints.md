@@ -14,7 +14,7 @@ The store's space is one key:
 
 | Key | Holds | Written by |
 |---|---|---|
-| `inbox:{n}` | A message or a command, filed in the order it arrived | `Service.say`, `Service.send`, `Service.run`, `Service.push` and a plugin's `deliver` from outside a pass, and a plugin's tool from inside one |
+| `inbox:{n}` | A message, command or targeted Stop, filed in arrival order | `Service.say`, `Service.send`, `Service.run`, `Service.push` and a plugin's `deliver` from outside a pass, and a plugin's tool from inside one |
 
 This console's is the rest:
 
@@ -26,6 +26,9 @@ This console's is the rest:
 | `instructions:{n}` | What the stretch of context beginning at turn `n` is answered under, exactly as the model is sent it | The first pass to reach it, before its first request, and replayed by every later one |
 | `turn:{n}:opened` | The entry this turn took | `Run.receive`, in the conversation body |
 | `turn:{n}:tree:{i}` | The checkout's git state before the i-th model request: its tree, the commit `HEAD` names, and its branch | `Stepping.request` |
+| `turn:{n}:ending` | The checkout state after the turn and its end plugins finish | The conversation body, before completed messages |
+| `turn:{n}:stopped:{i}` | That cooperative Stop was accepted before request i | The model loop at a complete exchange |
+| `command-tree:{entry}` | The checkout state after a command finishes | `Commands`, before its result |
 | `turn:{n}:wrote:{i}` | The net change the i-th request's tool batch made, as a unified diff over the whole checkout; empty where nothing changed | `Stepping.request`, once the next snapshot is taken |
 | `turn:{n}:heard:{i}` | How far down the inbox the turn had read when it made that request | `Run.pending`, through `Stepping.steering` |
 | `turn:{n}:model:{i}` | The i-th model response of that turn | `Stepping.request` |

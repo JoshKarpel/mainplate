@@ -1236,6 +1236,14 @@ async def rename_session(service: Service, session: str, title: str) -> Response
     return page_response(200, renamed(LINKS, session, named))
 
 
+@post(t"/sessions/{session_id}/stop", session_id, at_turn, summary="Stop after the current work finishes")
+async def stop_turn(service: Service, session: str, at: int) -> Response:
+    """Post durable control input, leaving the live connection to show completion and capture."""
+    if not await service.stop(session, at):
+        return page_response(404, refusal_page(LINKS, 404, f"session {session} has no turn {at}"))
+    return seeing(LINKS.to_session(session))
+
+
 @post(t"/sessions/{session_id}/archive", session_id, summary="Archive a session, keeping its conversation")
 async def archive(service: Service, session: str) -> Response:
     """
@@ -1358,6 +1366,7 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     press,
     rename_session,
     archive,
+    stop_turn,
     artifact_catalogue,
     show_artifact,
     artifact_content,
@@ -1380,6 +1389,7 @@ LINKS = Links(
     press=press,
     rename=rename_session,
     archive=archive,
+    stop=stop_turn,
     artifacts=artifact_catalogue,
     artifact=show_artifact,
     artifact_content=artifact_content,

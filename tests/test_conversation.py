@@ -241,6 +241,8 @@ def conversation_of(*turns: Turn) -> dict[str, object]:
 # inside the parametrise, because two tests want it: one asks whether each survives the codec, and
 # the other whether there is one for every arm.
 EVERY_RECORD: tuple[records.Step, ...] = (
+    records.Stop(turn=7),
+    records.Stopped(requested=True),
     records.Prompt(said="go", forget=True),
     records.Note(
         said="where the work got to",
