@@ -284,11 +284,17 @@ class Clones:
         """
         Bring this store's idea of the remote up to date, so a branch name means today's commit.
 
-        Into `refs/remotes/origin/` and never over `refs/heads/`, which is the whole care here. The
-        store's own branches live under `refs/heads/` and are as old as the clone; fetching over
-        them with a forcing refspec would also walk over a branch a session started and has been
-        committing to, which is somebody's work rather than a stale copy. Fetching beside them costs
-        one namespace and takes nothing away, and `Checkouts.resolve` is what prefers the fresh side.
+        **Over `refs/heads/`, as a mirror**, so the store's branches *are* the remote's: `main` here
+        is the remote's `main` as of this fetch, the store's `HEAD` names it, and a checkout's
+        `git fetch origin main` asks for it by the name git always uses. Nothing else writes a branch
+        in a store - a session's work reaches it as a bundle under `refs/mainplate/sessions/`, and a
+        push goes from the store straight to the remote - so there is nothing under `refs/heads/` for
+        a forcing refspec to walk over. Fetching *beside* them, into a namespace of its own, is the
+        design that reads more careful and is not: it leaves a second commit answering to every
+        branch name, frozen at the clone, and every reader that asks git for a name the ordinary way
+        finds the frozen one. A session's `git fetch origin main` did exactly that and merged a `main`
+        a day old. The cost, stated: `--prune` takes a branch the remote deleted out of the store, so
+        the store remembers no branch name the remote has dropped.
 
         **Nothing unreachable is ever pruned from the store**, and this is where that is set, before
         every fetch, because a fetch is what takes a commit a checkout borrows out of the store's
@@ -317,7 +323,7 @@ class Clones:
         held = await store.git("config", "--get", "gc.pruneExpire")
         kept = held if held.out == "never" else await store.git("config", "gc.pruneExpire", "never")
         fetched = (
-            await store.git("fetch", "--prune", "--tags", repository.url, "+refs/heads/*:refs/remotes/origin/*")
+            await store.git("fetch", "--prune", "--tags", repository.url, "+refs/heads/*:refs/heads/*")
             if kept.ok
             else kept
         )
@@ -364,6 +370,9 @@ class Clones:
         `git clone` deliberately: on exe.dev it carries no credential at all, because there is none to
         carry.
 
+        A bare clone's branches are already where `refresh` keeps them, under `refs/heads/`, so a
+        store just cloned is laid out exactly as one just fetched and nothing is copied anywhere.
+
         What keeps a store from pruning what a checkout borrows is set by `refresh`, before the first
         fetch that could take any of it out of reach, which nothing does to a store just cloned.
         """
@@ -373,10 +382,6 @@ class Clones:
             logger.info(f"cloning {repository.name} from {repository.forge}")
             cloning = ("clone", "--bare", repository.url, str(here))
             demanded(await git_at(self.root, *cloning), cloning)
-            # A clone just made is current, so its branches are what a `refresh` would have fetched.
-            # Copied under `refs/remotes/origin/` from the store itself, with no network, because
-            # that is the namespace `resolve` prefers and a checkout's `git fetch` reads.
-            await self.store(repository.id).demand("fetch", "--quiet", ".", "+refs/heads/*:refs/remotes/origin/*")
         return here
 
 

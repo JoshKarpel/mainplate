@@ -399,7 +399,7 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
                 background_task(reconciling(service, places, footprints, settings.archive_every))
             )
             await running.enter_async_context(
-                background_task(fetching(workspaces, service.database, settings.fetch_every))
+                background_task(fetching(service, workspaces, settings.fetch_every, settings.fetch_held_every))
             )
             if config.model_reference is not None:
                 await running.enter_async_context(

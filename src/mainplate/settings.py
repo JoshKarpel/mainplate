@@ -131,12 +131,27 @@ class Settings(BaseSettings):
 
     fetch_every: timedelta = Field(default=timedelta(minutes=5), gt=timedelta())
     """
-    How often every repository a live session works in is fetched into this console's copy of it.
+    How often every repository a live session works in is fetched into this console's copy of it,
+    while nothing is working in it.
 
-    What the interval decides is how far behind the remote a session's own `git fetch` can be, since
-    that reads this console's copy rather than the forge. Five minutes, because the things worth
-    seeing are somebody merging to `main` or pushing a commit to the session's branch, which a person
-    does at the pace of a review; and a fetch that finds nothing new is one round trip per repository.
+    What the interval decides is how far behind the remote a session's own `git fetch` can be when
+    a pass or a command starts, since that reads this console's copy rather than the forge; once one
+    has, `fetch_held_every` takes over. Five minutes, because a session nobody is working in reads
+    nothing, so all this keeps is the copy from falling far behind between turns; and a fetch that
+    finds nothing new is one round trip per repository.
+    """
+
+    fetch_held_every: timedelta = Field(default=timedelta(seconds=15), gt=timedelta())
+    """
+    How often a repository is fetched while a pass or a command holds one of its sessions.
+
+    The interval that decides what a session actually sees, because a held session is the one about
+    to read `origin/main`: a model asked to merge the latest `main` runs `git fetch` seconds into its
+    turn, and what it gets is this console's copy as of the last fetch. Fifteen seconds, so a merge
+    on the forge is in the copy before most turns have made their first call, at the cost of a round
+    trip every fifteen seconds per repository somebody is working in, which against a forge that has
+    nothing new transfers nothing. The loop looks as often as the shorter of the two intervals, so
+    the longer is honoured to within the shorter.
     """
 
     watching: timedelta = Field(default=DEFAULT_WATCHING, gt=timedelta())
