@@ -1,22 +1,14 @@
-# What a person runs themselves, beside the conversation rather than inside it.
+# Pushing a session's branch, and what reading a running process into a record takes, which `jobs.py`
+# shares.
 #
-# **Behind the same sandbox as the model's own `bash`**, and that is forced rather than chosen. A
-# session's checkout owns its `.git`, so its configuration is the model's to write, and several of
-# its keys name a program git runs: a hook, `core.fsmonitor`, a filter. A person's `git commit` run
-# here unconfined would run whatever the model last put there, as the service user, with everything
-# that user holds. So a command here reaches the checkout, its store read-only and the scratch, under
-# the session's own network answer and the environment its setup recorded, exactly as the model's
-# would; what differs is who typed it and that no model is told.
+# A command a person types is a job, kept by `jobs.py` in the session's sandbox; see there for why it
+# is confined. What is left here is the one run that is not in a sandbox at all: a push needs this
+# console's credential, and nothing that holds one may read the configuration a session wrote. So the
+# branch crosses into the store as a bundle and the store pushes it, as this console, and the result
+# is recorded where a command's would be.
 #
-# What that takes away is the person's credentials, so `git push` in here has nothing of theirs to
-# push with; with the network off it reaches nothing, and on exe.dev with it on it reaches the
-# repository as this console does. Pushing is `Commands.push`'s instead: the branch crosses into the
-# store as a bundle and the store pushes it, as this console, reading no configuration the session
-# wrote.
-#
-# Nothing here is ever told to a model. The record exists so the page can draw a run and a reload
-# can find it again; putting it in the history is a message somebody writes. See the key scheme in
-# `conversation.py`.
+# Nothing here is ever told to a model. The record exists so the page can draw a push and a reload
+# can find it again. See the key scheme in `conversation.py`.
 
 from __future__ import annotations
 
@@ -26,22 +18,15 @@ import os
 import signal
 from collections.abc import Awaitable
 from collections.abc import Callable
-from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import timedelta
-from pathlib import Path
 
 from without_durability.interfaces import Checkpointer
 
 from mainplate.conversation import Result
 from mainplate.conversation import recorded_result
 from mainplate.conversation import result_key
-from mainplate.processes import reaped
-from mainplate.sandbox import InACheckout
-from mainplate.sandbox import Venue
-from mainplate.sandbox import confined_by
-from mainplate.settings import DEFAULT_PATIENCE
 from mainplate.snapshots import Checkout
 from mainplate.snapshots import SnapshotFailed
 
@@ -115,99 +100,6 @@ def kill(process: asyncio.subprocess.Process) -> None:
         return
 
 
-@dataclass(frozen=True, slots=True)
-class Running:
-    """
-    Where a person's command runs: the session's own sandbox, as its `bash` would get it.
-
-    `environment` is what the session's setup recorded, so `just test` finds the toolchain the
-    repository's plugin installed, as it would for the model.
-    """
-
-    confinement: InACheckout
-    venue: Venue
-    environment: Mapping[str, str]
-
-    @property
-    def where(self) -> Path:
-        """Where a command starts, which is the checkout's root, as it is for the model's `bash`."""
-        return self.confinement.checkout.root
-
-
-async def ran(said: str, running: Running, patience: timedelta, into: bytearray) -> Result:
-    """
-    One command, run in the session's sandbox, and what came of it.
-
-    A **shell** and not an argument vector, because what is in the box is what somebody would type:
-    `git add -A && git commit -m 'x'` is one thought and two processes, and splitting it here would
-    turn the obvious thing to type into a refusal. The shell is the reason this cannot be an
-    allowlist of commands either, which is the same argument `sandbox.py` makes one level up.
-
-    stderr into stdout, in the order they were written, which is what a terminal shows. Kept apart
-    they interleave wrongly or not at all, and nobody has ever wanted a build's errors in a second
-    column.
-
-    `cwd` is the checkout even though `--chdir` is what puts the command there, so a checkout that
-    does not exist yet is a `FileNotFoundError` naming it rather than bwrap's own complaint.
-
-    A timeout kills the group and records what the command managed to say, rather than raising: a
-    run that hit the bound is a result to read, not an error to explain.
-    """
-    began = asyncio.get_running_loop().time()
-    confinement = running.confinement
-    await asyncio.to_thread(confinement.scratch.mkdir, parents=True, exist_ok=True)
-    process = await asyncio.create_subprocess_exec(
-        confinement.checkout.bwrap,
-        *confined_by(confinement).argv(
-            at=str(running.where),
-            venue=running.venue,
-            home=str(confinement.scratch),
-            environment=running.environment,
-        ),
-        "/bin/sh",
-        "-c",
-        said,
-        cwd=running.where,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        # Its own process group, so `kill` can reach bwrap and, through its pid namespace, whatever
-        # the shell started. See `kill`.
-        start_new_session=True,
-    )
-    reading = process.stdout
-    if reading is None:  # pragma: no cover - a pipe was asked for, so there is one
-        raise RuntimeError("a command was started with no way to read what it says")
-    try:
-        async with asyncio.timeout(patience.total_seconds()):
-            await drain(reading, into)
-            status = await process.wait()
-    except TimeoutError:
-        kill(process)
-        status = await process.wait()
-        # The drain was cancelled part-way, and `wait` closes no pipe: one paused on a full buffer
-        # never reads its end-of-file, and is collected later with its descriptor still held.
-        reaped(process)
-        into.extend(f"\n[killed after {patience.total_seconds():.0f}s]\n".encode())
-    except asyncio.CancelledError:
-        # The console is stopping. Kill the group rather than leaving a build orphaned, and let the
-        # cancellation carry on: what to record is the caller's, which is where the buffer is.
-        #
-        # Then close the pipes and wait for the exit, because a transport nobody finishes is collected
-        # later as a `ResourceWarning` raised into whatever is running then. The pipes are closed
-        # synchronously, so a second cancellation landing in the wait still leaves none open; the
-        # wait is what lets the subprocess transport see its exit and close itself before the loop
-        # it belongs to does. `aclose` cancels each task once, so the wait is not itself cancelled.
-        kill(process)
-        reaped(process)
-        await process.wait()
-        raise
-    return Result(
-        status=status,
-        output=trimmed(bytes(into)),
-        took=timedelta(seconds=asyncio.get_running_loop().time() - began),
-    )
-
-
 async def pushing(checkout: Checkout, url: str, branch: str, into: bytearray) -> Result:
     """One push of the session's branch, as a result the page draws the way it draws a command's."""
     began = asyncio.get_running_loop().time()
@@ -245,40 +137,25 @@ class Slot:
 @dataclass(slots=True)
 class Commands:
     """
-    The commands this process currently has running, which is the one place it holds work in flight.
+    The pushes this process currently has running, one of the two places it holds work in flight;
+    `Jobs` in `jobs.py` is the other, on the same terms.
 
     That is a genuine exception to what `Service` otherwise is, and it is stated rather than hidden.
     Everything else the console does is a read of the database or a write to it, so two processes over
-    one file agree by construction. A running command is a *place*: it belongs to this process, it
-    does not survive a restart, and nothing else can see it.
+    one file agree by construction. A running push is a *place*: it belongs to this process, it does
+    not survive a restart, and nothing else can see it.
 
-    What keeps that from spreading is that the place holds no answers. The command and its result are
+    What keeps that from spreading is that the place holds no answers. The push and its result are
     both in the checkpoint, so a page renders the same thing whichever process is asked, and this set
     exists only so a shutdown can reap what it started.
 
-    Deliberately **not** a worker. The session's own workflow is the conversation and is parked on
-    `run.awaiting`, so a command cannot be a step of it; and a queue of its own would be a second
-    durable mechanism to justify for something that is over in seconds and pinned to this machine
-    anyway, since the checkout is on this disk.
+    **A push is not a job**, which is why it is still here: it runs against the store in this process
+    rather than in a session's sandbox, and it is not idempotent in the sense a job has to be, so a
+    console stopping records it as unfinished rather than pushing again on the next start.
     """
 
     checkpointer: Checkpointer
-    patience: timedelta = DEFAULT_PATIENCE
     running: dict[asyncio.Task[None], Slot] = field(default_factory=dict)
-
-    def start(self, slot: Slot, said: str, running: Running) -> None:
-        """
-        Run `said` in the session's sandbox, and record what came of it under the slot already claimed.
-
-        Returns as soon as the command is scheduled, because somebody is waiting on the request that
-        posted it and a build is minutes. What the page shows meanwhile is the command with no result
-        beside it, which is what `Command.result is None` already means; the record landing is what
-        fills it in, and the session's own change token is what tells every open page to look.
-
-        This is the control-plane argument the worker already answers for cloning, one step along: a
-        POST records an intention and something else does the slow part.
-        """
-        self.scheduled(slot, lambda holding: ran(said, running, self.patience, holding))
 
     def push(self, slot: Slot, checkout: Checkout, url: str, branch: str) -> None:
         """
@@ -293,7 +170,7 @@ class Commands:
 
     def scheduled(self, slot: Slot, work: Callable[[bytearray], Awaitable[Result]]) -> None:
         """
-        Start one run as a task this holds until it ends, which is what `start` and `push` share.
+        Start one push as a task this holds until it ends.
 
         Held by slot so `aclose` can say what became of a task that never started, and dropped by the
         task's own callback so what is held is only ever what is still running.
@@ -306,17 +183,15 @@ class Commands:
         """
         The whole of one run: do it, then say what happened, whichever way it ended.
 
-        The buffer is out here rather than inside `ran` so that a cancelled command still records
-        what it managed to say. `ran` fills it as the command writes, so this holds the partial
-        output even when the call that was filling it never returned - which is the only reason this
-        catches cancellation at all, since `aclose` would otherwise record the same thing without it.
+        The buffer is out here rather than inside `pushing` so that a cancelled push still records
+        what it managed to say, which is the only reason this catches cancellation at all, since
+        `aclose` would otherwise record the same thing without it.
 
         `shield`, because the write is the point and the database is still open at that moment: the
         tasks are cancelled inside `open_store`'s own `finally`, before the connection is closed.
 
-        A failure to *run* the command at all - a checkout that is not there, a shell that cannot be
-        started - is recorded as the result rather than raised. Nothing is watching this task, so an
-        exception here would be a log line and a panel that never resolves.
+        A failure to push at all is recorded as the result rather than raised. Nothing is watching
+        this task, so an exception here would be a log line and a panel that never resolves.
         """
         holding = bytearray()
         try:
@@ -324,21 +199,6 @@ class Commands:
         except asyncio.CancelledError:
             await asyncio.shield(self.result(slot, self.stopped(holding)))
             raise
-        # Named apart from the `OSError` below, because it is the common case rather than an odd one:
-        # a session's checkout is planted by its *first pass*, so between creating one and its first
-        # reply there is a repository, a `Run` on offer, and nowhere yet to run in. A bare repr says
-        # none of that, and what a reader needs is what to do about it.
-        #
-        # Caught rather than checked for with an `is_dir` beforehand, which is both a syscall on the
-        # event loop and a race: the answer could change between the look and the run. `strerror`
-        # rides along so a `FileNotFoundError` that is *not* this - a machine with no shell - is not
-        # quietly reported as a missing checkout.
-        except FileNotFoundError as missing:
-            came = self.stopped(
-                holding,
-                f"there is nothing at {missing.filename} to run in: a session's checkout is made on its"
-                f" first turn, so a command sent before that has nowhere to go ({missing.strerror})",
-            )
         except SnapshotFailed as failed:
             came = self.stopped(holding, f"this could not be pushed: {failed}")
         except OSError as failed:

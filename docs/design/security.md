@@ -248,6 +248,39 @@ The file a person downloads is the same bytes with none of that around it, and a
 local file gives it whatever it gives local files. The page says so beside the link, and nothing here
 can do more. See [Artifacts](artifacts.md#serving-a-version).
 
+## A write is answered only from the console's own page
+
+**A browser that can reach the console lends that reach to every page it has open**, and there are
+no accounts to tell those pages apart. What does is where the browser says the request came from.
+A page on another port of the console's host is a different origin but the same *site*, and a cookie
+is scoped to a host and never to a port, so on exe.dev the login in front of the console rides
+along on a post from any page at `<vm>.exe.xyz:<port>`. A dev server's page is exactly that, and its
+scripts are the repository's or the model's. They cannot read what the console answers, but a form
+posted to `/sessions` needs no answer read to start a session on the whole machine.
+
+So `origins.py` refuses any request but a read unless the browser says it came from the console's own
+origin, before any route runs. It is Go's `CrossOriginProtection`, taken whole: `Sec-Fetch-Site`
+decides where it is sent, `Origin` is compared against `Host` where it is not, and a request carrying
+neither is not a browser's and is answered. `same-site` is refused, and it is the case all of this is
+for. An opaque origin sends `Origin: null` and is refused with it, which covers an artifact's frame as
+well, though its own policy already forbids it to post.
+
+The cost, stated: over plain HTTP at an address that is not loopback the browser sends no
+`Sec-Fetch-Site`, and the `Origin` comparison is exact, so a proxy that rewrites `Host` there refuses
+the console's own writes. Over HTTPS, and on loopback, `Host` is never consulted.
+
+## A job's port is handed in, not found
+
+**The listening socket for a job that serves is made by this console and passed into the sandbox as
+an open file**, and nothing comes back across: the relay inside accepts on it and the parent proxies
+nothing. It is the rule at the top of this page applied to a port. The alternative, a Unix socket the
+sandbox creates in a directory it can write that the parent then connects to, has the parent open a
+path a session can plant a link at, and a link to the Docker socket, which speaks HTTP, would turn the
+person's browser into its client. See [Jobs](jobs.md#the-port-is-handed-in).
+
+A listening socket can only accept, and a socket the relay makes is made in the sandbox's own
+network namespace, so holding one gives a session with its network off no way out.
+
 ## What is deliberately not defended
 
 Naming these is the point of the page. Each is a decision, and each is somewhere the argument above
@@ -290,6 +323,19 @@ can pick.
 
 **A session on `EVERYTHING`.** It binds `/` read-write and can read `config.yaml` and the database.
 That is what choosing it means and the card says so.
+
+**What a job serves, to whoever reaches its port.** A job's port is reached by anything that can
+reach the console's host on that port, the same line [deployment](deployment.md) draws for the
+console itself; on exe.dev that is the proxy's private sharing. Its pages are the repository's or the
+model's code, run in the person's browser on the console's own site, which is why a write is answered
+only from the console's own origin. A session with its network on runs its jobs on the host's own
+network, where anything else on this machine can reach a server among them too.
+
+**A setup's jobs run with no fresh press.** A repository's setup declaring a job is a program the
+repository supplies, kept running in the session's sandbox for as long as the session is, and started
+again after every console restart. What licenses it is the press on the settings step, the same one
+that licenses the setup itself; the job gets the session's own sandbox and network and nothing of
+setup's grants.
 
 **The person at the console.** There is no authentication here and no authorisation model. Anybody
 who can reach the console can start a session on the whole machine, so what actually guards this is

@@ -23,6 +23,7 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from contextlib import AsyncExitStack
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import timedelta
 from functools import partial
 from pathlib import Path
@@ -97,6 +98,8 @@ from mainplate.forge import Reachable
 from mainplate.forge import Reaching
 from mainplate.forge import Workspaces
 from mainplate.forge import discover as reachable
+from mainplate.jobs import Jobs
+from mainplate.origins import refusing_crossings
 from mainplate.pages.document import refusal_page
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.installed import Tier
@@ -113,7 +116,6 @@ from mainplate.service import Service
 from mainplate.sessions import prepare
 from mainplate.sessions import read_tending
 from mainplate.sessions import set_settings
-from mainplate.settings import DEFAULT_PATIENCE
 from mainplate.settings import DEFAULT_WATCHING
 from mainplate.settings import Settings
 from mainplate.snapshots import operator_identity
@@ -140,6 +142,28 @@ class DidNotStart(RuntimeError):
     so this hands the CLI that message under a name of this program's own instead of the web
     library's.
     """
+
+
+# What a write from a page the console did not serve is answered with. A page rather than a status,
+# for `missing`'s reason, since a browser is what arrives; somebody who lands here followed a form on
+# another site, and the way back is the one thing worth giving them.
+CROSSING: Final = page_response(
+    403, refusal_page(LINKS, 403, "a change asked for by a page this console did not serve")
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Ports:
+    """Where a session's jobs that serve may be listened on: the console's own host, and a range."""
+
+    host: str
+    lowest: int
+    highest: int
+
+
+async def ids(service: Service) -> tuple[str, ...]:
+    """Every session this console knows, which is what the jobs' first look at startup walks."""
+    return tuple(session.id for session in await service.listed())
 
 
 async def missing(service: Service, scope: HttpScope) -> Response:
@@ -169,11 +193,16 @@ def served_assets() -> Inventory:
 
 
 def build_router(assets: Inventory) -> Router[Service]:
-    """Every route this server answers, in one trie."""
+    """
+    Every route this server answers, in one trie.
+
+    A crossing write is refused before anything else runs, the fallback included, so a post to a
+    path nothing matches from a page on another port learns no more than one to a path that does.
+    """
     return Router(
         routes=(*CONSOLE_ROUTES, static_files(ASSETS, assets)),
         fallback=handle(http_scope(), fn=missing),
-        middleware=stack(catching(recover)),
+        middleware=stack(refusing_crossings(CROSSING), catching(recover)),
     )
 
 
@@ -185,10 +214,10 @@ async def open_store(
     workspaces: Workspaces | None = None,
     references: References | None = None,
     watching: timedelta = DEFAULT_WATCHING,
-    patience: timedelta = DEFAULT_PATIENCE,
     declaring: Declaring | None = None,
     footprints: Footprints | None = None,
     config_home: Path | None = None,
+    ports: Ports | None = None,
 ) -> AsyncIterator[Service]:
     """
     The file, migrated, as the service both halves read and write through.
@@ -196,6 +225,9 @@ async def open_store(
     `migrate` and `prepare` both run every boot and both are idempotent. They are separate calls
     because they own different tables: `migrate`'s three are the durability library's, and
     `sessions` is ours.
+
+    `ports` is where a session's jobs may serve, and nothing for a store that runs no jobs, which is
+    what every test that is not about them wants: nothing then starts a process or binds a port.
     """
     opened = connect(database)
     try:
@@ -203,18 +235,36 @@ async def open_store(
         await prepare(opened)
         await prepare_artifacts(opened)
         checkpointer = SqliteCheckpointer(opened)
-        # Only where there are workspaces, since a command runs in a session's checkout and a
-        # console keeping none has nowhere to put one. The same pairing the file tools already have,
-        # one level out.
-        running = Commands(checkpointer=checkpointer, patience=patience) if workspaces is not None else None
+        durable = SqliteDurable(checkpointer, SqliteScheduler(opened, lease=lease))
+        # Only where there are workspaces, since a push leaves a session's checkout and a console
+        # keeping none has nothing to push. The same pairing the file tools already have, one level
+        # out.
+        running = Commands(checkpointer=checkpointer) if workspaces is not None else None
+        # On the same terms, and a place of the same kind: a job runs in a session's sandbox, so a
+        # console keeping no workspaces has nothing for one to run in.
+        jobs = (
+            Jobs(
+                checkpointer=checkpointer,
+                workspaces=workspaces,
+                host=ports.host,
+                lowest=ports.lowest,
+                highest=ports.highest,
+                # Delivered rather than appended, so a job the model started and stopped waiting on
+                # wakes the session when it ends; see `Jobs.delivering`.
+                delivering=durable.deliver,
+            )
+            if workspaces is not None and ports is not None
+            else None
+        )
         try:
             yield Service(
                 database=opened,
-                durable=SqliteDurable(checkpointer, SqliteScheduler(opened, lease=lease)),
+                durable=durable,
                 checkpointer=checkpointer,
                 catalogues=catalogues,
                 workspaces=workspaces,
                 commands=running,
+                jobs=jobs,
                 # A holder either way, so nothing downstream has to ask whether there is one. An
                 # empty holder is a console that was never told to look anything up, which is a
                 # different state from one whose database would not load and the state a card must
@@ -230,12 +280,16 @@ async def open_store(
                 declaring=declaring,
             )
         finally:
-            # Inside the database's own `finally`, and the nesting is the point: cancelling a
-            # command is what makes it record that it was stopped, so the connection has to outlive
-            # that write. Closed the other way round, every command in flight at a shutdown would
-            # leave a panel saying it is still running.
+            # Inside the database's own `finally`, and the nesting is the point: cancelling a push
+            # is what makes it record that it was stopped, so the connection has to outlive that
+            # write. Closed the other way round, every push in flight at a shutdown would leave a
+            # panel saying it is still running.
             if running is not None:
                 await running.aclose()
+            # Ended without recording an end, which is what lets the next console start them again;
+            # see `Jobs.aclose`.
+            if jobs is not None:
+                await jobs.aclose()
     finally:
         # Never `connection.close()`: the database's own `aclose` waits out any statement still
         # running on a worker thread, and closing under one segfaults the process rather than
@@ -340,10 +394,10 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
         workspaces,
         references,
         settings.watching,
-        settings.patience,
         declaring,
         footprints,
         settings.config_home,
+        Ports(host=settings.host, lowest=settings.serving_lowest, highest=settings.serving_highest),
     ) as service:
         answering = work(
             service.durable,
@@ -380,6 +434,9 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
                         # a message already in its own inbox with nothing that will ever wake it.
                         delivering=delivering(service.durable),
                         artifacts=service.database,
+                        # The same place the console's own presses reach, so a job the model starts,
+                        # one a setup declares and one the person runs are kept by one reconciler.
+                        jobs=service.jobs,
                     ),
                 )
             ),
@@ -401,6 +458,8 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
             await running.enter_async_context(
                 background_task(fetching(service, workspaces, settings.fetch_every, settings.fetch_held_every))
             )
+            if service.jobs is not None:
+                await running.enter_async_context(background_task(service.jobs.reconciling(partial(ids, service))))
             if config.model_reference is not None:
                 await running.enter_async_context(
                     background_task(refreshing_reference(references, config.model_reference, settings.reference_every))

@@ -668,6 +668,19 @@ class Prices:
         """
         return output_cap_of(self.catalogues.current, self.references.current, chosen)
 
+    def sees(self, chosen: Choice) -> bool:
+        """
+        Whether this session's model is known to take images, as things stand.
+
+        Only a record saying so counts. A record saying nothing, or no record, is not yes, because the
+        two ways of being wrong cost very different amounts: a model that could have seen a screenshot
+        and was not sent one is told why and carries on, where one sent an image it cannot take has
+        every request from then on refused with it, since a request carries everything above it.
+        Read here, beside `output_cap`, for that method's reason: per agent built, off the holders.
+        """
+        facts = self.facts(chosen)
+        return facts is not None and said(facts.traits, "vision") is True
+
     def pricer(self, chosen: Choice) -> Pricer:
         """
         What one session's requests are priced by, which is as fixed as the choice it is built from.

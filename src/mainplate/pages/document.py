@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from typing import Final
+from urllib.parse import quote
 from urllib.parse import urlencode
 
 from without_html import DOCTYPE
@@ -164,10 +165,14 @@ class Links:
     press: Reversible
     rename: Reversible
     archive: Reversible
+    job: Reversible
+    stop_job: Reversible
+    job_output: Reversible
     artifacts: Reversible
     artifact: Reversible
     artifact_content: Reversible
     artifact_download: Reversible
+    picture: Reversible
     # A prefix rather than a route, and the one exception: the route serving the assets needs an
     # inventory that does not exist until startup, where every field above is a module-level
     # value. Both are built from one constant, so they cannot disagree about where they are.
@@ -288,6 +293,23 @@ class Links:
         """Where the press that closes a session goes, which is a plain form post answered with a redirect."""
         return url_for(self.archive, {"session": session})
 
+    def to_job(self, session: str, entry: str) -> str:
+        """
+        Where a job that serves is opened: a route that sends the browser on to its port.
+
+        A route rather than the job's own address, because the address is this console's host as the
+        browser reached it, which only the request knows and a page may not ask.
+        """
+        return url_for(self.job, {"session": session, "entry": entry})
+
+    def to_stop_job(self, session: str, entry: str) -> str:
+        """Where the press that stops a job goes, a plain form post answered with a redirect."""
+        return url_for(self.stop_job, {"session": session, "entry": entry})
+
+    def to_job_output(self, session: str, entry: str) -> str:
+        """What a running job has printed so far, as plain text."""
+        return url_for(self.job_output, {"session": session, "entry": entry})
+
     def to_artifacts(self, before: int | None = None) -> str:
         """Every artifact, newest first; `before` continues a listing from the last one it held."""
         return url_for(self.artifacts) + ("" if before is None else f"?{urlencode({BEFORE_FIELD: before})}")
@@ -314,6 +336,19 @@ class Links:
     def to_artifact_download(self, artifact: str, version: int) -> str:
         """The same bytes as `to_artifact_content`, served to be saved rather than shown."""
         return f"{url_for(self.artifact_download, {'artifact': artifact})}?{urlencode({VERSION_FIELD: version})}"
+
+    def to_picture(self, session: str, turn: int, call: str, index: int) -> str:
+        """
+        One image a call handed the model, named by the record it is in and its place there.
+
+        Path segments rather than a query, because each one narrows to a single thing that exists
+        independently: a record is a turn's and a call's, and the image is one of that record's.
+
+        **The call id is quoted, because a wire mints it and nothing promises it is a path segment.**
+        `url_for` puts a value in as it is, which is right for this console's own hex ids and wrong
+        for a string a provider chose: a space or a `|` in one is a request line no client will send.
+        """
+        return url_for(self.picture, {"session": session, "turn": turn, "call": quote(call, safe=""), "index": index})
 
     def to_asset(self, name: str) -> str:
         return f"{self.assets}/{name}"

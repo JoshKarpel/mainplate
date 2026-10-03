@@ -460,14 +460,14 @@ typed here can reach; `git commit`, `rebase` and the rest work, and pushing is [
 **Recorded and not told**, which is the split [the key scheme](checkpoints.md#the-key-scheme) rests
 on: what a command exited with is settled the moment it exits, and nothing will ever rewrite it.
 
-**Two keys and a background task, because a `pytest` is minutes and somebody is waiting on the
-POST.** `Service.run` appends the command to the inbox and returns; `Commands` runs the thing and
-writes `result:{entry}` when it is over. The panel is drawn from the entry the instant it lands and
-`Command.result is None` is the whole of "still running", exactly as `ToolUse.returned is None` is
-the whole of "still out". That is the control-plane argument the worker already answers for cloning,
-one step along. The cost, stated: **no live output.** The panel says running and then shows the
-whole result, which is right for `git commit` and irritating for a watch; live output needs a
-channel outside the checkpoint, which is a different feature.
+**A [job](jobs.md), because a `pytest` is minutes and somebody is waiting on the POST.**
+`Service.run` records the command as a job and starts it, and `Jobs` writes `result:{entry}` when
+it is over. The panel is drawn from the entry the instant it lands and `Command.result is None` is
+the whole of "still running", exactly as `ToolUse.returned is None` is the whole of "still out";
+while it runs, the panel links to what it has printed so far and carries a stop. Being a job is also
+what it costs: **nothing bounds how long one runs**, and **a console restart runs it again from the
+top**, so what is typed here has to be safe to run twice, as every job does. A `git commit` that a
+restart interrupted is committed again only if it had not finished, which is git's own answer.
 
 **It goes where it was run, and that is read rather than recorded.** The store files an entry in the
 order it arrived, so counting a turn's model records ahead of the command's entry says how far the
@@ -482,19 +482,15 @@ Which turn a command is in is decided the same way, by where its entry sits betw
 opening ones, so nothing has to compute a turn number at the moment it is posted. `Service.run` used
 to answer `turns - 1` off a page that could already have moved.
 
-**`Commands` is the one place this console holds work in flight**, which the note at the top of
-`service.py` says it does not. Stated rather than quietly excepted: a running command belongs to one
-process and does not survive a restart. What keeps it from spreading is that the place holds no
-answers, since the command and its result are both in the checkpoint, so a page renders the same
-thing whichever process is asked, and the task set exists only so a shutdown can reap what it
-started.
+**`Jobs` is one of the two places this console holds work in flight**, which the note at the top of
+`service.py` says it does not; `Commands`, which is a push, is the other, on the same terms. Stated
+rather than quietly excepted: a running process belongs to one console. What keeps it from spreading
+is that the place holds no answers, since the command and its result are both in the checkpoint, so
+a page renders the same thing whichever process is asked.
 
-**A shutdown writes the record from `aclose`, not from the task**, and that is not belt and braces:
-a task cancelled before it has had a turn on the loop never enters its body at all, so its own
-`except` cannot run and nothing would say what became of it. `supply` keeping the first value is
-what lets the run that *did* get to say something for itself, with the partial output it managed,
-keep its answer. `UNFINISHED` is outside both the range a process can exit with and the negatives a
-signal produces, so "the console never learned" is not mistakable for either.
+`UNFINISHED` is the status of a job that never ran or a push the console stopped under: outside both
+the range a process can exit with and the negatives a signal produces, so "the console never learned"
+is not mistakable for either.
 
 **A status is drawn as the number, never as "failed".** `git diff --quiet` exits 1 to mean there
 *are* changes and `grep` exits 1 to mean no match, so flattening it would have this console report a
