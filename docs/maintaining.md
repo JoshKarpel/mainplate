@@ -15,6 +15,11 @@ than guessing at an API from memory**; the same goes for `pydantic_ai`, which mo
 too, or the whole graph gets held back to a release predating it. The cooldown is also why
 `pydantic-ai-slim` is floored a release or two behind its latest.
 
+The tools the pre-commit hooks run are `dev` dependencies like any other, and every hook is `local`:
+pre-commit runs each through `uv run` and builds no environment of its own, so a hook is bumped by
+`uv lock --upgrade-package` under the same cooldown, and `pre-commit autoupdate` has nothing to do.
+Why, and what the copied hook definitions cost, is at the top of `.pre-commit-config.yaml`.
+
 `pydantic-ai-slim[anthropic,openai]` rather than `pydantic-ai`, which pulls every provider SDK, a
 CLI, an MCP server, and an evals framework. Two extras and not more: between them the Anthropic and
 OpenAI wires reach almost every gateway, and each further extra is a whole SDK. The `openai` one is
