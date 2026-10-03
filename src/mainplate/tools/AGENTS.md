@@ -55,6 +55,12 @@ the same reason: both ask git, and over a scratch or `/` either could only refus
 `agent.py` decides the roots, `agent_for` builds the tools from them, and `tests/test_agent.py` holds
 every row of that table against the agent a pass builds.
 
+**`Skills` is a read-only file root, not a new tool.** `reaching` adds it only
+where file tools already exist; its `allowed` names are the session's recorded
+skill index. `read` works there, but `edit`, `create`, and the artifact export
+that uses `Files.create_bytes` must refuse it. The matching bwrap bind is
+read-only too. Repository skills remain ordinary checkout files.
+
 **A plugin's tools are outside that table**, and a session with `NOTHING` still gets them: what a
 plugin reaches is decided by its own tier rather than by what the *model* may touch. They are settled
 at `describe` and never added mid-conversation, because a tool definition sits above the cached

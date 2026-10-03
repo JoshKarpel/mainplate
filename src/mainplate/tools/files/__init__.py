@@ -15,7 +15,8 @@
 from mainplate.tools.files.tools import Files
 from mainplate.tools.files.tools import GitTracked
 from mainplate.tools.files.tools import Scratch
+from mainplate.tools.files.tools import Skills
 from mainplate.tools.files.tools import System
 from mainplate.tools.files.tools import file_tools
 
-__all__ = ["Files", "GitTracked", "Scratch", "System", "file_tools"]
+__all__ = ["Files", "GitTracked", "Scratch", "Skills", "System", "file_tools"]

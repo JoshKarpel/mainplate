@@ -26,13 +26,11 @@
 #
 # The tools hang off the agent as toolsets, and they hang off it *per session* rather than once for
 # the process, because what makes a path safe is the root it is resolved inside and every session
-# picks its own. **Which tools a session gets is decided by its `isolation`**, not by what this
-# module happens to be handed: a checkout gets the file tools over it and its scratch, the whole
-# machine gets them over `/`, and reaching nothing of the machine gets them over a scratch of its
-# own - each beside `bash` where there is a sandbox, and the last two with nothing at all without
-# one, because tools that can only fail are worse than none. `list` and `grep` ask git, so only a
-# checkout gets them. The loop records every model request and tool call through the `Stepping` it
-# is handed by the conversation.
+# picks its own. Isolation decides whether file tools and `bash` exist, and which session files
+# they reach: the checkout and scratch, `/`, or scratch alone. Advertised bundled and user skills
+# add read-only roots to an existing file toolset; they do not grant a session a file tool it
+# otherwise lacked. `list` and `grep` ask git, so only a checkout gets them. The loop records
+# every model request and tool call through the `Stepping` it is handed by the conversation.
 
 from __future__ import annotations
 
@@ -67,12 +65,15 @@ from pydantic_ai.toolsets import AbstractToolset
 from mainplate.config import Config
 from mainplate.config import Endpoint
 from mainplate.config import Format
+from mainplate.context import Entry as ContextEntry
+from mainplate.context import skill_roots
 from mainplate.loop import Agent
 from mainplate.plugins.asking import Live
 from mainplate.plugins.asking import PluginTools
 from mainplate.plugins.asking import asking_through
 from mainplate.plugins.asking import contributions
 from mainplate.roots import environment_named
+from mainplate.sandbox import Bind
 from mainplate.sandbox import Confinement
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import InACheckout
@@ -85,6 +86,7 @@ from mainplate.tools import Artifacts
 from mainplate.tools import Files
 from mainplate.tools import GitTracked
 from mainplate.tools import Scratch
+from mainplate.tools import Skills
 from mainplate.tools import System
 from mainplate.tools import artifact_tools
 from mainplate.tools import bash_tools
@@ -971,15 +973,16 @@ def reaching(
     checkout: Checkout | None = None,
     scratch: Path | None = None,
     bwrap: str | None = None,
+    context: tuple[ContextEntry, ...] = (),
 ) -> Reach:
     """
     What one session's isolation affords, given the checkout, the scratch and the sandbox this
     machine has.
 
-    **Decided by the session's own isolation**, not by what a caller happens to be handed.
-    `Filesystem.NOTHING` reaches nothing of the machine, and that is a scratch directory of the
-    session's own and commands inside it: a conversation that is not about a repository still wants
-    to run a script or keep a note, and what it must not reach is anything that was there before it.
+    **Tool availability follows isolation**, while advertised skills add read-only roots wherever
+    those tools exist. `Filesystem.NOTHING` reaches a scratch directory of the session's own and
+    commands inside it: a conversation without a repository still needs somewhere to keep a note,
+    while its ordinary files must not reach anything that was there before it.
     Offered only where a command can make the directory exist, for the reason the checkout's scratch
     is: a `read` naming a directory nothing ever creates is a tool that can only fail, and a tool
     that can only fail is worse than none, since it spends its description on every request. So a
@@ -994,11 +997,20 @@ def reaching(
     that arm *is* is a sandbox with `/` in it, so without one there is nothing left that anybody
     chose.
     """
+    extra = tuple(
+        Skills(
+            path=root,
+            label="bundled_skills" if tier == "bundled" else "user_skills",
+            allowed=frozenset(item.name for item in context if item.kind == "skill" and item.tier == tier),
+        )
+        for tier, root in skill_roots(context)
+    )
+    binds = tuple(Bind(path=item.path, writable=False, name=item.name) for item in extra)
     match isolation.filesystem:
         case Filesystem.NOTHING if scratch is not None and bwrap is not None:
             return Reach(
-                roots=(Scratch(path=scratch),),
-                confinement=InAScratch(scratch=scratch),
+                roots=(Scratch(path=scratch), *extra),
+                confinement=InAScratch(scratch=scratch, skills=binds),
                 note=f"{scratch_note()}\n\n{network_note(isolation.network)}",
             )
         case Filesystem.NOTHING:
@@ -1009,10 +1021,10 @@ def reaching(
             # name a directory nothing ever creates. The checkout is first, so a relative path still
             # means the repository however many roots a session ends up with.
             if scratch is None or bwrap is None:
-                return Reach(roots=(GitTracked(checkout=checkout),), note=working_note(scratch=False))
+                return Reach(roots=(GitTracked(checkout=checkout), *extra), note=working_note(scratch=False))
             return Reach(
-                roots=(GitTracked(checkout=checkout), Scratch(path=scratch)),
-                confinement=InACheckout(checkout=checkout, scratch=scratch),
+                roots=(GitTracked(checkout=checkout), Scratch(path=scratch), *extra),
+                confinement=InACheckout(checkout=checkout, scratch=scratch, skills=binds),
                 note=f"{working_note(scratch=True)}\n\n{network_note(isolation.network)}",
             )
         case Filesystem.CHECKOUT:
@@ -1021,8 +1033,8 @@ def reaching(
             return Reach()
         case Filesystem.EVERYTHING if bwrap is not None:
             return Reach(
-                roots=(System(path=Path("/")),),
-                confinement=OverEverything(),
+                roots=(System(path=Path("/")), *extra),
+                confinement=OverEverything(skills=binds),
                 note=f"{whole_machine_note()}\n\n{network_note(isolation.network)}",
             )
         case Filesystem.EVERYTHING:
@@ -1040,6 +1052,7 @@ def agent_for(
     bwrap: str | None = None,
     plugins: Live | None = None,
     environment: Mapping[str, str] | None = None,
+    context: tuple[ContextEntry, ...] = (),
     output_cap: int | None = None,
     artifacts: Artifacts | None = None,
 ) -> Agent:
@@ -1105,7 +1118,7 @@ def agent_for(
         **(ModelSettings() if output_cap is None else ModelSettings(max_tokens=output_cap)),
         **(chosen.settings or ModelSettings()),
     }
-    reach = reaching(chosen.isolation, checkout, scratch, bwrap)
+    reach = reaching(chosen.isolation, checkout, scratch, bwrap, context)
     tools: list[AbstractToolset[None]] = []
     if plugins is not None and (contributed := contributions(plugins)):
         tools.append(PluginTools(contributed, asking_through(plugins)))

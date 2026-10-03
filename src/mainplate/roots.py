@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-type RootName = Literal["checkout", "scratch", "machine", "plugin_scratch"]
+type RootName = Literal["checkout", "scratch", "machine", "plugin_scratch", "bundled_skills", "user_skills"]
 """
 The name a place answers to, which is the word on the tool argument and in the environment.
 

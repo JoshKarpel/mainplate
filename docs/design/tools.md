@@ -52,6 +52,14 @@ which is no session's. `list_artifacts` is in every session, and the two that mo
 a file and an artifact wherever there are files to move it between. See
 [Artifacts](artifacts.md#which-tools-a-session-gets).
 
+**Bundled and user skills add read-only roots** wherever the session has file
+tools. `read` opens an advertised `SKILL.md` or its supporting files under
+`bundled_skills` or `user_skills`; `edit` and `create` refuse there. Repository
+skills need no new root, since they are ordinary checkout files. The two
+extra roots cost an exception to isolation's tool-reach table, but not a
+second file-reading tool or a copy of the checkout. See [loading
+context](context-loading.md).
+
 ## `list`
 
 **It asks git rather than walking**, so a `.gitignore` is obeyed and a `.venv` or a `node_modules`

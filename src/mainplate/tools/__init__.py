@@ -17,6 +17,7 @@ from mainplate.tools.bash import bash_tools
 from mainplate.tools.files import Files
 from mainplate.tools.files import GitTracked
 from mainplate.tools.files import Scratch
+from mainplate.tools.files import Skills
 from mainplate.tools.files import System
 from mainplate.tools.files import file_tools
 from mainplate.tools.grep import grep_tools
@@ -26,6 +27,7 @@ __all__ = [
     "Files",
     "GitTracked",
     "Scratch",
+    "Skills",
     "System",
     "artifact_tools",
     "bash_tools",

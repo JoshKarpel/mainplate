@@ -273,6 +273,7 @@ def session_page(
                             # console, so a menu row, the button the box shows in that mode, and the
                             # sentence above it cannot disagree about what is on offer.
                             plugins=plugins,
+                            context=showing.context,
                         ),
                     )
                     if showing.session.archived is None
