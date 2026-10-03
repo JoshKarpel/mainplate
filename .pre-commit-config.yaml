@@ -8,40 +8,128 @@
 # copies `just vendor` writes beside each are the same bytes in another coding, and a megabyte too.
 exclude: ^src/mainplate/assets/.*(\.woff2|\.min\.js|-LICENSE\.txt|-OFL\.txt)(\.br|\.zst|\.gz)?$
 
+# **Every hook is `local`, and pre-commit runs them rather than installing them.** Each tool is in the
+# `dev` group in `pyproject.toml` and runs through `uv run`, so its version is the one `uv.lock` holds,
+# under the same cooldown as everything else, and a checkout whose environment is synced commits with
+# no network. A remote hook repository would have pre-commit build an environment of its own per
+# entry, named after whichever `python3.x` it finds on `PATH` at that moment: `uv run` puts the
+# project's interpreter there and git's hook does not, so a hook installed by `just setup` was looked
+# for again under another name at the first commit, inside a session with the network off.
+#
+# `--frozen` so a hook never resolves: a `pyproject.toml` edited without re-locking would otherwise
+# send every hook to the network to re-lock first, where `uv-lock` below is the hook that says so.
+#
+# The cost is that each definition below is a copy of upstream's `.pre-commit-hooks.yaml`, `files`,
+# `types` and `args` included, taken at the version named above its block, and a release that
+# changes one upstream tells nobody here. Bumping a tool is `uv lock --upgrade-package`, and then reading
+# that file at the new version against the block.
 repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
+  # pre-commit/pre-commit-hooks v6.0.0
+  - repo: local
     hooks:
       - id: check-added-large-files
+        name: check for added large files
+        entry: uv run --frozen check-added-large-files
+        language: unsupported
       - id: check-case-conflict
+        name: check for case conflicts
+        entry: uv run --frozen check-case-conflict
+        language: unsupported
       - id: check-merge-conflict
+        name: check for merge conflicts
+        entry: uv run --frozen check-merge-conflict
+        language: unsupported
+        types: [text]
       - id: check-toml
+        name: check toml
+        entry: uv run --frozen check-toml
+        language: unsupported
+        types: [toml]
       - id: check-yaml
+        name: check yaml
+        entry: uv run --frozen check-yaml
+        language: unsupported
+        types: [yaml]
       - id: detect-private-key
+        name: detect private key
+        entry: uv run --frozen detect-private-key
+        language: unsupported
+        types: [text]
       - id: end-of-file-fixer
+        name: fix end of files
+        entry: uv run --frozen end-of-file-fixer
+        language: unsupported
+        types: [text]
       - id: forbid-new-submodules
+        name: forbid new submodules
+        entry: uv run --frozen forbid-new-submodules
+        language: unsupported
+        types: [directory]
       - id: mixed-line-ending
+        name: mixed line ending
+        entry: uv run --frozen mixed-line-ending
+        language: unsupported
+        types: [text]
       - id: trailing-whitespace
+        name: trim trailing whitespace
+        entry: uv run --frozen trailing-whitespace-fixer
+        language: unsupported
+        types: [text]
 
-  - repo: https://github.com/python-jsonschema/check-jsonschema
-    rev: 0.38.0
+  # python-jsonschema/check-jsonschema 0.38.0
+  - repo: local
     hooks:
       - id: check-github-workflows
+        name: Validate GitHub Workflows
+        entry: uv run --frozen check-jsonschema --builtin-schema vendor.github-workflows
+        language: unsupported
+        files: ^\.github/workflows/[^/]+$
+        types: [yaml]
       - id: check-github-actions
+        name: Validate GitHub Actions
+        entry: uv run --frozen check-jsonschema --builtin-schema vendor.github-actions
+        language: unsupported
+        files: >
+          (?x)^(
+            action\.(yml|yaml)|
+            \.github/actions/(.+/)?action\.(yml|yaml)
+          )$
+        types: [yaml]
 
-  - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: v1.29.0
+  # zizmorcore/zizmor-pre-commit v1.29.0
+  - repo: local
     hooks:
       - id: zizmor
+        name: zizmor
+        entry: uv run --frozen zizmor --no-progress
+        language: unsupported
+        files: (\.github/(workflows/.*|dependabot.ya?ml))|(action\.ya?ml)$
+        types: [yaml]
+        require_serial: true
 
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.2
+  # astral-sh/ruff-pre-commit v0.16.2
+  - repo: local
     hooks:
       - id: ruff-format
+        name: ruff format
+        entry: uv run --frozen ruff format --force-exclude
+        language: unsupported
+        types_or: [python, pyi, jupyter]
+        require_serial: true
       - id: ruff-check
-        args: [--fix]
+        name: ruff check
+        entry: uv run --frozen ruff check --force-exclude --fix
+        language: unsupported
+        types_or: [python, pyi, jupyter]
+        require_serial: true
 
-  - repo: https://github.com/astral-sh/uv-pre-commit
-    rev: 0.12.3
+  # astral-sh/uv-pre-commit 0.12.3. `uv` itself is whichever is on `PATH` rather than a package in
+  # the lock it is checking.
+  - repo: local
     hooks:
       - id: uv-lock
+        name: uv-lock
+        entry: uv lock
+        language: unsupported
+        files: ^(uv\.lock|pyproject\.toml|uv\.toml)$
+        pass_filenames: false

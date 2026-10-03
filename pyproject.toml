@@ -95,8 +95,13 @@ dev = [
     "pytest-timeout>=2.3",
     "pytest-xdist>=3",
     "mypy>=2.3.0",
+    # Every tool a pre-commit hook runs is here, because every hook is `local` and runs it through
+    # `uv run`; `.pre-commit-config.yaml` says why. Removing one of these breaks a hook.
     "ruff>=0.15.22",
     "pre-commit>=4.4",
+    "pre-commit-hooks>=6.0.0",
+    "check-jsonschema>=0.38.0",
+    "zizmor>=1.29.0",
     "types-markdown>=3.7",
     "types-pygments>=2.18",
     "watchfiles>=1.2.0",
