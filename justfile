@@ -23,11 +23,13 @@ alias l := list
 #
 # One setup for fresh clones and mainplate sessions alike: sync dependencies, fetch Chromium, and
 # install the commit hook. A session that enables the repository's setup plugin gets the same checks.
+# `--install-hooks` because the hook alone fetches nothing: the hook environments are otherwise built
+# on the first commit, and a session has a network only while this runs.
 [doc('Prepare a fresh clone: dependencies, the browser, and pre-commit as a git hook')]
 setup:
     uv sync
     uv run playwright install chromium
-    uv run pre-commit install
+    uv run pre-commit install --install-hooks
 
 # Every script this console serves that somebody else wrote, fetched from where it was published
 # and checked against the digest `scripts/vendored.toml` records before any of it is written. One

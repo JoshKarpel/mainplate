@@ -453,6 +453,29 @@ def recorded_registration(enrolled: Sequence[Enrolled]) -> dict[str, object]:
     ).recorded()
 
 
+def recorded_description(said: object) -> object:
+    """
+    Read an older registration's answer flags without accepting them from a new plugin.
+
+    A registration is a session's write-once snapshot, so rejecting its old declaration would
+    make the conversation unreadable after an upgrade. Fresh setup still goes through strict
+    `parse_described`, which refuses those fields from a plugin today.
+    """
+    if not isinstance(said, dict) or not isinstance(said.get("answers"), list):
+        return said
+    answers = []
+    for answer in said["answers"]:
+        if not isinstance(answer, dict) or ("demands" not in answer and "immediate" not in answer):
+            answers.append(answer)
+            continue
+        fields = dict(answer)
+        demands = fields.pop("demands", True)
+        immediate = fields.pop("immediate", False)
+        fields["input"] = "none" if immediate else "required" if demands else "optional"
+        answers.append(fields)
+    return {**said, "answers": answers}
+
+
 def parse_registration(recorded: object) -> tuple[Enrolled, ...]:
     """
     What a session recorded about its plugins, back as the values a pass runs them from.
@@ -465,7 +488,7 @@ def parse_registration(recorded: object) -> tuple[Enrolled, ...]:
     return tuple(
         Enrolled(
             installed=Installed(tier=Tier(each.tier), name=each.name, path=Path(each.path)),
-            described=parse_described(f"{each.tier}:{each.name}", each.described),
+            described=parse_described(f"{each.tier}:{each.name}", recorded_description(each.described)),
         )
         for each in held.plugins
     )

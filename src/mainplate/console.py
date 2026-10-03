@@ -79,6 +79,7 @@ from mainplate.pages.transcript import transcript_region
 from mainplate.plugins.protocol import settings_of
 from mainplate.sandbox import Filesystem
 from mainplate.sandbox import Isolation
+from mainplate.service import InvalidAnswerInput
 from mainplate.service import Service
 from mainplate.sessions import TITLE_FIELD
 from mainplate.sessions import read_tending
@@ -433,10 +434,9 @@ def parse_form_send(raw: bytes) -> Sending:
     could silently put a message in the wrong conversation.
 
     **The disposition is read first, because it decides whether an empty box is a fault.** Every
-    console answer demands a message except `PUSH`, which takes nothing from the box at all; a
-    plugin's own answer may not demand one either. That is the same split the button carries as
-    `formnovalidate`: the browser refuses an empty box for every other submitter, and this is where
-    the exception is honoured rather than trusted.
+    console answer demands a message except `PUSH`, which takes nothing from the box at all.
+    A plugin's declaration chooses required, optional or no input, but the parser has no session
+    to read that declaration from: the handler checks it rather than trusting the browser.
     """
     fields = fields_in(raw)
     named = fields.get(DISPOSITION_FIELD, [""])[0].strip()
@@ -453,10 +453,8 @@ def parse_form_send(raw: bytes) -> Sending:
     if where is None:
         raise NotAMessage(f"{named!r} is not somewhere a message can be sent")
     said = said_in(fields)
-    # **Every console answer demands a message and a plugin's own may not**, which is what `demands`
-    # on a declared answer says. This layer cannot tell which, for the reason above, so an empty box
-    # is allowed through to the handler and the plugin is what does or does not mind.
-    if not said and not isinstance(where, (ToPlugin, ToContext)) and where is not Disposition.PUSH:
+    # Plugin input policy needs the session's declaration; context invocations always need text.
+    if not said and not isinstance(where, ToPlugin) and where is not Disposition.PUSH:
         raise NotAMessage("a message cannot be empty")
     return Sending(said=said, where=where)
 
@@ -1070,7 +1068,10 @@ async def say(service: Service, session: str, sending: Sending, reader: Reader) 
     if isinstance(sending.where, ToPlugin):
         if stalled_by(found, reader) is not None:
             return page_response(422, refusal_page(LINKS, 422, f"session {session} cannot be answered"))
-        delivered = await service.compose(session, found, sending.where.leader, sending.said)
+        try:
+            delivered = await service.compose(session, found, sending.where.leader, sending.said)
+        except InvalidAnswerInput as failed:
+            return page_response(422, refusal_page(LINKS, 422, str(failed)))
         if delivered is None:
             return page_response(
                 422, refusal_page(LINKS, 422, f"no plugin of session {session} answers to /{sending.where.leader}")

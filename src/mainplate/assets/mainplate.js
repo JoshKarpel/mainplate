@@ -716,13 +716,17 @@
       return showing;
     };
 
-    // Taking one, which is the whole of what a leader does: the word comes out of the box and the
-    // composer is in that answer's mode, with nothing sent and nothing recorded.
+    // Taking a leader clears the word from the box. An answer needing no text can submit
+    // through its own button at once; the others enter a mode with nothing yet sent.
     const takeLeader = (row) => {
       const box = composerBox();
       if (!box || !row) return;
       shutLeaders();
       box.value = "";
+      if (row.dataset.immediate !== undefined) {
+        box.form.requestSubmit(row);
+        return;
+      }
       lead(row.dataset.leader);
       box.focus();
     };

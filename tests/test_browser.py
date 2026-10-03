@@ -307,7 +307,7 @@ CARDED = Enrolled(
                 {
                     "leader": "handoff",
                     "saying": "Have it write down where it has got to and carry on from that",
-                    "demands": False,
+                    "input": "optional",
                 }
             ],
             "card": {
@@ -3281,7 +3281,7 @@ class TestNamingAModeFromTheKeyboard:
         checks = Enrolled(
             installed=Installed(tier=Tier.REPOSITORY, name="quality-check", path=Path("/nowhere")),
             described=Described.model_validate(
-                {"answers": [{"leader": "run", "saying": "run the hooks over what has changed", "demands": False}]}
+                {"answers": [{"leader": "run", "saying": "run the hooks over what has changed", "input": "optional"}]}
             ),
         )
         session = await started(service, "what is a mainplate", DEFAULT_CHOICE, enrolled=(CARDED, checks))
@@ -3294,22 +3294,104 @@ class TestNamingAModeFromTheKeyboard:
         await expect(page.locator('.sender__leader[data-leader="quality-check:run"]')).to_be_visible()
         assert await page.input_value(".composer textarea") == ""
 
-    async def test_every_answer_the_server_drew_has_a_mode_to_be_in(
+    @pytest.mark.parametrize("choice", ["space", "palette"])
+    async def test_a_plugins_immediate_answer_posts_without_entering_a_mode(
+        self, page: Page, console: tuple[str, Service], choice: str
+    ) -> None:
+        """An immediate plugin answer posts its qualified submitter and an empty box."""
+        url, service = console
+        checks = Enrolled(
+            installed=Installed(tier=Tier.REPOSITORY, name="quality-check", path=Path("/nowhere")),
+            described=Described.model_validate(
+                {"answers": [{"leader": "check", "saying": "check the work", "input": "none"}]}
+            ),
+        )
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE, enrolled=(CARDED, checks))
+        await taking(service, session.id)
+        await page.goto(f"{url}/sessions/{session.id}", wait_until="load")
+        await page.evaluate(
+            """() => {
+                window.submitted = [];
+                document.addEventListener('submit', event => {
+                    window.submitted.push(Object.fromEntries(new FormData(event.target, event.submitter)));
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                }, true);
+            }"""
+        )
+        await page.click(".composer textarea")
+        if choice == "space":
+            await page.keyboard.type("/quality-check:check ")
+        else:
+            await page.keyboard.type("/quality-check:ch")
+            await page.click('.sender__option[data-leader="quality-check:check"]')
+
+        await page.wait_for_function("window.submitted.length === 1")
+        assert await page.evaluate("window.submitted[0]") == {
+            "prompt": "",
+            "disposition": "plugin:quality-check:check",
+        }
+        await expect(page.locator(".composer")).not_to_have_attribute("data-leading", "quality-check:check")
+        refused = await page.request.post(
+            f"{url}/sessions/{session.id}/messages",
+            form={"prompt": "unexpected text", "disposition": "plugin:quality-check:check"},
+        )
+        assert refused.status == 422
+        assert "takes nothing from the box" in await refused.text()
+
+    async def test_a_required_plugins_answer_refuses_an_empty_direct_post(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """A direct post cannot bypass the browser's required-field check."""
+        url, service = console
+        checks = Enrolled(
+            installed=Installed(tier=Tier.REPOSITORY, name="quality-check", path=Path("/nowhere")),
+            described=Described.model_validate({"answers": [{"leader": "check", "saying": "check the work"}]}),
+        )
+        session = await started(service, "what is a mainplate", DEFAULT_CHOICE, enrolled=(CARDED, checks))
+        await taking(service, session.id)
+        refused = await page.request.post(
+            f"{url}/sessions/{session.id}/messages", form={"prompt": "", "disposition": "plugin:quality-check:check"}
+        )
+        assert refused.status == 422
+        assert "needs text in the box" in await refused.text()
+
+    async def test_push_leader_sends_without_a_message(self, page: Page, working: tuple[str, Service]) -> None:
+        """A completed `/push` takes the empty box and posts the push rather than entering a mode."""
+        await a_session_with_files(working, page)
+        await page.click(".composer textarea")
+        await page.keyboard.type("/push ")
+
+        await expect(page.locator("#transcript .ran--push")).to_have_count(1)
+        await expect(page.locator(".composer")).not_to_have_attribute("data-leading", "push")
+        assert await page.input_value(".composer textarea") == ""
+
+    async def test_push_chosen_from_a_partial_leader_sends_without_a_message(
+        self, page: Page, working: tuple[str, Service]
+    ) -> None:
+        """The palette's row also submits directly after it clears a partially typed leader."""
+        await a_session_with_files(working, page)
+        await page.click(".composer textarea")
+        await page.keyboard.type("/pu")
+        await page.click('.sender__option[data-leader="push"]')
+
+        await expect(page.locator("#transcript .ran--push")).to_have_count(1)
+        assert await page.input_value(".composer textarea") == ""
+
+    async def test_every_answer_that_takes_text_has_a_mode_to_be_in(
         self, page: Page, console: tuple[str, Service]
     ) -> None:
         """
-        The one drift the mode's shape can have, asked over every answer rather than over a chosen
-        one. Which modes exist is read off the buttons the server drew, but which of them is *shown*
-        is a list of names in `mainplate.css`, and CSS cannot ask whether a descendant's attribute
-        matches an ancestor's. So an answer added without a line there enters a mode that hides Send
-        and reveals nothing: a composer with no primary button and no sentence saying where the text
-        is about to go.
+        Every answer that takes text has a visible button and sentence after its leader is chosen.
 
-        A browser because the failure is entirely in the cascade - the markup is identical either
-        way, and both buttons are in the document in both.
+        The palette's rows and the mode's buttons are drawn from the same answers. A mode that
+        hides Send without showing its own button would strand what somebody was about to type.
+        This needs a browser because the failure is in the cascade, not the markup.
         """
         await a_conversation(console, page)
-        leaders = await page.locator(".sender__leader").evaluate_all("row => row.map(one => one.dataset.leader)")
+        leaders = await page.locator(".sender__leader:not([data-immediate])").evaluate_all(
+            "row => row.map(one => one.dataset.leader)"
+        )
         assert leaders, "the menu drew no answers at all"
 
         for leader in leaders:

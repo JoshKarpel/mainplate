@@ -471,6 +471,10 @@ class Conversation:
     """
 
 
+class InvalidAnswerInput(ValueError):
+    """A submitted plugin answer disagrees with its declared input policy."""
+
+
 @dataclass(frozen=True, slots=True)
 class Service:
     database: Database
@@ -1169,6 +1173,11 @@ class Service:
         if answering is None:
             return None
         plugin, own = answering
+        declared = next(each for each in plugin.described.answers if each.leader == own)
+        if declared.input == "none" and said:
+            raise InvalidAnswerInput(f"/{leader} takes nothing from the box")
+        if declared.input == "required" and not said:
+            raise InvalidAnswerInput(f"/{leader} needs text in the box")
         notes = await composed(live, plugin, own, said)
         for note in notes:
             await self.note(session, note)
