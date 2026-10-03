@@ -333,7 +333,7 @@ def written(text: str, *, document: bool = False) -> Element:
     return div(cls="text", children=as_document(text) if document else as_message(text))
 
 
-def tool_block(links: Links, used: ToolUse, anchor: str, at: int) -> Element:
+def tool_block(links: Links, session: str, turn: int, used: ToolUse, anchor: str, at: int) -> Element:
     """
     One call, folded, with what it was handed and what it gave back.
 
@@ -363,9 +363,19 @@ def tool_block(links: Links, used: ToolUse, anchor: str, at: int) -> Element:
     **A call that kept an artifact version links to it from the summary**, beside the path, so the
     page it made is one press away without opening the call. Pinned to that version, since what the
     call made is the thing a reader is asking about, whatever the artifact has become since.
+
+    **An image the call handed the model is drawn by address**, which is what the session and the
+    turn are here for: the bytes are in the call's record and the page asks for them, so a transcript
+    of screenshots stays the size of its text on every render and every message of the live
+    connection.
     """
     subject = subject_of(used.tool, used.arguments)
     kept = recorded_kept(used)
+    pictured = (
+        ()
+        if used.returned is None
+        else tuple(links.to_picture(session, turn, used.call, index) for index in range(len(used.returned.pictures)))
+    )
     return details(
         cls="tool",
         attrs={"id": f"{anchor}-tool-{at}", **opens(False)},
@@ -420,7 +430,7 @@ def tool_block(links: Links, used: ToolUse, anchor: str, at: int) -> Element:
                     ),
                 ]
             ),
-            call_body(used),
+            call_body(used, pictured),
         ],
     )
 
@@ -608,7 +618,7 @@ def written_block(kind: str, text: str, *, document: bool = False) -> Element:
     return div(cls=("block", kind), attrs={"data-markdown": text}, children=written(text, document=document))
 
 
-def block_element(links: Links, block: Block, panel: Panel, at: int) -> Element:
+def block_element(links: Links, session: str, block: Block, panel: Panel, at: int) -> Element:
     """
     One block, told where it is by the panel holding it.
 
@@ -643,7 +653,10 @@ def block_element(links: Links, block: Block, panel: Panel, at: int) -> Element:
         case Reasoning(text=text):
             return written_block("block--thinking", text)
         case ToolUse():
-            return div(cls=("block", "block--tool"), children=tool_block(links, block, panel.anchor, at))
+            return div(
+                cls=("block", "block--tool"),
+                children=tool_block(links, session, panel.turn, block, panel.anchor, at),
+            )
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -893,7 +906,7 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
                 role=panel.role,
                 title=panel.title,
             ),
-            *(block_element(links, block, panel, at) for at, block in enumerate(panel.blocks)),
+            *(block_element(links, session, block, panel, at) for at, block in enumerate(panel.blocks)),
             *(
                 (div(cls=("block", "block--diff"), children=batch),)
                 if panel.diff is not None and (batch := batch_element(panel.anchor, panel.diff)) is not None

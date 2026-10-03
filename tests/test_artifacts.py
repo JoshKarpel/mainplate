@@ -298,17 +298,20 @@ class TestTheTools:
 class TestTheCallLinksToWhatItKept:
     def test_the_summary_links_to_the_version_the_call_recorded(self) -> None:
         used = ToolUse(
+            call="c1",
             tool="file_to_artifact",
             arguments='{"path": "page.html"}',
             returned=Returned(
                 "success", "The poll: artifact 7a, version 2 of 2", {KEPT: {"artifact": "7a", "version": 2}}
             ),
         )
-        assert f'href="{LINKS.to_artifact("7a", 2)}"' in render(tool_block(LINKS, used, "panel-1-0", 0))
+        assert f'href="{LINKS.to_artifact("7a", 2)}"' in render(tool_block(LINKS, "s", 1, used, "panel-1-0", 0))
 
     def test_a_call_that_recorded_nothing_links_nowhere(self) -> None:
-        used = ToolUse(tool="file_to_artifact", arguments='{"path": "page.html"}', returned=Returned("failed", "no"))
-        assert "tool__kept" not in render(tool_block(LINKS, used, "panel-1-0", 0))
+        used = ToolUse(
+            call="c1", tool="file_to_artifact", arguments='{"path": "page.html"}', returned=Returned("failed", "no")
+        )
+        assert "tool__kept" not in render(tool_block(LINKS, "s", 1, used, "panel-1-0", 0))
 
 
 class TestThePages:

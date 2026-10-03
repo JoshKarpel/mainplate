@@ -299,5 +299,14 @@ produce once the turn lands**: the same responses, in the same order, cut by `bl
 results that have not arrived still out. That is why a panel never moves as a turn fills in, and why
 the morph when `messages` finally lands touches nothing. `test_conversation.py` asserts the two
 readings of a finished turn are equal, which is also what catches the subtle half of it: a tool
-result's text has to be what `ToolReturnPart.model_response_str` produces, so `returned_step` uses
-`pydantic_core.to_json` and not `json.dumps`, whose spacing differs on every structured return.
+result's text has to be what `ToolReturnPart.model_response_str` produces. So `returned_step` does
+not render a record itself; it builds the part the loop sends from it, through `durability.told`,
+and reads that through `returned_of`, the same function the settled reading uses. A rendering of
+its own matched only by care is how a structured return's spacing once differed, and how an image
+would print as base64 on one side and be left out on the other.
+
+**An image a tool returned is in the call's record as base64**, because what the model was sent has
+to be what a replay sends, and the record is the only place that can hold it. Pydantic AI does not
+read that mapping back into an image on its own (`tool_return_ta` leaves it a mapping), so `told`
+validates it as a tool result, which is the reading `turn:{n}:messages` gets. The page never carries
+the bytes: [the route serving one](tools.md#reading-an-image) reads them out of the same record.

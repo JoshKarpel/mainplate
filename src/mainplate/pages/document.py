@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from typing import Final
+from urllib.parse import quote
 from urllib.parse import urlencode
 
 from without_html import DOCTYPE
@@ -168,6 +169,7 @@ class Links:
     artifact: Reversible
     artifact_content: Reversible
     artifact_download: Reversible
+    picture: Reversible
     # A prefix rather than a route, and the one exception: the route serving the assets needs an
     # inventory that does not exist until startup, where every field above is a module-level
     # value. Both are built from one constant, so they cannot disagree about where they are.
@@ -314,6 +316,19 @@ class Links:
     def to_artifact_download(self, artifact: str, version: int) -> str:
         """The same bytes as `to_artifact_content`, served to be saved rather than shown."""
         return f"{url_for(self.artifact_download, {'artifact': artifact})}?{urlencode({VERSION_FIELD: version})}"
+
+    def to_picture(self, session: str, turn: int, call: str, index: int) -> str:
+        """
+        One image a call handed the model, named by the record it is in and its place there.
+
+        Path segments rather than a query, because each one narrows to a single thing that exists
+        independently: a record is a turn's and a call's, and the image is one of that record's.
+
+        **The call id is quoted, because a wire mints it and nothing promises it is a path segment.**
+        `url_for` puts a value in as it is, which is right for this console's own hex ids and wrong
+        for a string a provider chose: a space or a `|` in one is a request line no client will send.
+        """
+        return url_for(self.picture, {"session": session, "turn": turn, "call": quote(call, safe=""), "index": index})
 
     def to_asset(self, name: str) -> str:
         return f"{self.assets}/{name}"

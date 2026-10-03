@@ -20,6 +20,7 @@ from mainplate.reference import NotAReference
 from mainplate.reference import Prices
 from mainplate.reference import Reference
 from mainplate.reference import References
+from mainplate.reference import Trait
 from mainplate.reference import describe
 from mainplate.reference import is_url
 from mainplate.reference import load_reference
@@ -497,3 +498,31 @@ class TestTheMostARequestMayGenerate:
             references=References(current=Reference(qualified={"p/known": Facts(context=100)}, upstream={})),
         )
         assert prices.pricer(self.CHOICE)(RequestUsage(input_tokens=1_000)) is None
+
+
+class TestWhetherAModelSeesImages:
+    """
+    Only a record saying so is yes, because the two ways of being wrong cost different amounts: a
+    model refused an image carries on, and one sent an image it cannot take has every request after
+    it refused.
+    """
+
+    CHOICE = Choice(endpoint="gateway", model="p/known")
+
+    def prices(self, references: References) -> Prices:
+        offering = Offering(endpoint="gateway", format="anthropic", url=None, models=(listing("p/known"),))
+        catalogues = Catalogues(current=Catalogue(offered={"gateway": offering}, default=self.CHOICE))
+        return Prices(catalogues=catalogues, references=references)
+
+    def recorded(self, *traits: tuple[Trait, bool]) -> References:
+        return References(current=Reference(qualified={"p/known": Facts(traits=traits)}, upstream={}))
+
+    def test_a_record_saying_it_sees_is_yes(self) -> None:
+        assert self.prices(self.recorded(("vision", True))).sees(self.CHOICE) is True
+
+    @pytest.mark.parametrize("traits", [(("vision", False),), (("tools", True),)], ids=["denied", "never-mentioned"])
+    def test_a_record_denying_it_or_saying_nothing_is_no(self, traits: tuple[tuple[Trait, bool], ...]) -> None:
+        assert self.prices(self.recorded(*traits)).sees(self.CHOICE) is False
+
+    def test_no_database_is_no(self) -> None:
+        assert self.prices(References()).sees(self.CHOICE) is False

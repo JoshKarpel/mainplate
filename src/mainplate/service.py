@@ -27,6 +27,7 @@ from datetime import timedelta
 from functools import partial
 from pathlib import Path
 
+from pydantic_ai.messages import BinaryContent
 from without_durability_sqlite import Database
 from without_durability_sqlite import SqliteCheckpointer
 from without_durability_sqlite import SqliteDurable
@@ -57,6 +58,7 @@ from mainplate.conversation import failure_in
 from mainplate.conversation import fork_branch
 from mainplate.conversation import fork_point
 from mainplate.conversation import opening_tree_key
+from mainplate.conversation import picture_in
 from mainplate.conversation import plugins_refused_in
 from mainplate.conversation import recorded_choice
 from mainplate.conversation import recorded_command
@@ -639,6 +641,19 @@ class Service:
         if found is None:
             return None
         return await self.conversation(found, await self.checkpointer.load(session))
+
+    async def picture(self, session: str, turn: int, call: str, index: int) -> BinaryContent | None:
+        """
+        One image a call handed the model, or nothing where the session, the call or the image is not there.
+
+        The checkpoint and not the conversation, because the image is one record and a conversation
+        is every record decoded: the page asks for these one `<img>` at a time, and each building a
+        whole transcript to throw away would make a panel of screenshots the most expensive thing on
+        it. The index decides existence for `read`'s reason.
+        """
+        if await read_session(self.database, session) is None:
+            return None
+        return picture_in(await self.checkpointer.load(session), turn, call, index)
 
     async def forkable(self, session: str, at: int) -> tuple[Conversation, str | None] | None:
         """

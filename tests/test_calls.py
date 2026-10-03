@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 import json
+from typing import Final
 
 import pytest
+from calling import calling
+from conftest import came_back
+from conftest import started
+from pydantic_ai.messages import BinaryImage
+from pydantic_core import to_jsonable_python
+from without_asgi import ASGIApp
 from without_html import render
 
 from mainplate.calls import Change
@@ -15,9 +22,11 @@ from mainplate.calls import rows_of
 from mainplate.console import LINKS
 from mainplate.conversation import Returned
 from mainplate.conversation import ToolUse
+from mainplate.conversation import tool_key
 from mainplate.pages.transcript import LONGEST_OPEN_DIFF
 from mainplate.pages.transcript import batch_element
 from mainplate.pages.transcript import tool_block
+from mainplate.service import Service
 from mainplate.tools.files.tools import diffed
 
 PYTHON_READ = "a.py, 3 lines\n\nqwrt│def f():\n----│\nmkpv│    return 1"
@@ -28,7 +37,7 @@ DIFF = "--- a.py\n+++ a.py\n@@ -1,3 +1,3 @@\n def f():\n-    return 1\n+    retu
 
 
 def drawn(tool: str, arguments: dict[str, object], returned: Returned | None) -> str:
-    return render(call_body(ToolUse(tool=tool, arguments=json.dumps(arguments), returned=returned)))
+    return render(call_body(ToolUse(call="c1", tool=tool, arguments=json.dumps(arguments), returned=returned)))
 
 
 def ran_a_pipe() -> str:
@@ -128,9 +137,8 @@ class TestEveryCallStartsShut:
     @pytest.mark.parametrize("tool", ["create", "edit", "read", "list", "grep", "bash", "hand_off"])
     @pytest.mark.parametrize("returned", [None, Returned("success", "done")], ids=["out", "back"])
     def test_a_call_is_drawn_shut_and_says_so(self, tool: str, returned: Returned | None) -> None:
-        drawn_shut = render(
-            tool_block(LINKS, ToolUse(tool=tool, arguments='{"path": "a.py"}', returned=returned), "panel-0-1", 0)
-        )
+        used = ToolUse(call="c1", tool=tool, arguments='{"path": "a.py"}', returned=returned)
+        drawn_shut = render(tool_block(LINKS, "s", 0, used, "panel-0-1", 0))
         assert 'id="panel-0-1-tool-0" data-opens="shut"' in drawn_shut
 
 
@@ -257,7 +265,7 @@ class TestWhatAnOpenCallShows:
         )
 
     def test_a_call_that_is_not_an_object_is_shown_as_it_arrived(self) -> None:
-        body = render(call_body(ToolUse(tool="bash", arguments='{"command": "ls"', returned=None)))
+        body = render(call_body(ToolUse(call="c1", tool="bash", arguments='{"command": "ls"', returned=None)))
         assert '<pre><code>{"command": "ls"</code></pre>' in body
 
     def test_a_call_still_out_shows_what_it_was_handed_and_nothing_else(self) -> None:
@@ -287,6 +295,80 @@ index 0000000..3333333
 @@ -0,0 +1,1 @@
 +hello
 """
+
+
+# A PNG's signature and a tail, which is all the console ever looks at: it serves bytes and sniffs
+# nothing past the first eight.
+PNG: Final = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+
+# An id with a character a path segment has to quote, which is the shape some wires give a call.
+CALL: Final = "call_7|fc 2"
+
+
+class TestDrawingAnImageACallWasShown:
+    """
+    The image is in the call's record and the page asks for it, so what a panel carries is an
+    address per image, drawn shut and lazy so nothing is fetched until somebody opens the call.
+    """
+
+    def drawn(self, pictures: tuple[str, ...]) -> str:
+        used = ToolUse(
+            call=CALL,
+            tool="read",
+            arguments='{"path": "shot.png"}',
+            returned=Returned("success", "shot.png, a PNG image of 12 KiB", pictures=pictures),
+        )
+        return render(tool_block(LINKS, "s1", 3, used, "panel-3-1", 0))
+
+    def test_each_image_is_drawn_lazily_from_its_own_address(self) -> None:
+        body = self.drawn(("image/png", "image/webp"))
+        for index in range(2):
+            address = LINKS.to_picture("s1", 3, CALL, index)
+            assert f'<a class="tool__picture" href="{address}"><img src="{address}"' in body
+        assert body.count('loading="lazy"') == 2
+
+    def test_a_call_that_returned_no_image_draws_no_room_for_one(self) -> None:
+        assert "tool__pictures" not in self.drawn(())
+
+
+class TestServingAnImageACallWasShown:
+    async def recorded(self, service: Service) -> str:
+        """A session whose first turn's call handed the model one PNG, recorded as the loop records it."""
+        session = await started(service, "look at it")
+        shown = ["shot.png, a PNG image", BinaryImage(PNG, media_type="image/png")]
+        await service.checkpointer.supply(session.id, tool_key(0, CALL), came_back(to_jsonable_python(shown)))
+        return session.id
+
+    async def test_the_image_is_served_as_itself_under_its_own_type(self, app: ASGIApp, service: Service) -> None:
+        session = await self.recorded(service)
+        async with calling(app) as client:
+            served = await client.get(LINKS.to_picture(session, 0, CALL, 0))
+        assert (served.status, served.body, served.headers["content-type"]) == (200, PNG, "image/png")
+
+    async def test_it_is_held_to_that_type_and_runs_nothing_opened_alone(self, app: ASGIApp, service: Service) -> None:
+        session = await self.recorded(service)
+        async with calling(app) as client:
+            served = await client.get(LINKS.to_picture(session, 0, CALL, 0))
+        assert served.headers["x-content-type-options"] == "nosniff"
+        assert served.headers["content-security-policy"] == "sandbox; default-src 'none'"
+
+    @pytest.mark.parametrize(
+        ("turn", "call", "index"),
+        [(0, CALL, 1), (1, CALL, 0), (0, "call_8", 0)],
+        ids=["no-such-image", "no-such-turn", "no-such-call"],
+    )
+    async def test_anything_not_there_is_a_bare_not_found(
+        self, app: ASGIApp, service: Service, turn: int, call: str, index: int
+    ) -> None:
+        session = await self.recorded(service)
+        async with calling(app) as client:
+            served = await client.get(LINKS.to_picture(session, turn, call, index))
+        assert (served.status, served.body) == (404, b"")
+
+    async def test_a_session_nobody_started_is_not_found_either(self, app: ASGIApp) -> None:
+        async with calling(app) as client:
+            served = await client.get(LINKS.to_picture("nobody", 0, CALL, 0))
+        assert served.status == 404
 
 
 class TestABlocksBatch:

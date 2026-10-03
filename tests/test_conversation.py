@@ -33,6 +33,7 @@ from conftest import usage_limit_reached
 from pydantic import ValidationError
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import BinaryContent
+from pydantic_ai.messages import BinaryImage
 from pydantic_ai.messages import FilePart
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelRequest
@@ -45,6 +46,7 @@ from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.messages import UserPromptPart
 from pydantic_ai.settings import ThinkingLevel
 from pydantic_ai.usage import RequestUsage
+from pydantic_core import to_jsonable_python
 from without_durability.interfaces import INBOX
 from without_durability.interfaces import claimed
 from without_durability.interfaces import inbox_key
@@ -96,9 +98,11 @@ from mainplate.conversation import progress_in
 from mainplate.conversation import reached
 from mainplate.conversation import recorded_choice
 from mainplate.conversation import recorded_instructions
+from mainplate.conversation import recorded_messages
 from mainplate.conversation import refusal_in
 from mainplate.conversation import refused_key
 from mainplate.conversation import responded
+from mainplate.conversation import returns_in
 from mainplate.conversation import so_far
 from mainplate.conversation import spent_on
 from mainplate.conversation import system_prompt_in
@@ -531,6 +535,7 @@ class TestForgettingWhatCameBefore:
                 kind="tool",
                 blocks=(
                     ToolUse(
+                        call="c1",
                         tool="read",
                         arguments='{"path":"x"}',
                         returned=Returned(outcome="success", content="the body"),
@@ -568,7 +573,7 @@ class TestForgettingWhatCameBefore:
     def test_a_call_with_no_result_recorded_is_still_out(self) -> None:
         """The run ended between the call and its return, which is what a reader has to be able to see."""
         turn: list[ModelMessage] = [ModelResponse(parts=[ToolCallPart("grep", {"q": "z"}, "c9")])]
-        assert blocks_of(turn, {}) == (ToolUse(tool="grep", arguments='{"q":"z"}', returned=None),)
+        assert blocks_of(turn, {}) == (ToolUse(call="c9", tool="grep", arguments='{"q":"z"}', returned=None),)
 
     def test_a_failed_call_carries_why_rather_than_a_bare_flag(self) -> None:
         """
@@ -582,6 +587,7 @@ class TestForgettingWhatCameBefore:
         ]
         assert blocks_of(turn, {}) == (
             ToolUse(
+                call="c2",
                 tool="write",
                 arguments="{}",
                 returned=Returned(outcome="failed", content='{"error":"no such directory"}'),
@@ -948,13 +954,15 @@ class TestWatchingATurnHappen:
     def test_a_response_is_readable_as_soon_as_it_is_recorded(self) -> None:
         assert so_far(REASONED, 0) == (
             Reasoning(text="have a look"),
-            ToolUse(tool="read", arguments='{"path":"x"}', returned=None),
+            ToolUse(call="c1", tool="read", arguments='{"path":"x"}', returned=None),
         )
 
     def test_a_call_carries_its_result_as_soon_as_that_lands(self) -> None:
         assert so_far(READ, 0) == (
             Reasoning(text="have a look"),
-            ToolUse(tool="read", arguments='{"path":"x"}', returned=Returned(outcome="success", content="b")),
+            ToolUse(
+                call="c1", tool="read", arguments='{"path":"x"}', returned=Returned(outcome="success", content="b")
+            ),
         )
 
     def test_a_call_that_returned_nothing_is_finished_rather_than_still_out(self) -> None:
@@ -964,7 +972,7 @@ class TestWatchingATurnHappen:
         for as long as the turn lasted.
         """
         returned = so_far({**REASONED, tool_key(0, "c1"): came_back(None)}, 0)[1]
-        assert returned == ToolUse(tool="read", arguments='{"path":"x"}', returned=Returned("success", ""))
+        assert returned == ToolUse(call="c1", tool="read", arguments='{"path":"x"}', returned=Returned("success", ""))
 
     def test_a_structured_result_reads_as_the_model_was_handed_it(self) -> None:
         """
@@ -972,7 +980,24 @@ class TestWatchingATurnHappen:
         settled reading of this call uses that and this one has to agree with it.
         """
         found = so_far({**REASONED, tool_key(0, "c1"): came_back({"lines": [1, 2]})}, 0)[1]
-        assert found == ToolUse(tool="read", arguments='{"path":"x"}', returned=Returned("success", '{"lines":[1,2]}'))
+        assert found == ToolUse(
+            call="c1", tool="read", arguments='{"path":"x"}', returned=Returned("success", '{"lines":[1,2]}')
+        )
+
+    def test_an_image_a_call_returned_is_left_out_of_its_text_and_counted_beside_it_in_both_readings(self) -> None:
+        """
+        The image is in the call's record as base64, and read back as that mapping the running turn
+        would print thousands of characters the settled turn leaves out. Both readings go through
+        the part the loop sends, so both see an image, and the page asks for it by its place.
+        """
+        shown = ["x, a PNG image of 9 bytes", BinaryImage(b"\x89PNG\r\n\x1a\n.", media_type="image/png")]
+        running = so_far({**REASONED, tool_key(0, "c1"): came_back(to_jsonable_python(shown))}, 0)[1]
+        settled = parse_messages(recorded_messages([ModelRequest(parts=[ToolReturnPart("read", shown, "c1")])]))
+
+        expected = Returned("success", "x, a PNG image of 9 bytes", pictures=("image/png",))
+        assert isinstance(running, ToolUse)
+        assert running.returned == expected
+        assert returns_in(settled)["c1"] == expected
 
     def test_the_two_readings_of_a_finished_turn_agree(self) -> None:
         """
@@ -990,6 +1015,7 @@ class TestWatchingATurnHappen:
         """
         timed = {**ANSWERED, tool_key(0, "c1"): came_back("b", took=0.25)}
         called = ToolUse(
+            call="c1",
             tool="read",
             arguments='{"path":"x"}',
             returned=Returned(outcome="success", content="b"),
@@ -1002,7 +1028,11 @@ class TestWatchingATurnHappen:
     def test_a_call_nothing_timed_carries_no_duration_rather_than_none_of_one(self) -> None:
         """A call recorded before durations existed, which must read as unknown and not as instant."""
         assert so_far(ANSWERED, 0)[1] == ToolUse(
-            tool="read", arguments='{"path":"x"}', returned=Returned(outcome="success", content="b"), took=None
+            call="c1",
+            tool="read",
+            arguments='{"path":"x"}',
+            returned=Returned(outcome="success", content="b"),
+            took=None,
         )
 
     def test_a_turn_grows_at_the_end_and_never_in_the_middle(self) -> None:

@@ -31,11 +31,13 @@ from markupsafe import Markup
 from markupsafe import escape
 from without_html import Element
 from without_html import Node
+from without_html import a
 from without_html import code
 from without_html import dd
 from without_html import div
 from without_html import dl
 from without_html import dt
+from without_html import img
 from without_html import pre
 from without_html import span
 
@@ -585,9 +587,37 @@ def created(used: ToolUse) -> bool:
     return used.tool == "create" and used.returned is not None and used.returned.outcome == "success"
 
 
-def call_body(used: ToolUse) -> Element:
+def pictures_element(pictured: Sequence[str]) -> Element:
+    """
+    The images a call handed the model, each as large as the panel allows and a link to itself whole.
+
+    Drawn by address, so the markup carries a URL rather than the bytes, and `lazy`, which defers
+    only what is far from the viewport: Chromium fetches an image near it even inside a call drawn
+    shut, so a shut call is not free. What keeps that cheap is the route's `immutable`, which makes
+    every later render, reload and live swap reuse the first fetch. The link is the image at its own
+    size, since a screenshot shrunk to a panel's width is a picture of a page and not a page anybody
+    can read.
+    """
+    return div(
+        cls="tool__pictures",
+        children=[
+            a(
+                cls="tool__picture",
+                attrs={"href": address},
+                children=img(attrs={"src": address, "alt": "an image the model was shown", "loading": "lazy"}),
+            )
+            for address in pictured
+        ],
+    )
+
+
+def call_body(used: ToolUse, pictured: Sequence[str] = ()) -> Element:
     """
     What a call was handed and what it gave back, under the labels the script reads them by.
+
+    `pictured` is where to ask for each image the call returned, in order, which the caller builds
+    because only it knows which session and turn the call is in. An image is drawn under the words
+    that came back with it, which say which file it was.
 
     Two calls are drawn as one half alone, because for each the other half would be the same thing
     again. An `edit` that recorded a diff is that: its operations are the diff said in anchors, and
@@ -618,6 +648,9 @@ def call_body(used: ToolUse) -> Element:
                 else (
                     dt(children=RETURNED),
                     dd(children=returned_element(used.tool, used.arguments, used.returned.content)),
+                    # A second value under the same term, which a description list allows and the
+                    # copy button reads past: an image has no words, so what is copied is the text.
+                    *((dd(children=pictures_element(pictured)),) if pictured else ()),
                 )
             ),
         ],

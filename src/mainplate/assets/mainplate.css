@@ -1265,6 +1265,29 @@ pre .gs {
     margin: 0.15rem 0 0;
 }
 
+/* An image a call handed the model, under the line saying which file it was. Scaled to the panel
+   and never wider, the way `.text img` is, and edged, because a screenshot of this page is drawn on
+   this page's own ground and would otherwise have no edge at all. Each is a link to itself whole,
+   so the cursor is the link's rather than the band's that shuts the panel. */
+.tool__pictures {
+    display: grid;
+    gap: var(--space-3);
+    margin-top: var(--space-2);
+}
+
+.tool__picture {
+    justify-self: start;
+    max-width: 100%;
+    cursor: zoom-in;
+}
+
+.tool__picture img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    border: 1px solid var(--edge);
+}
+
 /* The batch's diff is the same block an edit's body draws, so it is the same rule, for the reason
    the marker above is shared. */
 .tool__body pre,

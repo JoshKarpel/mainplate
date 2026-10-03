@@ -2522,7 +2522,7 @@ class TestTheLineAShutPanelStandsFor:
             "lines => lines.map(line => line.textContent)"
         )
 
-        assert named == ["read", "read", "edit, create, grep, bash", "bash", "bash", "read, read"]
+        assert named == ["read", "read", "edit, create, grep, bash", "read", "bash", "bash", "read, read"]
 
 
 class TestFoldingADocumentTheConsoleHandedOver:

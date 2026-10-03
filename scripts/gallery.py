@@ -25,8 +25,10 @@ from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Final
+from urllib.parse import unquote
 from zoneinfo import ZoneInfo
 
+from pydantic_ai.messages import BinaryImage
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
@@ -37,6 +39,7 @@ from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.messages import UserPromptPart
 from pydantic_ai.usage import RequestUsage
+from pydantic_core import to_jsonable_python
 from without_durability.interfaces import inbox_key
 
 from mainplate import artifacts
@@ -65,6 +68,7 @@ from mainplate.conversation import instructions_key
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import opened_key
+from mainplate.conversation import picture_in
 from mainplate.conversation import recorded_command
 from mainplate.conversation import recorded_instructions
 from mainplate.conversation import recorded_messages
@@ -114,6 +118,7 @@ from mainplate.sessions import Session
 from mainplate.settings import DEFAULT_INSTRUCTIONS
 from mainplate.snapshots import branch_named
 from mainplate.tools.artifacts.tools import KEPT
+from mainplate.tools.files.tools import sized
 
 ASSETS = Path(__file__).resolve().parent.parent / "src" / "mainplate" / "assets"
 
@@ -433,6 +438,7 @@ TIMINGS = {
     "call-7": 12.65,
     "call-9": 0.9,
     "call-10": 0.073,
+    "call-11": 0.002,
     "call-20": 0.006,
     "call-21": 0.004,
     "call-22": 0.031,
@@ -1249,6 +1255,9 @@ def reindented(rules: Sequence[tuple[str, Sequence[str]]]) -> str:
 
 REINDENT_DIFF = reindented(REINDENTED_RULES)
 
+ICON_PATH = "src/mainplate/assets/icon-192.png"
+ICON = (ASSETS / "icon-192.png").read_bytes()
+
 TOOL_IN_FLIGHT: list[ModelMessage] = [
     ModelRequest(parts=[UserPromptPart(content="Now check the stylesheet handles a long line.")]),
     # Two settled batches ahead of the call still out, which between them are every rendering a
@@ -1309,12 +1318,37 @@ TOOL_IN_FLIGHT: list[ModelMessage] = [
             ToolReturnPart(tool_name="bash", content=CHECK_SAID, tool_call_id="call-4"),
         ]
     ),
+    # A read of an image, which hands the model the picture and the page an address to ask for it
+    # by: opened, the call draws the line saying which file it was and the image under it. The icon
+    # rather than a screenshot because it is a real PNG already in the tree, so the fixture carries
+    # no binary of its own.
+    ModelResponse(
+        timestamp=WHEN,
+        parts=[
+            TextPart(content="The checks pass. The icon is drawn on the page's ground, so looking at it too."),
+            ToolCallPart(tool_name="read", args={"path": ICON_PATH}, tool_call_id="call-11"),
+        ],
+        usage=spending(asked=97_300, answered=38, cached=96_900, cost="0.1724"),
+        metadata=timing(0.9),
+    ),
+    ModelRequest(
+        parts=[
+            ToolReturnPart(
+                tool_name="read",
+                content=[
+                    f"{ICON_PATH}, a PNG image of {sized(len(ICON))}",
+                    BinaryImage(data=ICON, media_type="image/png"),
+                ],
+                tool_call_id="call-11",
+            )
+        ]
+    ),
     # The formatter, whose batch changed far more than anybody wants to read, so its diff is drawn
     # shut under its rule; see `REINDENT_DIFF`.
     ModelResponse(
         timestamp=WHEN,
         parts=[
-            TextPart(content="The checks pass. Running the formatter before I look again."),
+            TextPart(content="It reads the same. Running the formatter before I look again."),
             ToolCallPart(tool_name="bash", args={"command": FORMATTED}, tool_call_id="call-9"),
         ],
         usage=spending(asked=97_700, answered=51, cached=96_900, cost="0.1729"),
@@ -1410,7 +1444,9 @@ def recorded(*turns: Sequence[ModelMessage]) -> dict[str, object]:
                 if isinstance(part, ToolCallPart) and part.tool_call_id in TIMINGS:
                     answered = came_back.get(part.tool_call_id)
                     written[tool_key(turn, part.tool_call_id)] = records.Returned(
-                        returned=None if answered is None else answered.content,
+                        # Lowered the way `Stepping.call` lowers it, so an image goes in as the
+                        # mapping a pass would have written and the route serving it reads that.
+                        returned=None if answered is None else to_jsonable_python(answered.content),
                         took=timedelta(seconds=TIMINGS[part.tool_call_id]),
                         metadata=None if answered is None else answered.metadata,
                     ).recorded()
@@ -2115,15 +2151,45 @@ def write(into: Path, links: Links = LINKS) -> tuple[str, ...]:
     """
     into.mkdir(parents=True, exist_ok=True)
     served = into / "assets"
-    if served.exists():
-        shutil.rmtree(served)
+    # Every directory but the assets is the images' and goes for the same reason a stale page does.
+    for stale in into.iterdir():
+        if stale.is_dir():
+            shutil.rmtree(stale)
     shutil.copytree(ASSETS, served)
     written = pages(links)
     for stale in set(into.glob("*.html")) - {into / name for name in written}:
         stale.unlink()
     for name, markup in written.items():
         (into / name).write_text(markup)
+    for address, data in pictures(links).items():
+        here = into / unquote(address).lstrip("/")
+        here.parent.mkdir(parents=True, exist_ok=True)
+        here.write_bytes(data)
     return tuple(sorted(written))
+
+
+def pictures(links: Links = LINKS) -> dict[str, bytes]:
+    """
+    Every image a fixture's call handed the model, by the address a page asks for it at.
+
+    Written beside the pages at that address, so a static server answers the `<img>` the way the
+    console's route would and a shot shows the picture rather than a broken one. Read out of the
+    calls' records through the console's own `picture_in`, so what is written is what the route
+    serves. Found by scanning for the shape of a call's key, which the console never does: it is
+    handed the id by the response that made the call, and a script walking every fixture is not.
+    """
+    found: dict[str, bytes] = {}
+    for fixture in FIXTURES:
+        for key in fixture.checkpoint:
+            match key.split(":", 3):
+                case ["turn", turn, "tool", call]:
+                    index = 0
+                    while (picture := picture_in(fixture.checkpoint, int(turn), call, index)) is not None:
+                        found[links.to_picture(fixture.session.id, int(turn), call, index)] = picture.data
+                        index += 1
+                case _:
+                    continue
+    return found
 
 
 if __name__ == "__main__":

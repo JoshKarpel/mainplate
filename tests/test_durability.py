@@ -18,6 +18,7 @@ from pydantic import ValidationError
 from pydantic_ai import ModelRetry
 from pydantic_ai.exceptions import ToolFailed
 from pydantic_ai.exceptions import UnexpectedModelBehavior
+from pydantic_ai.messages import BinaryImage
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
@@ -692,6 +693,35 @@ class TestWhatAToolRecordsBesideItsReturn:
         held = parse_returned((await checkpointer.load(WORKFLOW))["turn:0:tool:call-change-0"])
         assert returned_step(held) == returns_in(messages)["call-change-0"]
         assert returned_step(held).metadata == {"diff": "-alpha\n+ALPHA"}
+
+    async def test_an_image_is_sent_as_an_image_on_the_pass_that_ran_it_and_on_a_replay(
+        self, checkpointer: MemoryCheckpointer
+    ) -> None:
+        """
+        The record holds the image as base64 inside a mapping, so a replay that handed the record
+        back as it is would send the model that mapping as text where the first pass sent a picture.
+        """
+        picture = BinaryImage(b"\x89PNG\r\n\x1a\n.", media_type="image/png")
+        toolset = FunctionToolset[None]()
+
+        async def look(what: str) -> list[str | BinaryImage]:
+            """Look at something."""
+            return [f"{what}, a PNG image", picture]
+
+        toolset.add_function(look)
+        sent = []
+        for _ in range(2):
+            scripted = Scripted(script=(calls(("look", {"what": "shot"})), ModelResponse(parts=[TextPart("done")])))
+            agent = Agent(
+                model=scripted.model(), instructions=INSTRUCTIONS, settings=ModelSettings(), toolsets=(toolset,)
+            )
+            async with a_pass(checkpointer) as run:
+                with stepping(run, "turn:0") as scope:
+                    (result,) = results_in(await agent.run("go", (), scope))
+            sent.append(result)
+
+        assert [each.files for each in sent] == [[picture], [picture]]
+        assert [each.model_response_str() for each in sent] == ["shot, a PNG image"] * 2
 
     async def test_a_return_promising_the_model_more_is_refused_rather_than_dropped(
         self, checkpointer: MemoryCheckpointer

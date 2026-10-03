@@ -107,6 +107,7 @@ from typing import Literal
 from typing import assert_never
 from typing import cast
 
+from pydantic_ai.messages import BinaryContent
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.messages import ModelRequest
@@ -119,7 +120,6 @@ from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.messages import UserPromptPart
 from pydantic_ai.settings import ThinkingLevel
-from pydantic_core import to_json
 from without_durability.interfaces import INBOX
 from without_durability.interfaces import Entry
 from without_durability.stepwise import Run
@@ -157,6 +157,7 @@ from mainplate.durability import parse_snapshot
 from mainplate.durability import parse_took
 from mainplate.durability import parse_wrote
 from mainplate.durability import stepping
+from mainplate.durability import told
 from mainplate.forge import Workspaces
 from mainplate.loop import Agent
 from mainplate.loop import CannotGoOn
@@ -1464,6 +1465,16 @@ class Returned:
     two readings of a call carry it alike; see `records.Returned.metadata` for what writes it.
     """
 
+    pictures: tuple[str, ...] = ()
+    """
+    The media type of each image the call handed the model, in the order it handed them.
+
+    The types and not the bytes, because a page draws an image by asking for it and the bytes are
+    already in the call's record: carried here they would be in every render of the transcript and
+    every message on the live connection, which a screenshot makes megabytes. Which image is which
+    is its place in this tuple, and that is the address the page asks by.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class ToolUse:
@@ -1473,6 +1484,14 @@ class ToolUse:
     `returned is None` is the whole of "still out", rather than a separate flag beside a result
     that would then have to be kept in step with it. It is also the only thing on this console
     that is genuinely in flight *within* a turn, so it is what a spinner is drawn from.
+    """
+
+    call: str
+    """
+    The id the model gave this call, which is the name its record is under, `turn:{n}:tool:{id}`.
+
+    Carried for the one thing a page has to ask the console for rather than draw from this value: an
+    image the call handed the model, whose bytes are in that record and nowhere on the page.
     """
 
     tool: str
@@ -1967,9 +1986,7 @@ def returns_in(messages: Sequence[ModelMessage]) -> dict[str, Returned]:
             continue
         for part in message.parts:
             if isinstance(part, ToolReturnPart):
-                found[part.tool_call_id] = Returned(
-                    outcome=part.outcome, content=part.model_response_str(), metadata=part.metadata
-                )
+                found[part.tool_call_id] = returned_of(part)
             elif isinstance(part, RetryPromptPart) and part.tool_call_id is not None:
                 found[part.tool_call_id] = Returned(outcome="failed", content=part.model_response())
     return found
@@ -2019,7 +2036,11 @@ def blocks_in(
                 yield Reasoning(text=thought if inner is None else f"{inner}\n\n{rest}".strip())
             case ToolCallPart(tool_name=tool, tool_call_id=call):
                 yield ToolUse(
-                    tool=tool, arguments=part.args_as_json_str(), returned=returned.get(call), took=took.get(call)
+                    call=call,
+                    tool=tool,
+                    arguments=part.args_as_json_str(),
+                    returned=returned.get(call),
+                    took=took.get(call),
                 )
             case _:
                 continue
@@ -2142,28 +2163,74 @@ def system_prompt_in(messages: Sequence[ModelMessage]) -> str | None:
     return told
 
 
+def pictures_of(part: ToolReturnPart) -> tuple[BinaryContent, ...]:
+    """
+    The images in one call's result, in the order the model was shown them.
+
+    The one answer to which file is the `n`th picture, asked by the page that counts them and by the
+    route that serves one, so the number a link carries is the image it was drawn for.
+    """
+    return tuple(file for file in part.files if isinstance(file, BinaryContent) and file.is_image)
+
+
+def returned_of(part: ToolReturnPart) -> Returned:
+    """
+    One call's result as a reader sees it, which is the words the model read and the images beside them.
+
+    `model_response_str` is the text and leaves any image out, which is what the model read as text
+    too; the images are counted beside it rather than drawn into it, so the page can ask for each.
+    """
+    return Returned(
+        outcome=part.outcome,
+        content=part.model_response_str(),
+        metadata=part.metadata,
+        pictures=tuple(picture.media_type for picture in pictures_of(part)),
+    )
+
+
+def held_part(held: records.Returned) -> ToolReturnPart:
+    """
+    A call's record as the part the loop sends for it, which is what both readers of a record read.
+
+    Nameless, since what a part is *called* is in the response that asked for it rather than in the
+    record; what this is for is the content, read back through `told` exactly as `Tools.call` reads
+    it, and the outcome, which decides how a failure is worded.
+    """
+    return ToolReturnPart(tool_name="", content=told(held.returned), outcome=held.outcome, metadata=held.metadata)
+
+
+def picture_in(recorded: Mapping[str, object], turn: int, call: str, index: int) -> BinaryContent | None:
+    """
+    The `index`th image one call handed the model, out of the call's own record, or nothing.
+
+    Read from `turn:{n}:tool:{id}` because that record holds it on every turn, running or settled,
+    and asked by the key the writer used rather than found by scanning, for `calls_in`'s reason.
+    Nothing is the same answer for a turn, a call or a place that is not there, since what asks is
+    an `<img>` and all three are a missing image to it.
+    """
+    held = recorded.get(tool_key(turn, call))
+    if held is None:
+        return None
+    pictures = pictures_of(held_part(parse_returned(held)))
+    return pictures[index] if 0 <= index < len(pictures) else None
+
+
 def returned_step(held: records.Returned) -> Returned:
     """
     What one recorded tool step is as a reader sees it, in the words the settled reading would use.
 
-    The text has to match what `ToolReturnPart.model_response_str` produces for the same value, and
-    matching it is the point rather than a nicety: the same call is read from this step while the
-    turn runs and from the turn's messages once it ends, so any difference here is a result that
-    silently rewrites itself under the reader the moment the turn lands. Hence `to_json` rather than
-    the standard library's `dumps`, whose spacing differs.
+    **Read through the very part the loop sends**, built from the record by `told` as `Tools.call`
+    builds it, and then through `returned_of`, which is how the settled reading reads that part out
+    of the turn's messages. Agreeing is the point rather than a nicety: the same call is read from
+    this step while the turn runs and from the messages once it ends, so any difference here is a
+    result that silently rewrites itself under the reader the moment the turn lands. One path rather
+    than a second rendering held to match the first, which is how a failure's `{"error": ...}`
+    wrapping and an image left out of the text both come out the same on both sides.
 
-    A failure is wrapped in the `{"error": ...}` object the settled reading wraps a failed
-    `ToolReturnPart` in, for the same reason: the two readings of one call have to agree to the
-    character. What a tool recorded beside its return is on the record already unwrapped, because
-    the loop splits a `ToolReturn` before anything is written, so it is carried across as it is.
+    What a tool recorded beside its return is on the record already unwrapped, because the loop
+    splits a `ToolReturn` before anything is written, so it is carried across as it is.
     """
-    if held.returned is None:
-        said = ""
-    else:
-        said = held.returned if isinstance(held.returned, str) else to_json(held.returned).decode()
-    if held.outcome == "failed":
-        return Returned(outcome="failed", content=to_json({"error": said}).decode(), metadata=held.metadata)
-    return Returned(outcome="success", content=said, metadata=held.metadata)
+    return returned_of(held_part(held))
 
 
 def recorded_command(said: str, *, online: bool = False) -> dict[str, object]:
@@ -3645,6 +3712,9 @@ def conversing(
                 environment=environment_in(run.recorded),
                 output_cap=cap,
                 artifacts=None if artifacts is None else Artifacts(artifacts, run.workflow, at.turn),
+                # Off the same record as the cap and for the same reason read here; not recorded
+                # either, since what the model was sent is, in the call's own record.
+                seeing=prices is not None and prices.sees(chosen),
             )
 
             # The turn's *prefix* rather than the run: the requests this block makes are numbered

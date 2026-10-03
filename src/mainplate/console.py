@@ -24,6 +24,7 @@ from without_asgi import Response
 from without_asgi import html_content
 from without_asgi.sse import event_stream
 from without_asgi.sse import with_heartbeat
+from without_web import INT
 from without_web import STR
 from without_web import ExtractionError
 from without_web import Reply
@@ -105,6 +106,11 @@ LONGEST_PROMPT = 100_000
 
 session_id = path_param("session", STR)
 artifact_id = path_param("artifact", STR)
+# Which image of which call, as the record names them: the turn and the call id are its key, and the
+# index is the image's place among those the call handed the model.
+turn_number = path_param("turn", INT)
+call_id = path_param("call", STR)
+picture_index = path_param("index", INT)
 # The endpoint whose models to render, which is the value of the select that asks for them.
 of_endpoint = query_param("endpoint", once(str), schema={"type": "string"})
 # Which workspace's branches to offer, which is the value of the card that asks for them. A query
@@ -1342,6 +1348,45 @@ async def artifact_download(service: Service, artifact: str, version: int) -> Re
     return await served(service, artifact, version, saving=True)
 
 
+# What an image a call handed the model is served under. The bytes are whatever file a session read,
+# so they are served as nothing but the image they say they are: `nosniff` holds the browser to the
+# type, and a policy of `sandbox` and nothing allowed means an image that is secretly a document runs
+# nothing and fetches nothing even opened in a tab of its own. Cached for good, because the record is
+# written once and the address names the record, so the bytes at one never change.
+PICTURE_POLICY: Final = b"sandbox; default-src 'none'"
+
+
+@get(
+    t"/sessions/{session_id}/turns/{turn_number}/calls/{call_id}/pictures/{picture_index}",
+    session_id,
+    turn_number,
+    call_id,
+    picture_index,
+    summary="One image a call handed the model",
+)
+async def picture(service: Service, session: str, turn: int, call: str, index: int) -> Response:
+    """
+    One image a tool call handed the model, out of the call's record, for the panel drawing that call.
+
+    A bare `404` for anything not there rather than a page, for `served`'s reason: what asks is an
+    `<img>`, which shows no page. Served under this console's origin because an image cannot run, and
+    the policy above is what holds that true of a file that only claims to be one.
+    """
+    found = await service.picture(session, turn, call, index)
+    if found is None:
+        return Response(status=404)
+    return Response(
+        status=200,
+        body=found.data,
+        headers=(
+            (b"content-type", found.media_type.encode()),
+            (b"content-security-policy", PICTURE_POLICY),
+            (b"x-content-type-options", b"nosniff"),
+            (b"cache-control", b"private, max-age=31536000, immutable"),
+        ),
+    )
+
+
 CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     start_here,
     new_session,
@@ -1362,6 +1407,7 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     show_artifact,
     artifact_content,
     artifact_download,
+    picture,
 )
 
 LINKS = Links(
@@ -1384,5 +1430,6 @@ LINKS = Links(
     artifact=show_artifact,
     artifact_content=artifact_content,
     artifact_download=artifact_download,
+    picture=picture,
     assets=ASSETS,
 )

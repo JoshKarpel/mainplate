@@ -1055,6 +1055,7 @@ def agent_for(
     context: tuple[ContextEntry, ...] = (),
     output_cap: int | None = None,
     artifacts: Artifacts | None = None,
+    seeing: bool = False,
 ) -> Agent:
     """
     The agent one session is answered by, built for the pass that is about to run it.
@@ -1105,6 +1106,11 @@ def agent_for(
     than any session's, so every session may list them. Moving one to or from a file is conditioned
     on there being files, which `artifact_tools` reads off the same `Files` as everything else. Absent
     is a harness built with no store, which is what a test of the other tools wants.
+
+    `seeing` is whether the model is known to take images, which is whether `read` sends one. Handed
+    in for `output_cap`'s reason, since it comes off the same record, and false by default because
+    unknown is not yes: an image sent to a model that cannot take one is a request the provider
+    refuses, re-sent with every request after it. See `Files.read`.
     """
     wire = wires.for_endpoint(chosen.endpoint)
     # The session's own settings over everything else, so a recorded choice always wins: the thing
@@ -1128,7 +1134,7 @@ def agent_for(
         # the same lock. `grep` only where there is a checkout, which is `list`'s condition inside
         # `file_tools` and for the same reason: both ask git, and over anything else a tool that can
         # only refuse still costs its description on every request.
-        tools.append(file_tools(files))
+        tools.append(file_tools(files, seeing=seeing))
         if files.has_repository:
             tools.append(grep_tools(files))
     if artifacts is not None:
