@@ -2173,8 +2173,8 @@ def pages(links: Links = LINKS) -> dict[str, str]:
             REFERENCE,
         ),
         "artifacts.html": catalogue_page(links, READER, LISTED, REACHABLE, current),
-        "artifact.html": artifact_page(links, READER, LISTED, REACHABLE, poll[0], poll),
-        "artifact-earlier.html": artifact_page(links, READER, LISTED, REACHABLE, poll[-1], poll),
+        "artifact.html": artifact_page(links, READER, LISTED, poll[0], poll),
+        "artifact-earlier.html": artifact_page(links, READER, LISTED, poll[-1], poll),
     }
 
 

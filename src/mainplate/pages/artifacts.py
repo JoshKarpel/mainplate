@@ -14,15 +14,17 @@ from typing import Final
 from without_html import Element
 from without_html import a
 from without_html import article
+from without_html import details
 from without_html import div
-from without_html import dl
 from without_html import h1
 from without_html import h2
+from without_html import header
 from without_html import iframe
 from without_html import li
 from without_html import p
 from without_html import section
 from without_html import span
+from without_html import summary
 from without_html import ul
 
 from mainplate.artifacts import LISTED
@@ -31,7 +33,7 @@ from mainplate.forge import Reachable
 from mainplate.pages.document import UNTITLED
 from mainplate.pages.document import Links
 from mainplate.pages.document import document
-from mainplate.pages.document import fact
+from mainplate.pages.document import home
 from mainplate.pages.moments import Reader
 from mainplate.pages.moments import dated
 from mainplate.pages.moments import stamped
@@ -173,81 +175,105 @@ def catalogue_page(
     )
 
 
+def versions(links: Links, reader: Reader, selected: Version, history: Sequence[Version]) -> Element:
+    """
+    Which version this is, as a disclosure whose panel is the version history.
+
+    **Folded into the bar rather than listed under the frame**, because a list under the frame is what
+    made the page scroll, and a page that scrolls has to cap the frame short of the window so the list
+    can be reached. Folded, nothing is under the frame and it can take the rest of the window. The
+    cost, stated: the history is one press away rather than in view, which is the right way round for
+    a page somebody opened to look at one version.
+
+    A `<details>`, so it opens with no script, as the composer's menu does. The summary says that a
+    later version exists, where one does, in its title, since "2 of 3" says it only to somebody
+    counting.
+
+    `history` is one page of versions, newest first, and a link to the next is drawn where it is full,
+    for the catalogue's reason.
+    """
+    return details(
+        cls="artifact__versions",
+        children=[
+            summary(
+                cls="artifact__which",
+                attrs={"title": None if selected.is_current else "A later version has been kept since this one"},
+                children=f"version {selected.version} of {selected.current}",
+            ),
+            div(
+                cls="dashboard__card artifact__history",
+                children=[
+                    ul(
+                        cls="dashboard__sessions",
+                        children=[version_row(links, reader, kept, selected) for kept in history],
+                    ),
+                    *older(
+                        links.to_artifact(selected.artifact, selected.version, history[-1].version)
+                        if len(history) == LISTED
+                        else None,
+                        "older versions",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+
 def artifact_page(
     links: Links,
     reader: Reader,
     listed: tuple[Session, ...],
-    reachable: Reachable,
     selected: Version,
     history: Sequence[Version],
 ) -> str:
     """
-    One version of one artifact: what it is, where it came from, the version history, and the page.
+    One version of one artifact: a bar saying what it is and where it came from, and the page.
+
+    **Not a `shell`.** The session list is navigation among conversations, and an artifact is the one
+    thing the console shows that is not one; what a reader here wants is the document as large as
+    the window allows. The bar keeps what a page owes a reader, which is `home`, and the two ways
+    out this page has of its own: up to every artifact, and back to the turn that kept this version.
+    The cost, stated: reaching another session is two presses, through the dashboard, rather than
+    one. With no list on the page there is nothing for the live connection to redraw, so the page
+    holds none, as a refusal does not.
 
     **The preview and the download are one version's bytes by two addresses**, both pinned to the
     version drawn here, so neither can change under a reader while the artifact moves on. The preview
-    is a sandboxed frame and the download is the file as it was kept, and the sentence beside the
-    press says the one thing a reader has to know about the difference: the saved file runs with
-    whatever a browser gives a local file, which is not what the frame gave it.
+    is a sandboxed frame and the download is the file as it was kept, and the words beside the press
+    say the one thing a reader has to know about the difference: the saved file runs with whatever a
+    browser gives a local file, which is not what the frame gave it. Beside it rather than in its
+    title, because a title is said only to a pointer that hovers and a phone has none; the cost is a
+    few words of bar on every page for a press most readers never make.
 
     **Where it came from links to the turn**, which is the other end of the call's own link here.
-
-    `history` is one page of versions, newest first, and a link to the next is drawn where it is full,
-    for the catalogue's reason.
     """
     heading = selected.title
     return document(
         links,
         heading,
-        shell(
-            links,
-            reader,
-            listed,
-            showing=None,
-            reachable=reachable,
-            pane=[
-                div(
-                    cls="artifact",
+        div(
+            cls="artifact",
+            children=[
+                header(
+                    cls="artifact__bar",
                     children=[
-                        div(
-                            cls="artifact__head",
-                            children=[
-                                h1(cls="artifact__title", children=heading),
-                                a(
-                                    cls="artifact__back",
-                                    attrs={"href": links.to_artifacts()},
-                                    children="every artifact",
-                                ),
-                            ],
-                        ),
-                        dl(
-                            cls="facts",
-                            children=[
-                                *fact(
-                                    "version",
-                                    f"{selected.version} of {selected.current}",
-                                    title=None
-                                    if selected.is_current
-                                    else "A later version has been kept since this one",
-                                ),
-                                *fact(
-                                    "kept",
-                                    dated(selected.made_at, reader),
-                                    title=stamped(selected.made_at, reader),
-                                ),
-                            ],
-                        ),
+                        home(links),
+                        a(cls="artifact__up", attrs={"href": links.to_artifacts()}, children=ARTIFACTS),
+                        h1(cls="artifact__title", children=heading),
+                        versions(links, reader, selected, history),
                         p(
                             cls="artifact__from",
-                            children=["Kept by ", made_in(links, listed, selected), "."],
-                        ),
-                        iframe(
-                            cls="artifact__preview",
-                            attrs={
-                                "title": heading,
-                                "sandbox": SANDBOX,
-                                "src": links.to_artifact_content(selected.artifact, selected.version),
-                            },
+                            children=[
+                                "kept ",
+                                when_element(
+                                    selected.made_at,
+                                    cls="when",
+                                    title=stamped(selected.made_at, reader),
+                                    said=dated(selected.made_at, reader),
+                                ),
+                                " by ",
+                                made_in(links, listed, selected),
+                            ],
                         ),
                         p(
                             cls="artifact__download",
@@ -257,38 +283,25 @@ def artifact_page(
                                         "href": links.to_artifact_download(selected.artifact, selected.version),
                                         "download": True,
                                     },
-                                    children="Download this version",
+                                    children="Download",
                                 ),
-                                " - the same file, which runs outside this sandbox once it is saved.",
-                            ],
-                        ),
-                        section(
-                            cls="dashboard__places",
-                            attrs={"aria-label": "Versions"},
-                            children=[
-                                h2(cls="picker__legend", children="Versions"),
-                                article(
-                                    cls="dashboard__card",
-                                    children=[
-                                        ul(
-                                            cls="dashboard__sessions",
-                                            children=[version_row(links, reader, kept, selected) for kept in history],
-                                        ),
-                                        *older(
-                                            links.to_artifact(selected.artifact, selected.version, history[-1].version)
-                                            if len(history) == LISTED
-                                            else None,
-                                            "older versions",
-                                        ),
-                                    ],
-                                ),
+                                " - runs outside this sandbox once saved",
                             ],
                         ),
                     ],
-                )
+                ),
+                iframe(
+                    cls="artifact__preview",
+                    attrs={
+                        "title": heading,
+                        "sandbox": SANDBOX,
+                        "src": links.to_artifact_content(selected.artifact, selected.version),
+                    },
+                ),
             ],
         ),
         reader=reader,
+        live=False,
     )
 
 
