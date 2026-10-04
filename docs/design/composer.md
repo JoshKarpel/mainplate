@@ -45,8 +45,9 @@ the same input and differs only in where it goes. Parsed at the boundary into an
   stretch of context where they stand, and differs in who writes what the next one opens on. See
   [Handoff](#handoff).
 - `parent` sends into the session this one was forked from, which is how a branch reports back. It
-  is offered from **any** fork, because what it needs is `Origin.session` and every fork has one.
-  The destination is read off the row and never posted, so a form cannot put a message in a
+  is offered from **any** fork whose parent is still on the list, because what it needs is
+  `Origin.session` and every fork has one; the row keeps naming a parent after it is deleted, so the
+  list is what says whether there is still somewhere to send to. The destination is read off the row and never posted, so a form cannot put a message in a
   conversation nobody was looking at. It is drawn once the branch is past [its own settings
   step](plugins.md#setup), since this control is in the composer and a settling page has none, so
   the round trip is fork, confirm, read, send back. That falls out of how forks work, and it is left

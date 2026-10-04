@@ -105,14 +105,16 @@ def made_in(links: Links, listed: Sequence[Session], kept: Version) -> Element:
     Where a version came from, as a link to the rule of the turn whose call kept it.
 
     The session is named from the list every page already holds, so naming it asks nothing. One no
-    longer in the list is named by its id rather than dropped, since the version still came from
-    somewhere and the id is what its address is.
+    longer in the list is a session somebody deleted, since an artifact outlives the session that made
+    it: named by its id rather than dropped, since the version still came from somewhere, and not
+    linked, since its address now leads nowhere.
     """
     titles = {session.id: session.title or UNTITLED for session in listed}
-    return a(
-        attrs={"href": links.to_turn(kept.made_by.session, kept.made_by.turn)},
-        children=f"{titles.get(kept.made_by.session, kept.made_by.session)}, turn {kept.made_by.turn}",
-    )
+    made_by = kept.made_by
+    title = titles.get(made_by.session)
+    if title is None:
+        return span(attrs={"title": "That session was deleted"}, children=f"{made_by.session}, turn {made_by.turn}")
+    return a(attrs={"href": links.to_turn(made_by.session, made_by.turn)}, children=f"{title}, turn {made_by.turn}")
 
 
 def older(href: str | None, saying: str) -> tuple[Element, ...]:

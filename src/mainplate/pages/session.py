@@ -252,9 +252,12 @@ def session_page(
                         composer(
                             links.to_say(showing.session.id),
                             refusing=stalled is not None,
-                            # Any fork can send back to what it came out of; an aside is the case it
-                            # is for.
-                            returning=showing.session.forked is not None,
+                            # Any fork can send back to what it came out of, while that is still
+                            # there; an aside is the case it is for. Asked of the list rather than
+                            # of the row, because the row keeps naming its parent after the parent
+                            # is deleted, and an offer only a refusal can answer loses what was typed.
+                            returning=showing.session.forked is not None
+                            and any(each.id == showing.session.forked.session for each in listed),
                             # Only while something is actually being answered: a steer into a turn
                             # nobody is running would sit in the database unread, which is a message
                             # on the floor.
