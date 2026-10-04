@@ -502,8 +502,10 @@ Named plainly, because they are the next things rather than omissions nobody not
 - **`install` is Linux only.** It renders a user systemd unit and knows no other service manager.
   `serve` itself is portable, so elsewhere it is a foreground process and whatever you already use
   to keep one running.
-- **Nothing shrinks the database file.** Deleting a session frees its rows for SQLite to reuse, so
-  the file stops growing, but it stays the size it reached until something runs `VACUUM` on it.
+- **The console holds still while the database is vacuumed.** Once a day, at a moment nothing is
+  working, the file is rewritten to give back what deleted sessions freed, and every page and pass
+  waits for it: seconds on a file of a few hundred megabytes. A second process writing to the same
+  file in those seconds is refused rather than kept waiting.
 
 ## Why it is built this way
 

@@ -119,6 +119,8 @@ from mainplate.sessions import set_settings
 from mainplate.settings import DEFAULT_WATCHING
 from mainplate.settings import Settings
 from mainplate.snapshots import operator_identity
+from mainplate.vacuum import prepare as prepare_vacuum
+from mainplate.vacuum import vacuuming
 
 # Every place a repository can come from. One entry today because one exists; a `GitHub` through an
 # App is another line here and nothing else, which is the whole point of the interface. Declared
@@ -222,9 +224,9 @@ async def open_store(
     """
     The file, migrated, as the service both halves read and write through.
 
-    `migrate` and `prepare` both run every boot and both are idempotent. They are separate calls
+    `migrate` and the `prepare`s all run every boot and all are idempotent. They are separate calls
     because they own different tables: `migrate`'s three are the durability library's, and
-    `sessions` is ours.
+    `sessions`, the artifacts' two and `vacuumed` are ours.
 
     `ports` is where a session's jobs may serve, and nothing for a store that runs no jobs, which is
     what every test that is not about them wants: nothing then starts a process or binds a port.
@@ -234,6 +236,7 @@ async def open_store(
         await migrate(opened)
         await prepare(opened)
         await prepare_artifacts(opened)
+        await prepare_vacuum(opened)
         checkpointer = SqliteCheckpointer(opened)
         durable = SqliteDurable(checkpointer, SqliteScheduler(opened, lease=lease))
         # Only where there are workspaces, since a push leaves a session's checkout and a console
@@ -455,6 +458,7 @@ async def open_console(settings: Settings, config: Config, endpoints: Wires) -> 
             await running.enter_async_context(
                 background_task(reconciling(service, places, footprints, settings.archive_every))
             )
+            await running.enter_async_context(background_task(vacuuming(service, settings.vacuum_every)))
             await running.enter_async_context(
                 background_task(fetching(service, workspaces, settings.fetch_every, settings.fetch_held_every))
             )
