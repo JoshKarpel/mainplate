@@ -105,6 +105,9 @@ CREATE TABLE IF NOT EXISTS sessions (
 # `title_revision` needs no such filling, because nothing reads it as a quantity: it is summed into
 # the list's token, and the token only has to *change* when a title does. Zero on every existing row
 # is as good a starting point as any.
+#
+# `deleted_at` is when somebody pressed delete on an archived session, and `NULL` on every row nobody
+# has; see `mark_deleted` for why it is a column when `archived` is a checkpoint key.
 ADDED = (
     ("forked_from", ("ALTER TABLE sessions ADD COLUMN forked_from TEXT",)),
     ("forked_at", ("ALTER TABLE sessions ADD COLUMN forked_at INTEGER",)),
@@ -119,6 +122,7 @@ ADDED = (
         ),
     ),
     ("title_revision", ("ALTER TABLE sessions ADD COLUMN title_revision INTEGER NOT NULL DEFAULT 0",)),
+    ("deleted_at", ("ALTER TABLE sessions ADD COLUMN deleted_at TEXT",)),
 )
 
 # Long enough that an id is not guessable, which matters because a session id *is* its URL: this
@@ -539,7 +543,7 @@ async def read_sessions(database: Database) -> tuple[Session, ...]:
     clock makes ordinary for two sessions started together; the id after that is only so the order is
     a function of the rows.
     """
-    rows = await selecting(database, SELECTION, SCHEME)
+    rows = await selecting(database, f"{SELECTION} WHERE sessions.deleted_at IS NULL", SCHEME)
     return tuple(
         sorted(
             (parse_session(row) for row in rows),
@@ -550,8 +554,70 @@ async def read_sessions(database: Database) -> tuple[Session, ...]:
 
 
 async def read_session(database: Database, session: str) -> Session | None:
-    rows = await selecting(database, f"{SELECTION} WHERE sessions.id = :session", {**SCHEME, "session": session})
+    """
+    One session, or nothing where the index never heard of it or somebody has deleted it.
+
+    **A deleted session is absent from the moment of the press**, here and in `read_sessions`, which
+    is what makes every route, the fork included, refuse it without being taught the word: its rows
+    are still there until the reconciler's next round, and a fork copying keys out of a checkpoint
+    that round is discarding would carry half of it. `read_deleted` is the one reader that sees them.
+    """
+    rows = await selecting(
+        database,
+        f"{SELECTION} WHERE sessions.id = :session AND sessions.deleted_at IS NULL",
+        {**SCHEME, "session": session},
+    )
     return parse_session(rows[0]) if rows else None
+
+
+async def read_deleted(database: Database) -> tuple[Session, ...]:
+    """Every session somebody has pressed delete on and the reconciler has not yet taken out of the database."""
+    rows = await selecting(database, f"{SELECTION} WHERE sessions.deleted_at IS NOT NULL", SCHEME)
+    return tuple(parse_session(row) for row in rows)
+
+
+# Guarded in the statement rather than on a read beside it, for `name_if_untitled`'s reason: the
+# statement is the check, so "deleted implies archived" holds however two presses interleave.
+MARK_DELETED = """
+UPDATE sessions
+   SET deleted_at = :at
+ WHERE id = :session
+   AND deleted_at IS NULL
+   AND EXISTS (SELECT 1 FROM workflow_checkpoint WHERE workflow = :session AND step = :archived_key)
+"""
+
+
+async def mark_deleted(database: Database, session: str, at: datetime) -> bool:
+    """
+    Record that somebody pressed delete on this archived session, and say whether that is what happened.
+
+    `False` is a session that is not archived, already deleted, or not in the index at all. The
+    caller tells those apart by reading afterwards, since only a read after this update sees what a
+    press racing this one did.
+
+    **A column, where `archived` is a checkpoint key, and the reconciler is what decides it.** Taking
+    a session out of the database discards its checkpoint first and its row here second, and a crash
+    between the two has to leave the next round something to converge on. A key in the checkpoint
+    would go with the first half, leaving a row with nothing under it that no round would ever look
+    at again; the row is what outlives the first half, so it is where the fact goes. It is not a copy
+    of anything said, which is the only kind of column this table refuses.
+    """
+
+    def update(connection: sqlite3.Connection) -> bool:
+        marking = {"session": session, "at": at.isoformat(), "archived_key": ARCHIVED_KEY}
+        return connection.execute(MARK_DELETED, marking).rowcount == 1
+
+    return await database.run(update)
+
+
+async def unenrol(database: Database, session: str) -> None:
+    """
+    Take a session out of the index, which is the last thing deleting it does.
+
+    Last because the index is what decides a session exists: a row with its checkpoint already gone
+    is one the next round finds and finishes, where a checkpoint with no row is one nothing finds.
+    """
+    await database.run(lambda connection: connection.execute("DELETE FROM sessions WHERE id = ?", (session,)))
 
 
 # How far the store had got on this session, which is the mark a look leaves. The whole of the
@@ -589,10 +655,20 @@ async def saw(database: Database, session: str) -> None:
 # filing nothing in the database, so the first number never sees either. `max(seq)` is the table's
 # primary key, so the first is an index endpoint and not a scan. The index's half of the list's
 # token; `Service.listing_token` reads it beside the durability store's half, which is what the
-# worker is doing, since the row draws that too.
+# worker is doing, since the row draws that too. The count is of the sessions the list draws rather
+# than of rows, so a press of delete takes a row off every open list at once and not a round later,
+# when the reconciler takes it out of a table it was already missing from.
+#
+# Taking a deleted session out can *lower* `max(seq)`, since the newest rows may be the ones taken and
+# the store's key is not `AUTOINCREMENT`, so the numbers it gave up are handed out again. That does not
+# let a stale token pass for a current one, because a stream compares against the last token it sent
+# and not against any older one: the round that lowers the maximum also unenrols the row, taking a
+# `seen_seq` that a session somebody opened to press delete on always has out of the sum, so the next
+# poll sees a token that moved. Missing the change would need the take-out, the writes refilling those
+# numbers, and looks restoring the sum to the exact figure all to land inside one poll.
 LISTING = """
 SELECT (SELECT max(seq) FROM workflow_checkpoint),
-       count(*),
+       count(*) FILTER (WHERE deleted_at IS NULL),
        coalesce(sum(seen_seq), 0),
        coalesce(sum(title_revision), 0)
   FROM sessions

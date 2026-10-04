@@ -60,7 +60,8 @@ STREAM_ID: Final = "stream"
 
 
 # The one named event the stream sends, which says the page's shape is no longer the checkpoint's:
-# a page drawing the settings step whose session has since loaded its plugins. It is named rather
+# a page drawing the settings step whose session has since loaded its plugins, or a page showing a
+# session somebody has since deleted, whose reload is the page saying so. It is named rather
 # than a partial because there is nothing to swap - the page it is sent to has none of the regions
 # the new shape has - so what a reader needs is the page again, and a named event is what htmx hands
 # to a script rather than to a target. The stream element closes on it, and `mainplate.js` reloads.
@@ -167,6 +168,7 @@ class Links:
     press: Reversible
     rename: Reversible
     archive: Reversible
+    delete: Reversible
     job: Reversible
     stop_job: Reversible
     job_output: Reversible
@@ -295,6 +297,10 @@ class Links:
     def to_archive(self, session: str) -> str:
         """Where the press that closes a session goes, which is a plain form post answered with a redirect."""
         return url_for(self.archive, {"session": session})
+
+    def to_delete(self, session: str) -> str:
+        """Where the press that deletes an archived session goes, answered with a redirect to the dashboard."""
+        return url_for(self.delete, {"session": session})
 
     def to_job(self, session: str, entry: str) -> str:
         """

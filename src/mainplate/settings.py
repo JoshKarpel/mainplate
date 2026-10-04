@@ -130,6 +130,16 @@ class Settings(BaseSettings):
     interval is also how soon after a turn ends its files go.
     """
 
+    vacuum_every: timedelta = Field(default=timedelta(days=1), gt=timedelta())
+    """
+    How often the database file is rewritten, which is what gives back what deleting a session freed.
+
+    A day, because what the rewrite undoes accumulates over days - sessions deleted, a table grown a
+    row at a time - and because the whole console holds still while it runs, for seconds on a file of
+    a few hundred megabytes. It waits for a moment when nothing is working, so the interval is a
+    floor rather than a schedule; see `vacuum.py`.
+    """
+
     measure_every: timedelta = Field(default=timedelta(minutes=5), gt=timedelta())
     """
     How often every session's directories are walked to say what it takes on disk.

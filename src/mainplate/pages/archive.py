@@ -1,6 +1,6 @@
-# Archiving a session: the card saying what the press takes, and the press itself. A module of its
-# own because two parts of the page draw it, the rail's card about the session and the session
-# list's row, and neither should import the other to reach it.
+# Archiving a session, and deleting one that is archived: the card saying what each press takes, and
+# the presses themselves. A module of its own because two parts of the page draw it, the rail's card
+# about the session and the session list's row, and neither should import the other to reach it.
 
 from __future__ import annotations
 
@@ -42,6 +42,12 @@ def archive_card(links: Links, reader: Reader, session: str, archived: datetime 
 
     The same control stands on every live row of the session list, as `archive_action`, so a session
     can be closed without being opened first; the two share `archive_press`, which is the one form.
+
+    **An archived card carries the press that deletes the session**, as the same disclosure over the
+    same kind of sentence: it is the next act on a closed session and the only one left, and the card
+    is already where the session's closing is said. Only here and not on an archived row of the list,
+    so deleting a conversation takes opening it first, and the last thing somebody sees before the
+    press is what they are about to lose.
     """
     if archived is not None:
         return div(
@@ -55,6 +61,18 @@ def archive_card(links: Links, reader: Reader, session: str, archived: datetime 
             children=[
                 div(cls="archive__head", children="archived"),
                 dl(cls="facts", children=[*fact("since", dated(archived, reader), title=stamped(archived, reader))]),
+                details(
+                    cls="archive",
+                    children=[
+                        summary(cls="archive__head", children="Delete"),
+                        p(cls="archive__says", children=DELETING_TAKES),
+                        form(
+                            cls="archive__press",
+                            attrs={"method": "post", "action": links.to_delete(session)},
+                            children=button(cls="archive__set", attrs={"type": "submit"}, children="Delete"),
+                        ),
+                    ],
+                ),
             ],
         )
     return details(
@@ -72,6 +90,12 @@ ARCHIVING_TAKES: Final = (
     "The conversation stays, and a fork of it carries on."
 )
 """What the press does, said once for the card in the rail and the action on a row."""
+
+DELETING_TAKES: Final = (
+    "Takes the conversation and everything recorded for it out of the database, for good; nothing forks "
+    "from it again. Its artifacts and any forks of it stay."
+)
+"""What deleting takes, and the two things it leaves, which are the two a reader would ask after."""
 
 
 def archive_press(links: Links, session: str) -> Element:

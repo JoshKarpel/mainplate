@@ -297,12 +297,21 @@ class Scripted:
     history a request carried. This is the only reading that can, and it is what a test asserting on
     a cleared context has to ask.
     """
+    told: list[str | None] = field(default_factory=list)
+    """
+    The instructions each request was sent under, read off what reached the model.
+
+    For `carried`'s reason: a checkpoint records instructions once per stretch of context and never
+    on a request, so whether every request in a stretch was actually sent that record is something
+    only the model's side can answer.
+    """
 
     def model(self) -> FunctionModel:
         def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
             answering = self.script[min(self.asked, len(self.script) - 1)]
             self.asked += 1
             self.carried.append(len(messages))
+            self.told.append(info.instructions)
             return answering
 
         return FunctionModel(respond)

@@ -140,8 +140,11 @@ the page size is written nowhere but `LISTED`.
 
 ## What is not here
 
-- **Nothing deletes an artifact or a version.** The seeder does, for its own fixtures, with a
-  statement of its own, for the reason nothing deletes a session.
+- **Nothing deletes an artifact or a version**, deleting the session that made it included. An
+  artifact outlives that session by design and may have been updated from others since, so taking
+  its versions with the session would cut a history somebody else is still adding to. A version
+  from a deleted session names it by id, without a link, since its address leads nowhere. The
+  seeder deletes its own fixtures' artifacts, with a statement of its own.
 - **Nothing restricts who can open one** beyond whoever can reach the console, which is the same
   line a session's address draws: the id is long enough not to be guessed, and there are no accounts.
 - **The gallery draws an artifact's page with an empty frame.** It is static files, and the bytes are
