@@ -18,7 +18,6 @@ from without_html import details
 from without_html import div
 from without_html import h1
 from without_html import h2
-from without_html import header
 from without_html import iframe
 from without_html import li
 from without_html import p
@@ -33,7 +32,7 @@ from mainplate.forge import Reachable
 from mainplate.pages.document import UNTITLED
 from mainplate.pages.document import Links
 from mainplate.pages.document import document
-from mainplate.pages.document import home
+from mainplate.pages.document import pagebar
 from mainplate.pages.moments import Reader
 from mainplate.pages.moments import dated
 from mainplate.pages.moments import stamped
@@ -256,12 +255,11 @@ def artifact_page(
         div(
             cls="artifact",
             children=[
-                header(
-                    cls="artifact__bar",
-                    children=[
-                        home(links),
-                        a(cls="artifact__up", attrs={"href": links.to_artifacts()}, children=ARTIFACTS),
-                        h1(cls="artifact__title", children=heading),
+                pagebar(
+                    links,
+                    heading,
+                    up=a(cls="pagebar__link", attrs={"href": links.to_artifacts()}, children=ARTIFACTS),
+                    after=[
                         versions(links, reader, selected, history),
                         p(
                             cls="artifact__from",

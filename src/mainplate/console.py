@@ -26,6 +26,7 @@ from without_asgi import RawHeaders
 from without_asgi import Response
 from without_asgi import headers
 from without_asgi import html_content
+from without_asgi import json_content
 from without_asgi.sse import event_stream
 from without_asgi.sse import with_heartbeat
 from without_web import INT
@@ -56,12 +57,15 @@ from mainplate.conversation import TRUSTED_FIELD
 from mainplate.conversation import Disposition
 from mainplate.conversation import commit_command
 from mainplate.conversation import parse_disposition
+from mainplate.memo import MEMO
+from mainplate.memo import Account
 from mainplate.pages.artifacts import RECENT
 from mainplate.pages.artifacts import artifact_page
 from mainplate.pages.artifacts import catalogue_page
 from mainplate.pages.composer import CONTEXT_LEADER
 from mainplate.pages.composer import PLUGIN_LEADER
 from mainplate.pages.dashboard import dashboard_page
+from mainplate.pages.debug import debug_page
 from mainplate.pages.document import BEFORE_FIELD
 from mainplate.pages.document import SHAPE_FIELD
 from mainplate.pages.document import VERSION_FIELD
@@ -1392,6 +1396,49 @@ listed_before = query_param(BEFORE_FIELD, optional(int), schema={"type": "intege
 pinned_version = query_param(VERSION_FIELD, once(int), schema={"type": "integer"})
 
 
+@get("/debug", summary="What this process is holding, read once")
+async def show_debug(service: Service) -> Response:
+    """
+    The memo's account as it stands at this request, which is the one question the page asks.
+
+    The memo is the process's and not the service's, since what it holds was computed by module-level
+    functions with no caller to hand them one; see `Memo`. So this reads `MEMO` directly, and the
+    service it is handed is unused.
+    """
+    return page_response(200, debug_page(LINKS, MEMO.account()))
+
+
+def account_json(account: Account) -> dict[str, object]:
+    """
+    The memo's account as JSON, field for field what the debug page draws, in bytes rather than words.
+
+    Written out rather than through `asdict`, so which fields cross is decided here and a field added
+    to `Account` reaches this answer only when somebody says it should. Figures are raw, since the
+    page's `25 MiB` is a reading for a person and this is for a program.
+    """
+    return {
+        "budget": account.budget,
+        "held": account.held,
+        "functions": [
+            {
+                "name": tally.name,
+                "hits": tally.hits,
+                "misses": tally.misses,
+                "entries": tally.entries,
+                "held": tally.weight,
+                "evicted": tally.evicted,
+            }
+            for tally in account.tallies
+        ],
+    }
+
+
+@get("/api/debug", summary="What this process is holding, as JSON")
+async def debug_json(service: Service) -> Response:
+    """The debug page's reading for a program: the same account, taken the same way, encoded as JSON."""
+    return Response.from_content(200, json_content({"memo": account_json(MEMO.account())}))
+
+
 @get("/artifacts", listed_before, reading, summary="Every artifact, newest first")
 async def artifact_catalogue(service: Service, before: int | None, reader: Reader) -> Response:
     shown = await artifacts.catalogue(service.database, before)
@@ -1519,6 +1566,8 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     artifact_content,
     artifact_download,
     picture,
+    show_debug,
+    debug_json,
 )
 
 LINKS = Links(
@@ -1546,5 +1595,7 @@ LINKS = Links(
     artifact_content=artifact_content,
     artifact_download=artifact_download,
     picture=picture,
+    debug=show_debug,
+    debug_json=debug_json,
     assets=ASSETS,
 )

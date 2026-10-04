@@ -32,12 +32,14 @@ def tokens(count: int) -> str:
 
 def sized(allocated: int) -> str:
     """
-    Bytes on disk as a person compares them, which is to two or three figures in a binary unit.
+    Bytes on disk or in memory as a person compares them, which is to two or three figures in a
+    binary unit.
 
     Binary, unlike `tokens`, because this is a size to allocate against rather than a number to
-    weigh: it is what `du` prints and what `df` will get back, and the unit says which base it is in
-    so nobody has to know. One decimal under ten and none above, since `1.2 GiB` and `466 MiB` are
-    each the digits a person reads and `1.21 GiB` is precision nobody asked for.
+    weigh: it is what `du` prints and what `df` will get back, and what a process's memory is
+    budgeted in, and the unit says which base it is in so nobody has to know. One decimal under ten
+    and none above, since `1.2 GiB` and `466 MiB` are each the digits a person reads and `1.21 GiB`
+    is precision nobody asked for.
     """
     value = float(allocated)
     for unit in ("B", "KiB", "MiB", "GiB", "TiB"):

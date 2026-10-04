@@ -123,11 +123,12 @@ download. The version history is a disclosure hanging from "version 2 of 3", in 
 over the preview when open rather than under it, because a list under the frame is what made the
 page scroll and capped the frame short of the window.
 
-**It is the one page drawn without the session list.** An artifact is not a conversation, and what
-somebody came to it for is the document, as large as the window allows; the console's mark is still
-there, and the dashboard is where every other place is reached from. With no list there is nothing
-for the live connection to redraw, so the page holds none. The cost, stated: reaching another
-session from here is two presses rather than one. An artifact's page might one day want a list of
+**It is drawn without the session list**, in the bar of its own that a page about something other
+than a conversation draws, as the [debug page](console.md#the-memo-and-the-debug-page) does. An
+artifact is not a conversation, and what somebody came to it for is the document, as large as the
+window allows; the console's mark is still there, and the dashboard is where every other place is
+reached from. With no list there is nothing for the live connection to redraw, so the page holds
+none. The cost, stated: reaching another session from here is two presses rather than one. An artifact's page might one day want a list of
 its own, of artifacts rather than sessions, and that is a separate decision rather than something
 this one owes.
 

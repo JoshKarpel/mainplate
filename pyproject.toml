@@ -52,6 +52,7 @@ dependencies = [
     # depends on for a *security* boundary is not one to inherit by accident.
     "pygments>=2.18",
     "pyyaml>=6.0.3",
+    "cachetools>=7.2",
 ]
 
 [project.scripts]

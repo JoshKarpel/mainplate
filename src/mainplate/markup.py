@@ -16,7 +16,6 @@ from __future__ import annotations
 import re
 import threading
 from collections.abc import Iterator
-from functools import lru_cache
 from typing import Final
 
 import nh3
@@ -29,6 +28,8 @@ from pygments.lexers import get_lexer_for_filename
 from pygments.token import STANDARD_TYPES
 from pygments.token import _TokenType
 from pygments.util import ClassNotFound
+
+from mainplate.memo import MEMO
 
 # The wrapper `codehilite` puts around a highlighted block, which is the one class here that is not
 # a token: Pygments names the spans inside, and the extension names the box.
@@ -151,7 +152,7 @@ def converted(converter: Markdown, text: str) -> Markup:
     return Markup(nh3.clean(converter.convert(text), allowed_classes=ALLOWED_CLASSES))
 
 
-@lru_cache(maxsize=2048)
+@MEMO.memoized
 def linked_text(text: str) -> Markup:
     """Verbatim text with its HTTP(S) URLs rendered as links."""
     parts: list[Markup] = []
@@ -166,30 +167,31 @@ def linked_text(text: str) -> Markup:
     return Markup().join(parts)
 
 
-@lru_cache(maxsize=2048)
+@MEMO.memoized
 def as_message(text: str) -> Markup:
     """
     Something somebody typed into a box, or a model answered with.
 
-    Cached because it is a pure function of its input and the console is not: a transcript is
+    Memoized because it is a pure function of its input and the console is not: a transcript is
     re-rendered whole whenever the turn in flight records anything, so an unmemoised conversion
     would re-parse the entire conversation several times a turn to redraw the one panel that
     changed.
 
-    The cache is bounded, and what it can hold is bounded twice over besides: a message is capped
-    at the boundary that accepts it, and a key is the exact text, so the same message renders once
-    however many times it is drawn.
+    What it keeps is weighed against the memo's one budget along with everything else memoized, and
+    a key is the exact text, so the same message renders once however many times it is drawn.
     """
     return converted(CONVERTERS.message, text)
 
 
-@lru_cache(maxsize=64)
+@MEMO.memoized
 def as_document(text: str) -> Markup:
     """
     A Markdown *file*: the guidance a session is answered under, or a part of the repository's own.
 
-    Cached for the reason a message is, and smaller because there are far fewer of them: one per
-    stretch of context, plus whatever a turn was handed on approach.
+    Memoized for the reason a message is. There are far fewer of these, one per stretch of context
+    plus whatever a turn was handed on approach, but each is the heaviest thing the memo holds, a
+    hundred kilobytes of guidance apiece; that is the case a count of entries got wrong, and a budget
+    counted in bytes does not.
     """
     return converted(CONVERTERS.document, text)
 
@@ -199,16 +201,16 @@ def as_document(text: str) -> Markup:
 SHELL: Final = "bash"
 
 
-@lru_cache(maxsize=256)
+@MEMO.memoized
 def language_of(path: str) -> str | None:
     """
     The Pygments lexer a file is coloured by, from its name alone, or nothing where it knows none.
 
     Nothing rather than a guess, for the reason an unlabelled fence is left alone: a wrong grammar
     reads worse than no colour. The first alias is what `get_lexer_by_name` takes back, and a name
-    rather than the lexer itself so that `highlighted` has something hashable to cache on.
+    rather than the lexer itself so that `highlighted` has something hashable to memoize on.
 
-    Cached because the lookup walks every lexer's filename patterns, and a transcript re-renders
+    Memoized because the lookup walks every lexer's filename patterns, and a transcript re-renders
     whole whenever the turn in flight records anything.
     """
     try:
@@ -230,7 +232,6 @@ def token_class(kind: _TokenType) -> str:
     return STANDARD_TYPES.get(found, "")
 
 
-@lru_cache(maxsize=512)
 def highlighted(language: str, text: str) -> tuple[Markup, ...]:
     """
     `text` as one run of markup per line of it, each token wrapped in the class Pygments names it.
@@ -248,8 +249,11 @@ def highlighted(language: str, text: str) -> tuple[Markup, ...]:
     lines is shown uncoloured rather than misaligned: a line's span has to hold that line, and not
     the one before it.
 
-    Cached for the reason a message is, and bounded smaller because what is cached is larger: a
-    read is up to fifteen hundred lines, where a message is a few paragraphs.
+    **Not memoized itself, deliberately**, though it is the costliest thing a render does: every
+    caller is a block memoized as the markup it renders to (`anchored_element`, `coloured_block`), so
+    keeping these lines too would keep every file twice. Measured, the two layers held a third of the
+    memo between them on the same text, and the LRU does not tell them apart, since both are made at
+    the same moment and age together. Memoize the outermost pure function, so no layer is held twice.
     """
     lines = text.split("\n")
     lexer = get_lexer_by_name(language, stripnl=False, ensurenl=False)

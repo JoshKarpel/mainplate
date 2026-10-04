@@ -24,6 +24,7 @@ from mainplate.artifacts import Version
 from mainplate.forge import Fetched
 from mainplate.forge import Reachable
 from mainplate.pages.artifacts import recent_artifacts
+from mainplate.pages.debug import debug_section
 from mainplate.pages.document import DASHBOARD
 from mainplate.pages.document import NEW_SESSION
 from mainplate.pages.document import UNTITLED
@@ -247,9 +248,11 @@ def dashboard_page(
     are always there, where the repositories are whatever the forges reach. One card to a row in both
     sections, since a card is as tall as the sessions under it and two side by side would not match.
 
-    **Then the artifacts most recently kept**, last because they are what sessions made rather than
-    where one starts, and a reader who came to start one should not scroll past them to do it. This is
-    where the catalogue is reached from, since the dashboard is where a reader with nothing open lands.
+    **Then the artifacts most recently kept**, after the places because they are what sessions made
+    rather than where one starts, and a reader who came to start one should not scroll past them to do
+    it. This is where the catalogue is reached from, since the dashboard is where a reader with nothing
+    open lands. **The way to the debug page is last of all**, since it is about the console rather than
+    about anything worked on in it.
 
     Nothing here asks the forge anything: the fetch state is what the background loop last left in
     memory, and the repositories are the catalogue a forge answered at startup.
@@ -335,6 +338,7 @@ def dashboard_page(
                             ],
                         ),
                         *recent_artifacts(links, reader, recent),
+                        debug_section(links),
                     ],
                 )
             ],

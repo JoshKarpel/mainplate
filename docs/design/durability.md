@@ -352,26 +352,32 @@ request, and prints the difference, the per-pass series and a profile. It reache
 running it before and after a change to `loop.py` or `durability.py` costs nothing.
 
 What it says is that **the per-already-recorded-request term is not flat**, so the turn is worse than
-quadratic: it grows by about half again between a forty-request turn and a hundred-and-sixty-request
-one. Almost none of that is parsing. Where a long turn's replay actually goes:
+quadratic: between an eighty-request turn and a hundred-and-sixty-request one it climbs by between a
+sixth and a half from one run to the next, at around a fifth of a millisecond. Below eighty the
+series is too short for the fit to say anything, and it comes out negative as often as not. Almost
+none of it is parsing. Where a long turn's replay actually goes:
 
-- **Pydantic AI's `prepare_messages` is the largest single term**, around a quarter. `Agent.request`
-  composes the history for the wire before handing it to `Stepping.request`, so a replayed request
-  pays it too, over a history that is longer every time.
-- **Two walks of the whole checkpoint are next**, together around a fifth, and both are for the
-  inbox. `since_last` calls `drains_in` for this turn's cursors, and `Run.delivered` walks the same
-  keys again for the entries past the last one. Each is O(checkpoint) inside a loop already O(n²),
-  and the checkpoint grows with the turn, which is what makes the per-request term climb.
-- **Parsing a record back out of the store is around three percent**, which is where the last
-  measurement under the graph put it and is what removing the graph left behind: the graph's own
-  per-hook context rebuilding was the dominant term, and it is gone.
+- **Two walks of the whole checkpoint are the largest term by far**, more than half of what the
+  passes spend, and both are for the inbox. `since_last` calls `drains_in` for this turn's cursors,
+  and `Run.delivered` walks the same keys again for the entries past the last one. Each is
+  O(checkpoint) inside a loop already O(n²), and the checkpoint grows with the turn, which is what
+  makes the per-request term climb.
+- **Parsing a record back out of the store is around a twentieth.**
+- **Two costs a replayed request does not pay, because each is done only where its answer is
+  used.** `prepare_messages`, Pydantic AI's walk of the whole history for the wire, runs inside the
+  model step in `Stepping.request`, so a request already recorded never prepares a history it is not
+  going to send; and a tool's schema is worked out once a process rather than once a pass, by
+  `tools/schemas.py`, since a toolset is rebuilt every pass from closures whose schemas never differ.
+  Done the other way round, the two were together about a third of a long turn's replay.
 
 **The two walks are the console's own and so are where its own fixes are.** Composing a key inside
 one of them costs a key per recorded key per request, which is why `drains_in` builds both names it
 compares against above its loop; that alone is worth a quarter of the per-request term. What is left
 is the walk itself, and shrinking *that* means indexing the checkpoint by turn on the way in, which
-is a change to what a pass holds rather than a tidy-up, and is not worth making until a real turn is
-long enough to feel it.
+is a change to what a pass holds rather than a tidy-up. Now that it is most of what replay costs, it
+is the next change worth measuring, and still one to make only once a real turn is long enough to
+feel it: a hundred-and-sixty-request turn spends under three seconds replaying across all of its
+passes.
 
 Do not build a record cache or a fetch-only-what-is-missing store for any of this: the quadratic is
 not where a store can reach it, and a cache would sit in front of a `load` that is already one query.

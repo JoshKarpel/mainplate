@@ -26,6 +26,12 @@ OpenAI wires reach almost every gateway, and each further extra is a whole SDK. 
 not free, since it brings `openai`, `tiktoken`, `requests`, `urllib3`, `regex`, and `certifi`, which
 is the price of the OpenAI-compatible half of a gateway being reachable at all.
 
+`cachetools` for the memo's LRU, because what the console needs from a cache is a budget in bytes,
+which is `LRUCache(getsizeof=...)` and which the stdlib's `lru_cache` cannot do: it counts entries.
+It has no dependencies of its own and a release history back to 2014. Only the cache class is used;
+the decorator is `memo.py`'s own, since cachetools' `cached` holds the cache object it was given and
+the memo is started over at its configured size after every decorator has run.
+
 ## Vendored assets
 
 The scripts and faces under `src/mainplate/assets/` that somebody else wrote are rows in

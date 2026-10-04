@@ -24,6 +24,8 @@ from pydantic_ai import ModelRetry
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
+from mainplate.tools.schemas import add_function
+
 # How much of what a job printed a listing shows per job, from the end: the last lines are where it
 # says it failed or what it is listening on.
 LISTING_LINES: Final = 20
@@ -234,9 +236,9 @@ def job_tools(reaching: JobsInTurn) -> FunctionToolset[None]:
             raise ModelRetry(f"there is no running job {job} in this session; `list_jobs` names them")
         return f"Stopped job {job}."
 
-    toolset.add_function(start_job, takes_ctx=True)
-    toolset.add_function(list_jobs)
-    toolset.add_function(read_job)
-    toolset.add_function(wait_job)
-    toolset.add_function(stop_job)
+    add_function(toolset, start_job, takes_ctx=True)
+    add_function(toolset, list_jobs)
+    add_function(toolset, read_job)
+    add_function(toolset, wait_job)
+    add_function(toolset, stop_job)
     return toolset

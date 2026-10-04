@@ -352,8 +352,9 @@ class Agent:
         sent. The cost, stated: a `Model.request` called on a history alone, without these
         parameters, recovers no instructions from it, which nothing here does.
 
-        `prepare_messages` is the model's own chance to reshape a history for its wire, and is the
-        one thing between this loop and `Model.request` that the graph used to do; the settings and
+        `prepare_messages`, the model's own chance to reshape a history for its wire, is the one
+        thing between this loop and `Model.request` that the graph used to do, and it is
+        `Stepping.request` that calls it, inside the step: see there for why. The settings and
         parameter preparation the graph also did are done again inside every model's `request`, so
         there is nothing else to call.
         """
@@ -361,8 +362,7 @@ class Agent:
             function_tools=[tool.tool_def for tool in tools.by_name.values()],
             instruction_parts=[InstructionPart(content=self.instructions)],
         )
-        prepared = self.model.prepare_messages(messages, parameters)
-        return await scope.request(self.model, prepared, self.settings or None, parameters)
+        return await scope.request(self.model, messages, self.settings or None, parameters)
 
     def limit(self) -> str:
         """

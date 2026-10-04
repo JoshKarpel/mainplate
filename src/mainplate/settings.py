@@ -15,6 +15,7 @@ from pydantic_settings import BaseSettings
 from pydantic_settings import SettingsConfigDict
 
 from mainplate.config import config_home
+from mainplate.memo import DEFAULT_MEMO_BYTES
 
 # What a fresh checkout gets with nothing set. A file under the working directory rather than
 # under the user's data directory, because this is a tool you point at a project.
@@ -188,6 +189,29 @@ class Settings(BaseSettings):
     It bounds the *staleness* rather than the work: a connection that finds nothing new sends
     nothing, so a quiet console with ten tabs open makes fifty of those counts a second and no
     renders and no bytes.
+    """
+
+    memo_bytes: int = Field(default=DEFAULT_MEMO_BYTES, gt=0)
+    """
+    How many bytes of memoized results the process keeps, across every function memoized at all.
+
+    One figure for all of them rather than one each, so what this process spends on memoizing is
+    this number however many functions come to be memoized; the cost is that a burst of one kind,
+    several large documents opened together, can push another kind's results out, and no function
+    is promised any room. Read once at startup, so a change needs a restart. The debug page says
+    what is held against it and by whom, which is how to tell whether it is the right size.
+    """
+
+    collect_young_after: int = Field(default=50_000, gt=0)
+    """
+    How many objects, net of those freed, the cyclic collector lets pile up before it looks at the
+    youngest, which is the first of `gc.set_threshold`'s three and the only one set here.
+
+    Measured rather than copied: over a real console's eight largest sessions drawn cold and then
+    warm, the default of two thousand spent 1.8 seconds collecting with its longest pause 162 ms,
+    and this with the startup freeze spent 0.06 seconds with its longest at 8 ms and held no more
+    memory. A higher figure still collected nothing at all over that workload, which postpones a
+    cycle's memory rather than saving the work. Read once at startup, by `serve`.
     """
 
     @property

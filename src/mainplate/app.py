@@ -16,11 +16,11 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 from collections.abc import AsyncIterator
 from collections.abc import Awaitable
 from collections.abc import Callable
-from contextlib import AbstractAsyncContextManager
 from contextlib import AsyncExitStack
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -100,6 +100,7 @@ from mainplate.forge import Reaching
 from mainplate.forge import Workspaces
 from mainplate.forge import discover as reachable
 from mainplate.jobs import Jobs
+from mainplate.memo import MEMO
 from mainplate.origins import refusing_crossings
 from mainplate.pages.document import refusal_page
 from mainplate.plugins.asking import Declaring
@@ -617,13 +618,41 @@ def build_app(opening: Lifespan[Service], assets: Inventory) -> ASGIApp:
     return make_asgi_app(opening, http=build_router(assets).dispatch)
 
 
+def settle_collector(young: int) -> None:
+    """
+    Tell the cyclic collector what startup already settled, once, after the console is ready.
+
+    Everything built to get here - the modules, the catalogue, the wires, the store - lives until the
+    process exits, and every full collection would otherwise walk all of it again to find what it
+    already knew. So it is collected once, so a cycle already dead is not frozen in for good, then
+    frozen out of every collection to come, and the youngest generation is let grow to `young` before
+    it is looked at, the other two thresholds kept as the interpreter has them. Measured on the
+    rendering a long session costs, the freeze alone took the longest pause from 162 ms to 16; see
+    `Settings.collect_young_after` for the threshold.
+
+    After startup rather than at import, because what startup builds lazily would otherwise land
+    outside the frozen set and be walked for ever. Called by `serve` and not by `open_console`, since
+    the suite runs consoles of its own in one process and this is the process's to decide.
+    """
+    gc.collect()
+    gc.freeze()
+    _, middle, oldest = gc.get_threshold()
+    gc.set_threshold(young, middle, oldest)
+
+
 async def serve(settings: Settings) -> None:
     """Run the console and the worker until cancelled, which for the CLI means until a signal."""
+    # Before anything is rendered, so nothing computed at the default size is dropped; see `Memo`.
+    MEMO.configure(settings.memo_bytes)
     config = read_config(config_path(settings.config_home))
     endpoints = build_wires(config)
 
-    def opening() -> AbstractAsyncContextManager[Service]:
-        return open_console(settings, config, endpoints)
+    @asynccontextmanager
+    async def opening() -> AsyncIterator[Service]:
+        async with open_console(settings, config, endpoints) as service:
+            # Ready, and nothing served yet: what startup built is everything that will be frozen.
+            settle_collector(settings.collect_young_after)
+            yield service
 
     try:
         async with serving(build_app(opening, served_assets()), host=settings.host, port=settings.port):
