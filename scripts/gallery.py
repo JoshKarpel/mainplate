@@ -715,7 +715,6 @@ mid-sentence in the screenshot and misrepresent what a model's own paragraph loo
 CONVERSATION: list[ModelMessage] = [
     ModelRequest(
         parts=[UserPromptPart(content="Why does the poll stop after one answer?")],
-        instructions=INSTRUCTIONS,
     ),
     ModelResponse(
         timestamp=WHEN,
@@ -822,7 +821,6 @@ CONVERSATION: list[ModelMessage] = [
 DRAWN: list[ModelMessage] = [
     ModelRequest(
         parts=[UserPromptPart(content="Draw the poll's path from the worker to the page.")],
-        instructions=INSTRUCTIONS,
     ),
     ModelResponse(
         timestamp=WHEN,

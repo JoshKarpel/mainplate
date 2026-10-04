@@ -2182,27 +2182,6 @@ def parse_instructions(recorded: object) -> str:
     return records.Instructions.model_validate(recorded).said
 
 
-def system_prompt_in(messages: Sequence[ModelMessage]) -> str | None:
-    """
-    What the model was told about itself in these messages, which is the system prompt it carried.
-
-    **What the page draws is `instructions:{n}`, not this**, because that record exists before the
-    first request where these messages exist only after the turn. This is the other end of the same
-    fact, and holding the two against each other is what pins the claim that record makes: the
-    recorded string is spoken verbatim, so what a stretch records and what its requests carried have
-    to be one string rather than two that drift.
-
-    The **last** one rather than the first, because a turn's requests all carry the same instructions
-    unless something under them moved. Nothing where a turn recorded none, which is a turn answered
-    before this console said anything at all.
-    """
-    told: str | None = None
-    for message in messages:
-        if isinstance(message, ModelRequest) and message.instructions is not None:
-            told = message.instructions
-    return told
-
-
 def pictures_of(part: ToolReturnPart) -> tuple[BinaryContent, ...]:
     """
     The images in one call's result, in the order the model was shown them.
