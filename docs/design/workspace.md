@@ -460,3 +460,68 @@ and what a person wants back is the conversation with somewhere to work, which i
 fresh checkout at the archived tree and a scratch of its own. Putting the archived session itself
 back would mean reconstructing a scratch that was deliberately not snapshotted, which is a second
 mechanism to keep for a state a fork already reaches.
+
+## Deleting
+
+**Deleting an archived session takes its conversation as well, which is the space archiving
+leaves.** A session goes active, then archived with its files still on the disk, then archived with
+nothing left there, then deleted, and every step is the one after the last: the press is offered only
+on an archived session's card, and the statement recording it refuses one that is not archived. It
+is not offered on an archived row of the list, so deleting a conversation means opening it first,
+and what somebody last sees before the press is what they are about to lose.
+
+**The press records a fact and the archiving reconciler acts on it**, for archiving's reason and on
+the same round. The press may come any time after archiving, including before the files have come
+off, so the round takes a deleted session's files off the disk exactly as it does an archived one's,
+and takes it out of the database only once it holds nothing and nothing holds it. That is the
+session's checkpoint and its place in the queue, in one commit through the store's own `delete`, and
+then its row in the index. Its claim stays, superseded: the store raises the token on it and keeps
+the row, because that row is the fence that refuses a pass coming back with an older token, which
+costs one small row per deleted session a pass ever took. From the moment of the press the session
+is absent to every reader but the reconciler, so the list drops its row, its page answers `404`, and
+nothing forks from a checkpoint the next round is about to discard.
+
+**The fact is a column on the index, `deleted_at`, where `archived` is a checkpoint key**, and the
+reconciler is what decides it. Taking a session out discards its checkpoint first and its row last,
+so a console that dies between the two leaves a row with nothing under it. A key in the checkpoint
+would have gone with the first half, and a row nothing marks would never be looked at again; the row
+is what outlives the first half, so it is where the fact goes, and the next round finishes the job
+off the column alone. It is not a copy of anything said, which is the only kind of column the index
+refuses.
+
+**What a session made beside its conversation stays**:
+
+- **Its artifacts**, which [outlive the session that made them](artifacts.md#what-is-not-here) and
+  may have been updated from other sessions since.
+- **Its snapshots in the store**, under its refs, because a fork carries its parent's `tree` keys and
+  those name commits reachable only through the parent's refs. Without them, a `git gc` on the store
+  would take trees a surviving fork can still fork from.
+- **Every fork of it**, which carries its own copy of the turns it began with, and is drawn as a root
+  once the session it came from is gone.
+
+### Giving the file back
+
+**Freeing a session's rows does not shrink the database file; a daily `VACUUM` does.** SQLite
+reuses a freed page for the next write and never returns it, and nothing but a rewrite undoes the
+fragmentation of tables appended to a row at a time. So `vacuum.py` rewrites the file once per
+`vacuum_every`, a day by default, and then truncates the write-ahead log, which a vacuum fills with a
+whole second copy of the database and SQLite does not shrink on its own.
+
+**It runs through the console's own connection, so the console stalls rather than failing.** Every
+statement this process makes queues on one guarded connection, so while the rewrite runs a page, a
+stream's poll and a pass's write all wait and then succeed. On a second connection the same vacuum
+leaves readers alone and refuses writers instead: against a copy of a real 389 MB database it took
+eight seconds, and a write from another connection gave up at the store's five-second busy timeout.
+A stall is the better of the two, since a write that waits is a record and one refused is a pass
+redelivered and a press answered with an error. That is also why it is not a timer outside the
+process, such as a systemd unit running a command: that is the second connection.
+
+**It waits for a quiet moment**: no pass holding a session, none queued, and no command running. A
+session deferred until a provider's retry time does not count, since it may wait for hours. When a
+vacuum was last attempted is one row in the file, so a console restarted more often than the
+interval still gets one, and a failed attempt counts as one, so a disk without room for the copy is
+tried again a day later rather than rewritten into once a minute.
+
+The cost, stated: the whole console holds still for the seconds it runs, which can land while
+somebody is reading, and a second process writing to the file in those seconds is refused once the
+vacuum outlasts its busy timeout.

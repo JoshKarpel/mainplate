@@ -190,7 +190,8 @@ change:
   handoff, steering, running a command, and pushing.
 - [`docs/design/workspace.md`](docs/design/workspace.md): forges, clones, a session's checkout,
   where in it and on what branch, snapshots, where everything a session keeps on disk is and what it
-  takes, and archiving, which takes it away while keeping the conversation.
+  takes, archiving, which takes it away while keeping the conversation, deleting, which takes the
+  conversation too, and the daily vacuum that gives the database file back what deleting freed.
 - [`docs/design/tools.md`](docs/design/tools.md): which tools a session gets, and the
   content-addressed anchoring scheme behind `read` and `edit`.
 - [`docs/design/artifacts.md`](docs/design/artifacts.md): the store of versioned HTML documents

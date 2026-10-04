@@ -251,7 +251,7 @@ class Agent:
         The turn is unbounded. What a session may spend is a question about money and not round
         trips, and it is answered where money is counted.
         """
-        messages = [*history, ModelRequest(parts=[UserPromptPart(content=asked)], instructions=self.instructions)]
+        messages = [*history, ModelRequest(parts=[UserPromptPart(content=asked)])]
         start = len(history)
         tools = await Tools.from_toolsets(self.model, messages, self.toolsets)
         ending = 0
@@ -268,7 +268,7 @@ class Agent:
                 if len({call.tool_call_id for call in calls}) != len(calls):
                     raise CannotGoOn("the model asked for two tool calls under one id, and neither can be answered")
                 results = await together([tools.call(scope, call) for call in calls])
-                messages.append(ModelRequest(parts=[*results], instructions=self.instructions))
+                messages.append(ModelRequest(parts=[*results]))
                 if scope.halted:
                     return tuple(messages[start:])
                 continue
@@ -282,12 +282,7 @@ class Agent:
                 if not injected:
                     return tuple(messages[start:])
                 ending += 1
-                messages.append(
-                    ModelRequest(
-                        parts=[SystemPromptPart(content=text) for text in injected],
-                        instructions=self.instructions,
-                    )
-                )
+                messages.append(ModelRequest(parts=[SystemPromptPart(content=text) for text in injected]))
                 continue
 
             if response.finish_reason == "length":
@@ -301,12 +296,7 @@ class Agent:
             if corrected >= CORRECTIONS:
                 raise UnexpectedModelBehavior(f"Model output exceeded max retries count of {CORRECTIONS}.")
             corrected += 1
-            messages.append(
-                ModelRequest(
-                    parts=[RetryPromptPart(content="Please return text or call a tool.")],
-                    instructions=self.instructions,
-                )
-            )
+            messages.append(ModelRequest(parts=[RetryPromptPart(content="Please return text or call a tool.")]))
 
     async def before_request(self, scope: Stepping, messages: list[ModelMessage]) -> None:
         """
@@ -342,25 +332,25 @@ class Agent:
         scope.allow(scope.coming("model"))
         injected = await scope.injected(messages)
         if injected:
-            messages.append(
-                ModelRequest(
-                    parts=[SystemPromptPart(content=text) for text in injected], instructions=self.instructions
-                )
-            )
+            messages.append(ModelRequest(parts=[SystemPromptPart(content=text) for text in injected]))
         steered = await scope.steering()
         if steered:
-            messages.append(
-                ModelRequest(parts=[UserPromptPart(content=text) for text in steered], instructions=self.instructions)
-            )
+            messages.append(ModelRequest(parts=[UserPromptPart(content=text) for text in steered]))
 
     async def request(self, scope: Stepping, messages: list[ModelMessage], tools: Tools) -> ModelResponse:
         """
         The provider's answer to the conversation as it stands, made or replayed by `scope`.
 
         Instructions travel as `instruction_parts` on the parameters, which is what a model reads,
-        and are also written on every `ModelRequest` this loop makes, which is what the transcript
-        reads back; the two are one string written twice for two readers, and `system_prompt_in` in
-        `conversation.py` is the reader that would notice them drifting.
+        and **nowhere on the `ModelRequest`s this loop makes.** Pydantic AI has a field there, a
+        receipt for the instructions a request was sent under, because its instructions may be
+        computed per request; here they are settled per stretch of context and recorded once under
+        `instructions:{n}`, which is what the page draws. Stamped on every request, the receipt was
+        that string again per round trip in `turn:{n}:messages` (the operator's guidance runs to
+        hundreds of kilobytes, so a long turn's record was nearly all copies of it), and it travelled
+        into a fork that composes instructions of its own, where it recorded a system prompt nobody
+        sent. The cost, stated: a `Model.request` called on a history alone, without these
+        parameters, recovers no instructions from it, which nothing here does.
 
         `prepare_messages` is the model's own chance to reshape a history for its wire, and is the
         one thing between this loop and `Model.request` that the graph used to do; the settings and

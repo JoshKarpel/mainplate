@@ -65,7 +65,9 @@ differ it sends one *named* event, `loaded`, and ends. htmx hands a named event 
 the connection rather than to a target, the element closes on it, and the script reloads the page,
 which opens a connection of its own in the new shape. The page states it rather than the stream
 remembering it, because a connection re-opened after the change has to be answered the same way. The
-cost, stated: one full reload at the step's end, over a page with nothing on it worth keeping.
+cost, stated: one full reload at the step's end, over a page with nothing on it worth keeping. The
+same event ends the stream for a session [deleted](workspace.md#deleting) while a page was showing it,
+and the reload lands on the page saying there is no such session.
 
 Three things about that connection are decided rather than incidental:
 
@@ -139,8 +141,8 @@ bottom and the scroll listener switches following back on at the very moment the
 somewhere in particular.
 
 The rail (one card for reading the conversation, which is the search, the key and the dock; the
-shelf; a card per running plugin; one card for the session, which is what it is and archiving it;
-and the theme) lives **outside** the region that swaps, so no control is rebuilt under a reader's
+shelf; a card per running plugin; one card for the session, which is what it is, archiving it, and
+deleting it once archived; and the theme) lives **outside** the region that swaps, so no control is rebuilt under a reader's
 finger. What it projects back *onto* the transcript, the search
 marks, the panel landed on, which kinds are muted, what is folded, cannot live in the markup either,
 so `assets/mainplate.js` holds it as values and reapplies it after every swap. That projection is
@@ -284,7 +286,9 @@ sentence and then the press, so a mis-press on a row is exactly as impossible as
 and the redirect lands on the session it closed, which is the page saying what just happened. The
 cost, stated: it covers the tail of a long name while it shows, which is the corner every row action
 lives in, and the whole name is in the title. It is not drawn on a phone, where nothing hovers; a
-session is opened and closed from its rail there.
+session is opened and closed from its rail there. **An archived row carries no control at all**,
+deleting included: that press is on the archived session's card, so a conversation is opened before
+it is [deleted](workspace.md#deleting).
 
 ## Which clock a moment is printed against
 

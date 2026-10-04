@@ -105,7 +105,6 @@ from mainplate.conversation import responded
 from mainplate.conversation import returns_in
 from mainplate.conversation import so_far
 from mainplate.conversation import spent_on
-from mainplate.conversation import system_prompt_in
 from mainplate.conversation import tooks_in
 from mainplate.conversation import tool_key
 from mainplate.conversation import transcript
@@ -1518,7 +1517,7 @@ class TestWhatOnePassDoes:
         assert made == (Blocked(listening=frozenset({opened_key(1)})),)
         assert scripted.asked == 61
 
-    async def test_what_a_stretch_records_is_exactly_what_its_requests_carried(
+    async def test_what_a_stretch_records_is_exactly_what_its_requests_were_sent(
         self, service: Service, workspaces: Workspaces
     ) -> None:
         """
@@ -1535,8 +1534,8 @@ class TestWhatOnePassDoes:
         await pass_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces), session.id)
 
         recorded = await planting.checkpointer.load(session.id)
-        told = system_prompt_in(parse_messages(recorded[messages_key(0)]))
-        assert told is not None, "the control: nothing carried means nothing to differ over"
+        [told] = scripted.told
+        assert told is not None, "the control: nothing sent means nothing to differ over"
         assert "You are working in a git checkout" in told, (
             "the other control: the note about this session's places is the part that used to be "
             "composed after the record was written, so without it the two agree by having no "
@@ -1547,6 +1546,30 @@ class TestWhatOnePassDoes:
             "one shape compose the same string and share a cached prefix"
         )
         assert parse_instructions(recorded[instructions_key(0)]) == told
+
+    async def test_a_turn_records_no_instructions_on_its_requests(
+        self, service: Service, workspaces: Workspaces
+    ) -> None:
+        """
+        Instructions are recorded once per stretch, and never again per request in a turn's messages.
+
+        Stamped on every request, the operator's guidance was copied once per round trip, which made
+        a long turn's record almost nothing but that string, and the copy rode into a fork that
+        composes instructions of its own. A tool round trip, so the turn holds a request the loop
+        built after the first as well as the one it opened on.
+        """
+        planting = replace(service, workspaces=workspaces)
+        session = await started(planting, "hello", replace(DEFAULT_CHOICE, repository=FIXTURE))
+        scripted = Scripted(script=(calls(("read", {"path": "README.md"})), ModelResponse(parts=[TextPart("read it")])))
+        await pass_at(planting, conversing(scripted.endpoints(), INSTRUCTIONS, workspaces), session.id)
+
+        recorded = await planting.checkpointer.load(session.id)
+        requests = [
+            message for message in parse_messages(recorded[messages_key(0)]) if isinstance(message, ModelRequest)
+        ]
+        assert len(requests) == 2, "the control: the prompt and the tool's return, each its own request"
+        assert all(told is not None for told in scripted.told), "and both were sent instructions"
+        assert [request.instructions for request in requests] == [None, None]
 
     async def test_what_the_page_draws_from_a_reply_is_said_in_every_session(
         self, service: Service, workspaces: Workspaces
@@ -1603,10 +1626,10 @@ class TestWhatOnePassDoes:
         await planting.say(session.id, "again")
         await pass_at(planting, body, session.id)
 
-        recorded = await planting.checkpointer.load(session.id)
-        told = [system_prompt_in(parse_messages(recorded[messages_key(turn)])) for turn in (0, 1)]
+        told = scripted.told
+        assert len(told) == 2, "one request per turn"
         assert told[0] is not None, "the control: a session with no system prompt would pass either way"
-        assert told[1] == told[0], "the second turn carried what the first was answered under"
+        assert told[1] == told[0], "the second turn was sent what the first was answered under"
         assert "guidance nobody had when this session opened" not in told[0]
 
     async def test_a_forget_composes_the_system_prompt_again(self, service: Service, workspaces: Workspaces) -> None:
@@ -1640,9 +1663,13 @@ class TestWhatOnePassDoes:
         recorded = await planting.checkpointer.load(session.id)
         assert instructions_key(0) in recorded, "the first stretch composed one"
         assert instructions_key(1) in recorded, "and the forget began a second stretch that composed its own"
-        told = [system_prompt_in(parse_messages(recorded[messages_key(turn)])) for turn in (0, 1)]
+        told = scripted.told
+        assert len(told) == 2, "one request per turn"
         assert told[0] is not None
         assert told[1] == told[0], "which says the same thing, since nothing under it moved"
+        assert parse_instructions(recorded[instructions_key(1)]) == told[1], (
+            "and the second stretch was sent what it recorded"
+        )
 
     async def test_a_request_the_pass_handed_back_is_made_once_by_the_next_one(
         self, service: Service, workspaces: Workspaces

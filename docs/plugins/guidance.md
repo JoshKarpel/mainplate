@@ -157,10 +157,11 @@ things there are decided:
   the stretch's first request, where a turn's messages do not exist until it ends, so the panel is
   on the page while a turn is being answered rather than only afterwards. What makes the record
   worth trusting for this is that `agent_for` speaks it verbatim: nothing is composed on top of it,
-  so what a stretch records and what its requests carried are one string.
-  `test_what_a_stretch_records_is_exactly_what_its_requests_carried` holds the two ends against each
-  other, with the checkout note as the control, since that is the part that used to be added after
-  the record was written.
+  so what a stretch records and what its requests were sent are one string.
+  `test_what_a_stretch_records_is_exactly_what_its_requests_were_sent` holds the record against what
+  reached the model, with the checkout note as the control, since that is the part that used to be
+  added after the record was written. It is also the only place they are written: a turn's
+  `messages` carry no instructions on their requests, so the record is the one copy.
 - **One per stretch, under its own rule.** A forget composes again, so a single panel above
   everything would stand the newest instructions over turns answered under an older one. Under the
   rule the reader gets the order it happened in: the boundary, then what the model is told from

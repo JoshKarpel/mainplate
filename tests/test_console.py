@@ -650,6 +650,24 @@ class TestTheConsole:
         assert second.type == "loaded"
         assert ended is None, "and nothing after it, since the page it was talking to is gone"
 
+    async def test_a_stream_for_a_session_deleted_while_watched_says_once_to_reload(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        A page left open on a session somebody deletes elsewhere is told to reload, which lands on the
+        page saying there is no such session, rather than holding a connection that ends unexplained.
+        """
+        session = await a_session(app, service)
+        await service.archive(session)
+        async with calling(app) as caller, caller.watching(f"/fragments/stream?session={session}") as events:
+            first = await anext(events)
+            await service.delete(session)
+            second = await anext(events)
+            ended = await anext(events, None)
+        assert first.type == "message", "the control: the session was there to watch"
+        assert second.type == "loaded"
+        assert ended is None
+
     async def test_a_page_on_the_step_reconnecting_after_the_change_is_told_at_once(
         self, app: ASGIApp, service: Service
     ) -> None:
@@ -1776,6 +1794,23 @@ class TestSendingBackToTheParent:
         async with calling(app) as caller:
             branched = await caller.get(f"/sessions/{stepped}")
         assert 'value="parent"' in branched.text
+
+    async def test_the_way_back_is_withdrawn_once_the_parent_is_deleted(self, app: ASGIApp, service: Service) -> None:
+        """
+        The row keeps naming its parent after the parent is gone, so an offer read off the row alone
+        is one only a `404` answers, and what was typed is lost with it.
+        """
+        session = await a_session(app, service)
+        stepped = await self.stepped(service, session)
+        await registered(service, stepped)
+        await service.archive(session)
+        await service.delete(session)
+
+        async with calling(app) as caller:
+            branched = await caller.get(f"/sessions/{stepped}")
+
+        assert 'class="composer"' in branched.text, "the control: the branch still has its box"
+        assert 'value="parent"' not in branched.text
 
 
 class TestSayingWhetherTheCacheIsStillWarm:
