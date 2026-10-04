@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from urllib.parse import urlencode
 
 from without_asgi import ASGIApp
+from without_asgi import RawHeaders
 from without_asgi.sse import ReceivedEvent
 from without_asgi.sse import parse_events
 from without_http import Client
@@ -68,8 +69,15 @@ class Caller:
     async def get(self, path: str) -> Answer:
         return await self.send("GET", path)
 
-    async def post(self, path: str, form: Mapping[str, str] | None = None) -> Answer:
-        return await self.send("POST", path, form=form)
+    async def post(self, path: str, form: Mapping[str, str] | None = None, headers: RawHeaders = ()) -> Answer:
+        """
+        A form post, with nothing to say where it came from unless `headers` says it.
+
+        This client is not a browser, so by default it sends no `Sec-Fetch-Site` and no `Origin`,
+        which is what lets every write here through; a test about which page a write came from
+        names those itself.
+        """
+        return await self.send("POST", path, form=form, headers=headers)
 
     @asynccontextmanager
     async def watching(self, path: str) -> AsyncIterator[AsyncIterator[ReceivedEvent]]:
@@ -88,10 +96,12 @@ class Caller:
         async with request(self.client, "GET", f"{BASE}{path}", headers=self.cookie) as response:
             yield parse_events(response.body)
 
-    async def send(self, method: str, path: str, form: Mapping[str, str] | None = None) -> Answer:
-        headers = self.cookie if form is None else (*FORM, *self.cookie)
+    async def send(
+        self, method: str, path: str, form: Mapping[str, str] | None = None, headers: RawHeaders = ()
+    ) -> Answer:
+        sent = (*self.cookie, *headers) if form is None else (*FORM, *self.cookie, *headers)
         body = b"" if form is None else urlencode(form).encode()
-        async with request(self.client, method, f"{BASE}{path}", headers=headers, body=body) as response:
+        async with request(self.client, method, f"{BASE}{path}", headers=sent, body=body) as response:
             return Answer(
                 status=response.head.status,
                 headers={name.decode().lower(): value.decode() for name, value in response.head.headers},

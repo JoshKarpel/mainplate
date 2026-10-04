@@ -50,6 +50,7 @@ from pydantic_ai.toolsets import ToolsetTool
 from pydantic_ai.usage import RunUsage
 
 from mainplate.durability import Stepping
+from mainplate.durability import told
 
 CORRECTIONS: Final = 1
 """
@@ -155,7 +156,7 @@ class Tools:
         recorded = await scope.call(call, arguments, context, tool)
         return ToolReturnPart(
             tool_name=call.tool_name,
-            content=recorded.returned,
+            content=told(recorded.returned),
             tool_call_id=call.tool_call_id,
             tool_kind=call.tool_kind,
             outcome=recorded.outcome,

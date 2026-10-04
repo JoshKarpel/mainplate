@@ -14,7 +14,7 @@ The store's space is one key:
 
 | Key | Holds | Written by |
 |---|---|---|
-| `inbox:{n}` | A message or a command, filed in the order it arrived | `Service.say`, `Service.send`, `Service.run`, `Service.push` and a plugin's `deliver` from outside a pass, and a plugin's tool from inside one |
+| `inbox:{n}` | A message, a command or a job, filed in the order it arrived | `Service.say`, `Service.send`, `Service.run`, `Service.push`, a plugin's `deliver` and a job's end from outside a pass, and a plugin's tool, the model's `start_job` and a setup's `jobs` from inside one |
 
 This console's is the rest:
 
@@ -22,7 +22,8 @@ This console's is the rest:
 |---|---|---|
 | `choice` | The endpoint, model, repository, base, branch, isolation, thinking level and output override | `Service.start` and `Service.fork`, before the first message |
 | `context:catalogue` | Skill and command names, descriptions and paths discovered for this session, not their bodies | The session's first pass |
-| `result:{entry}` | What the command delivered under `{entry}` exited with, said and took | `Commands`, when it finishes |
+| `result:{entry}` | What the command delivered under `{entry}` exited with, said and took | `Commands`, when a push finishes; `Jobs`, when a job ends or is stopped; `Service.fork`, for a job it did not carry |
+| `listening:{entry}` | The port this console listens on for the job delivered under `{entry}`, where it serves | `Jobs`, the first time it starts |
 | `instructions:{n}` | What the stretch of context beginning at turn `n` is answered under, exactly as the model is sent it | The first pass to reach it, before its first request, and replayed by every later one |
 | `turn:{n}:opened` | The entry this turn took | `Run.receive`, in the conversation body |
 | `turn:{n}:tree:{i}` | The checkout's git state before the i-th model request: its tree, the commit `HEAD` names, and its branch | `Stepping.request` |
@@ -67,7 +68,14 @@ draining its inbox passes over one rather than reading it.
 
 **A result is named after the entry rather than after a turn**, because which turn a command belongs
 to is decided by where its entry landed: a key naming one would be a second answer to that question,
-written by a handler reading a page that may have moved on.
+written by a handler reading a page that may have moved on. `listening:{entry}` is named the same
+way for the same reason, and `entry_of` carries it into a fork beside the job it is about.
+
+**For a job, the absence of a result is the desired state rather than a gap.** A command recorded
+before there were jobs with no result is one a killed console left behind; a job with no result is
+one the console should have running, and [the reconciler](jobs.md) reads exactly that. So nothing
+writes a job's result except an end: the job exiting, somebody stopping it, its session archived, or a
+fork saying it was not carried.
 
 **`failed:{at}` is keyed by progress rather than by attempt, and that is what keeps it finite.** A
 pass that raises is redelivered once per lease for as long as it keeps raising, so a key numbered by
@@ -299,5 +307,14 @@ produce once the turn lands**: the same responses, in the same order, cut by `bl
 results that have not arrived still out. That is why a panel never moves as a turn fills in, and why
 the morph when `messages` finally lands touches nothing. `test_conversation.py` asserts the two
 readings of a finished turn are equal, which is also what catches the subtle half of it: a tool
-result's text has to be what `ToolReturnPart.model_response_str` produces, so `returned_step` uses
-`pydantic_core.to_json` and not `json.dumps`, whose spacing differs on every structured return.
+result's text has to be what `ToolReturnPart.model_response_str` produces. So `returned_step` does
+not render a record itself; it builds the part the loop sends from it, through `durability.told`,
+and reads that through `returned_of`, the same function the settled reading uses. A rendering of
+its own matched only by care is how a structured return's spacing once differed, and how an image
+would print as base64 on one side and be left out on the other.
+
+**An image a tool returned is in the call's record as base64**, because what the model was sent has
+to be what a replay sends, and the record is the only place that can hold it. Pydantic AI does not
+read that mapping back into an image on its own (`tool_return_ta` leaves it a mapping), so `told`
+validates it as a tool result, which is the reading `turn:{n}:messages` gets. The page never carries
+the bytes: [the route serving one](tools.md#reading-an-image) reads them out of the same record.

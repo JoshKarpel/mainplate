@@ -18,9 +18,11 @@ from typing import assert_never
 from without_html import Child
 from without_html import Element
 from without_html import a
+from without_html import button
 from without_html import code
 from without_html import details
 from without_html import div
+from without_html import form
 from without_html import p
 from without_html import pre
 from without_html import span
@@ -333,7 +335,7 @@ def written(text: str, *, document: bool = False) -> Element:
     return div(cls="text", children=as_document(text) if document else as_message(text))
 
 
-def tool_block(links: Links, used: ToolUse, anchor: str, at: int) -> Element:
+def tool_block(links: Links, session: str, turn: int, used: ToolUse, anchor: str, at: int) -> Element:
     """
     One call, folded, with what it was handed and what it gave back.
 
@@ -363,9 +365,19 @@ def tool_block(links: Links, used: ToolUse, anchor: str, at: int) -> Element:
     **A call that kept an artifact version links to it from the summary**, beside the path, so the
     page it made is one press away without opening the call. Pinned to that version, since what the
     call made is the thing a reader is asking about, whatever the artifact has become since.
+
+    **An image the call handed the model is drawn by address**, which is what the session and the
+    turn are here for: the bytes are in the call's record and the page asks for them, so a transcript
+    of screenshots stays the size of its text on every render and every message of the live
+    connection.
     """
     subject = subject_of(used.tool, used.arguments)
     kept = recorded_kept(used)
+    pictured = (
+        ()
+        if used.returned is None
+        else tuple(links.to_picture(session, turn, used.call, index) for index in range(len(used.returned.pictures)))
+    )
     return details(
         cls="tool",
         attrs={"id": f"{anchor}-tool-{at}", **opens(False)},
@@ -420,7 +432,7 @@ def tool_block(links: Links, used: ToolUse, anchor: str, at: int) -> Element:
                     ),
                 ]
             ),
-            call_body(used),
+            call_body(used, pictured),
         ],
     )
 
@@ -452,7 +464,86 @@ def status_element(status: int) -> Element:
     )
 
 
-def command_block(ran: Command) -> Element:
+def started_mark(started_by: str) -> Element:
+    """
+    What started a job, in front of its line, where that was not the person.
+
+    In the shape `push` and `online` take, so it reads as a fact about the run rather than as part of
+    the command. A job the person typed has none, since every other command on the page is theirs.
+    """
+    return span(cls="ran__started", attrs={"title": f"Started by {started_by}"}, children=started_by)
+
+
+def running_body(links: Links, session: str, ran: Command) -> Element:
+    """
+    What a running job's panel holds: what it has printed so far, where to open it if it serves, and
+    how to stop it.
+
+    **What it has printed is a link rather than the panel's body**, because it is recorded only when
+    the job ends and is read out of the process until then, by a route of its own; drawn here it would
+    be a copy of a buffer that moves, re-rendered every time anything in the session does.
+
+    **Opened through this console**, at a route that sends the browser on to the port, because the
+    host a browser reaches this console at is the request's to say and never the page's. A new tab,
+    since what it serves is a page of its own and the conversation should stay where it was.
+
+    **Stopping is a disclosure with a sentence over its button**, the kind every control here that
+    ends something takes: the press kills a process somebody may have open in another tab, and the
+    sentence says what comes after it.
+
+    **Not a `ran__body`**, which is a frame that shuts its panel on a press: everything in here is a
+    control, and a panel folding under the link somebody just pressed is the press doing two things.
+    """
+    port = None if ran.job is None else ran.job.port
+    new_tab = {"target": "_blank", "rel": "noopener"}
+    return div(
+        cls="ran__running",
+        children=[
+            p(
+                cls="ran__where",
+                children=[
+                    *(
+                        (
+                            a(
+                                cls="ran__open",
+                                attrs={"href": links.to_job(session, ran.entry), **new_tab},
+                                children=f"Open on port {port}",
+                            ),
+                            " · ",
+                        )
+                        if port is not None
+                        else ()
+                    ),
+                    a(
+                        cls="ran__log",
+                        attrs={"href": links.to_job_output(session, ran.entry), **new_tab},
+                        children="what it has printed",
+                    ),
+                ],
+            ),
+            details(
+                cls="archive ran__stop",
+                children=[
+                    summary(cls="archive__head", children="Stop"),
+                    p(
+                        cls="archive__says",
+                        children=(
+                            "Ends the job and frees any port it holds. What it printed is kept here, and "
+                            "nothing starts it again."
+                        ),
+                    ),
+                    form(
+                        cls="archive__press",
+                        attrs={"method": "post", "action": links.to_stop_job(session, ran.entry)},
+                        children=button(cls="archive__set", attrs={"type": "submit"}, children="Stop"),
+                    ),
+                ],
+            ),
+        ],
+    )
+
+
+def command_block(links: Links, session: str, ran: Command) -> Element:
     """
     One command the person ran, with what it said open under it.
 
@@ -496,6 +587,10 @@ def command_block(ran: Command) -> Element:
     also what a person running `push` in the sandbox recorded, so a page reading the text would draw
     the two alike. What a push shows is the branch, under a mark of its own in place of the `$`:
     nobody typed it into a shell, and the branch is what a reader needs to know went where.
+
+    **A job still running carries its controls instead of a body**: what it has printed so far, where
+    to open it if it serves, and a stop. Once it ends it is drawn as any finished command is. One the
+    model or a plugin started says which in front of its line.
     """
     said = None if ran.result is None else ran.result.output
     return details(
@@ -505,7 +600,14 @@ def command_block(ran: Command) -> Element:
             summary(
                 children=[
                     *(
-                        (code(cls="ran__line", children=ran.text),)
+                        (
+                            *(
+                                (started_mark(ran.job.started_by),)
+                                if ran.job is not None and ran.job.started_by is not None
+                                else ()
+                            ),
+                            code(cls="ran__line", children=ran.text),
+                        )
                         if ran.pushed is None
                         else (
                             span(
@@ -542,7 +644,9 @@ def command_block(ran: Command) -> Element:
                 ]
             ),
             *(
-                ()
+                (running_body(links, session, ran),)
+                if said is None and ran.job is not None
+                else ()
                 if said is None
                 else (
                     div(
@@ -608,7 +712,7 @@ def written_block(kind: str, text: str, *, document: bool = False) -> Element:
     return div(cls=("block", kind), attrs={"data-markdown": text}, children=written(text, document=document))
 
 
-def block_element(links: Links, block: Block, panel: Panel, at: int) -> Element:
+def block_element(links: Links, session: str, block: Block, panel: Panel, at: int) -> Element:
     """
     One block, told where it is by the panel holding it.
 
@@ -639,11 +743,14 @@ def block_element(links: Links, block: Block, panel: Panel, at: int) -> Element:
             # separates the two is where each sits in the request, which is the panel's business.
             return written_block("block--document", text, document=True)
         case Command():
-            return div(cls=("block", "block--ran"), children=command_block(block))
+            return div(cls=("block", "block--ran"), children=command_block(links, session, block))
         case Reasoning(text=text):
             return written_block("block--thinking", text)
         case ToolUse():
-            return div(cls=("block", "block--tool"), children=tool_block(links, block, panel.anchor, at))
+            return div(
+                cls=("block", "block--tool"),
+                children=tool_block(links, session, panel.turn, block, panel.anchor, at),
+            )
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -893,7 +1000,7 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
                 role=panel.role,
                 title=panel.title,
             ),
-            *(block_element(links, block, panel, at) for at, block in enumerate(panel.blocks)),
+            *(block_element(links, session, block, panel, at) for at, block in enumerate(panel.blocks)),
             *(
                 (div(cls=("block", "block--diff"), children=batch),)
                 if panel.diff is not None and (batch := batch_element(panel.anchor, panel.diff)) is not None

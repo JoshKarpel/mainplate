@@ -21,11 +21,18 @@ from mainplate.tools.files import Skills
 from mainplate.tools.files import System
 from mainplate.tools.files import file_tools
 from mainplate.tools.grep import grep_tools
+from mainplate.tools.jobs import Jobs
+from mainplate.tools.jobs import JobsInTurn
+from mainplate.tools.jobs import Listed
+from mainplate.tools.jobs import job_tools
 
 __all__ = [
     "Artifacts",
     "Files",
     "GitTracked",
+    "Jobs",
+    "JobsInTurn",
+    "Listed",
     "Scratch",
     "Skills",
     "System",
@@ -33,4 +40,5 @@ __all__ = [
     "bash_tools",
     "file_tools",
     "grep_tools",
+    "job_tools",
 ]

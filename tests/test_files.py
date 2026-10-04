@@ -6,11 +6,13 @@ from collections.abc import Awaitable
 from collections.abc import Callable
 from inspect import cleandoc
 from pathlib import Path
+from typing import Final
 from typing import cast
 
 import pytest
 from conftest import checkout_in
 from pydantic_ai import ModelRetry
+from pydantic_ai.messages import BinaryImage
 from pydantic_ai.messages import ToolReturn
 
 from mainplate.tools.files.anchors import GUTTER
@@ -290,10 +292,67 @@ class TestRefusingWhatCannotBeRead:
         with pytest.raises(Refused, match="is a directory"):
             await files.read("pkg", 1, 10)
 
+    async def test_something_neither_text_nor_an_image_says_which_images_it_would_have_shown(
+        self, files: Files
+    ) -> None:
+        (files.roots[0].path / "blob.bin").write_bytes(b"\xff\xfe\x00\x01binary")
+        with pytest.raises(Refused, match="neither UTF-8 text nor a PNG, JPEG, GIF or WebP image"):
+            await files.read("blob.bin", 1, 10)
+
     async def test_something_that_is_not_text_has_no_lines_to_anchor(self, files: Files) -> None:
         (files.roots[0].path / "blob.bin").write_bytes(b"\xff\xfe\x00\x01binary")
         with pytest.raises(Refused, match="not UTF-8 text"):
-            await files.read("blob.bin", 1, 10)
+            await files.edit("blob.bin", [Substitute(op="substitute", at="abcd", find="a", replace="b")])
+
+
+# One file of each kind `read` shows, as the bytes it opens with and a tail no decoder would accept.
+# Named without an extension, so what is recognised is the content and not the name.
+IMAGES: Final = (
+    pytest.param(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\xff", "image/png", "PNG", id="png"),
+    pytest.param(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\xff", "image/jpeg", "JPEG", id="jpeg"),
+    pytest.param(b"GIF89a\x01\x00\x01\x00\x80\xff", "image/gif", "GIF", id="gif"),
+    pytest.param(b"RIFF\x24\x00\x00\x00WEBPVP8 \xff", "image/webp", "WebP", id="webp"),
+)
+
+
+class TestReadingAnImage:
+    @pytest.mark.parametrize(("content", "media_type", "name"), IMAGES)
+    async def test_a_model_that_sees_is_handed_the_image_itself(
+        self, files: Files, content: bytes, media_type: str, name: str
+    ) -> None:
+        (files.roots[0].path / "picture").write_bytes(content)
+
+        shown = await files.read("picture", 1, 10, seeing=True)
+
+        assert shown == [
+            f"picture, a {name} image of {len(content)} bytes",
+            BinaryImage(content, media_type=media_type),
+        ]
+
+    @pytest.mark.parametrize(("content", "media_type", "name"), IMAGES)
+    async def test_a_model_not_known_to_see_is_refused_rather_than_sent_one(
+        self, files: Files, content: bytes, media_type: str, name: str
+    ) -> None:
+        (files.roots[0].path / "picture").write_bytes(content)
+
+        with pytest.raises(Refused, match=f"is a {name} image, and the model answering this session is not known"):
+            await files.read("picture", 1, 10)
+
+    async def test_a_large_image_is_sized_in_kibibytes(self, files: Files) -> None:
+        (files.roots[0].path / "shot.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 300_000)
+
+        shown = await files.read("shot.png", 1, 10, seeing=True)
+
+        assert isinstance(shown, list)
+        assert shown[0] == "shot.png, a PNG image of 293 KiB"
+
+    async def test_an_svg_is_text_and_is_read_as_lines(self, files: Files) -> None:
+        (files.roots[0].path / "mark.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>\n')
+
+        shown = await files.read("mark.svg", 1, 10, seeing=True)
+
+        assert isinstance(shown, str)
+        assert shown.startswith("mark.svg, 1 line")
 
     async def test_something_far_too_large_is_refused_before_it_is_decoded(self, files: Files) -> None:
         (files.roots[0].path / "huge.txt").write_bytes(b"x" * (MAX_BYTES + 1))
@@ -416,11 +475,13 @@ class TestListingADirectory:
 class TestReadingAFile:
     async def test_the_whole_file_comes_back_with_a_line_count(self, files: Files) -> None:
         shown = await files.read("app.py", 1, 100)
+        assert isinstance(shown, str)
         assert shown.startswith("app.py, 6 lines")
         assert f"{naming(files, 0)}{GUTTER}def first():" in shown
 
     async def test_a_partial_read_says_where_it_stopped(self, files: Files) -> None:
         shown = await files.read("app.py", 2, 2)
+        assert isinstance(shown, str)
         assert shown.startswith("app.py, lines 2-3 of 6; pass `offset` to read further")
         assert "def second():" not in shown
 
@@ -459,7 +520,7 @@ class TestEditingAFile:
         As Pydantic AI's `ToolReturn`: the reply is its `return_value`, and the diff rides as
         `metadata`, which is the slot for what the application reads and the model is never sent.
         """
-        edit = cast("Callable[..., Awaitable[object]]", file_tools(files).tools["edit"].function)
+        edit = cast("Callable[..., Awaitable[object]]", file_tools(files, seeing=False).tools["edit"].function)
         came_back = await edit("app.py", [Substitute(op="substitute", at=naming(files, 1), find="1", replace="42")])
         assert isinstance(came_back, ToolReturn)
         assert isinstance(came_back.return_value, str)
@@ -517,7 +578,7 @@ class TestHowARefusalReachesTheModel:
 class TestWhatTheToolsetOffers:
     def test_it_offers_exactly_list_read_edit_and_create(self, files: Files) -> None:
         """No `write`: a tool that overwrites a whole file is the escape hatch from anchored editing."""
-        assert set(file_tools(files).tools) == {"list", "read", "edit", "create"}
+        assert set(file_tools(files, seeing=False).tools) == {"list", "read", "edit", "create"}
 
     def test_the_listing_tool_is_asked_for_as_list(self, files: Files) -> None:
         """
@@ -525,11 +586,11 @@ class TestWhatTheToolsetOffers:
         error, but the name a model reaches for is the one that has to be right, so it is set
         explicitly at registration rather than left to follow the function.
         """
-        assert "listing" not in file_tools(files).tools
+        assert "listing" not in file_tools(files, seeing=False).tools
 
     def test_the_edit_schema_spells_from_under_its_own_name(self, files: Files) -> None:
         """`from_` is what Python allows; `from` is what the model has to write."""
-        schema = file_tools(files).tools["edit"].function_schema.json_schema
+        schema = file_tools(files, seeing=False).tools["edit"].function_schema.json_schema
         assert "from" in schema["$defs"]["Splice"]["properties"]
         assert "from_" not in schema["$defs"]["Splice"]["properties"]
 
@@ -544,7 +605,7 @@ class TestWhatTheToolsetOffers:
         a second copy, so there is nothing to hold in step with anything: whatever the docstring
         shows is written, read back, and compared against itself.
         """
-        described = file_tools(files).tools["read"].function.__doc__
+        described = file_tools(files, seeing=False).tools["read"].function.__doc__
         assert described is not None
         example = cleandoc(described).split("```")[1].strip("\n")
 
@@ -555,5 +616,5 @@ class TestWhatTheToolsetOffers:
         assert await files.read(path, 1, 100) == example
 
     def test_the_two_shapes_of_operation_are_told_apart_by_op(self, files: Files) -> None:
-        schema = file_tools(files).tools["edit"].function_schema.json_schema
+        schema = file_tools(files, seeing=False).tools["edit"].function_schema.json_schema
         assert schema["$defs"]["Operation"]["discriminator"]["propertyName"] == "op"

@@ -1,6 +1,6 @@
-# The frame every page but a refusal is drawn in: the session list down the side, the bar a phone
+# The frame a page about conversations is drawn in: the session list down the side, the bar a phone
 # gets across the top, and the pane between. The list is a region the live connection redraws on
-# every page, which is why a row is drawn here once and the dashboard borrows it.
+# every page that draws it, which is why a row is drawn here once and the dashboard borrows it.
 
 from __future__ import annotations
 
@@ -14,19 +14,17 @@ from without_html import a
 from without_html import aside
 from without_html import button
 from without_html import div
-from without_html import element
 from without_html import header
 from without_html import li
 from without_html import main
 from without_html import span
-from without_html import svg
 from without_html import ul
 
 from mainplate.forge import Reachable
 from mainplate.pages.archive import archive_action
-from mainplate.pages.document import DASHBOARD
 from mainplate.pages.document import UNTITLED
 from mainplate.pages.document import Links
+from mainplate.pages.document import home
 from mainplate.pages.figures import footprint_note
 from mainplate.pages.figures import sized
 from mainplate.pages.moments import Reader
@@ -150,23 +148,7 @@ def sidebar(
             div(
                 cls="sessions__sheet",
                 children=[
-                    # The console's mark and name, as the way back to the dashboard: a link that reads
-                    # as where you are rather than a button that reads as something to do, since the
-                    # presses that start something are on the dashboard's cards.
-                    a(
-                        cls="home",
-                        attrs={"href": links.to_home()},
-                        children=[
-                            # Drawn by reference rather than as an `<img>`, so the stylesheet can
-                            # hand the plate the theme's colours: an image only ever sees the OS's.
-                            svg(
-                                cls="home__mark",
-                                attrs={"viewBox": "0 0 512 512", "aria-hidden": "true"},
-                                children=element("use", attrs={"href": f"{links.to_asset('icon.svg')}#plate"}),
-                            ),
-                            span(cls="home__name", children=DASHBOARD),
-                        ],
-                    ),
+                    home(links),
                     listed_region(links, reader, listed, showing, reachable),
                 ],
             ),

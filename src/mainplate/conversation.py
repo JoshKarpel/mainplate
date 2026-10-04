@@ -107,6 +107,7 @@ from typing import Literal
 from typing import assert_never
 from typing import cast
 
+from pydantic_ai.messages import BinaryContent
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.messages import ModelRequest
@@ -119,7 +120,6 @@ from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.messages import UserPromptPart
 from pydantic_ai.settings import ThinkingLevel
-from pydantic_core import to_json
 from without_durability.interfaces import INBOX
 from without_durability.interfaces import Entry
 from without_durability.stepwise import Run
@@ -157,6 +157,7 @@ from mainplate.durability import parse_snapshot
 from mainplate.durability import parse_took
 from mainplate.durability import parse_wrote
 from mainplate.durability import stepping
+from mainplate.durability import told
 from mainplate.forge import Workspaces
 from mainplate.loop import Agent
 from mainplate.loop import CannotGoOn
@@ -200,6 +201,8 @@ from mainplate.tending import TENDED
 from mainplate.tending import Tending
 from mainplate.thinking import BY_LEVEL
 from mainplate.tools import Artifacts
+from mainplate.tools import Jobs
+from mainplate.tools import JobsInTurn
 
 CHOICE_KEY: StepKey = "choice"
 
@@ -466,7 +469,7 @@ class Disposition(Enum):
     what is below the branch point and the record rides on the message that opens the turn."""
 
     RUN = "run"
-    """`Service.run`, which runs the text as a command in this session's own checkout.
+    """`Service.run`, which runs the text as a job in this session's own checkout.
 
     The one answer here that is not a message going somewhere. It is in this field all the same,
     because the question the menu asks is what happens to what you typed and this is one more answer
@@ -577,6 +580,15 @@ What a command's result is filed under, ahead of the entry the command itself ar
 
 Its own key space rather than a turn's, because a command belongs to whichever turn its entry landed
 in and nothing outside a pass can know that yet; see `result_key`.
+"""
+
+
+LISTENING: Final = "listening:"
+"""
+What port this console listens on for a job that serves, ahead of the entry the job arrived as.
+
+Named after the entry for `RESULTS`' reason, and travelling with it into a fork by the same rule;
+see `listening_key`.
 """
 
 
@@ -731,14 +743,15 @@ def entry_of(key: StepKey) -> str | None:
     """
     Which inbox entry a key is about, for the two key spaces that are not turn-prefixed.
 
-    An entry is about itself; a result is about the command it answers. Both answer by *shape*, like
-    `turn_of` and for the same reason: a fork copies a prefix of a conversation without being taught
-    each kind of thing that might hang off an entry.
+    An entry is about itself; a result is about the command it answers, and a port about the job it
+    is listened on for. All answer by *shape*, like `turn_of` and for the same reason: a fork copies
+    a prefix of a conversation without being taught each kind of thing that might hang off an entry.
     """
     if key.startswith(INBOX):
         return key
-    if key.startswith(RESULTS):
-        return key.removeprefix(RESULTS)
+    for prefix in (RESULTS, LISTENING):
+        if key.startswith(prefix):
+            return key.removeprefix(prefix)
     return None
 
 
@@ -771,6 +784,16 @@ def result_key(entry: str) -> StepKey:
     `ToolUse.returned` reads and needs no flag beside it.
     """
     return f"{RESULTS}{entry}"
+
+
+def listening_key(entry: str) -> StepKey:
+    """
+    The port this console listens on for the job delivered under `entry`, once it has started.
+
+    A key of its own rather than a field on the command, because it is chosen when the job first
+    starts and the command is recorded before that; written once, so a restart finds the same port.
+    """
+    return f"{LISTENING}{entry}"
 
 
 def messages_key(turn: int) -> StepKey:
@@ -1464,6 +1487,16 @@ class Returned:
     two readings of a call carry it alike; see `records.Returned.metadata` for what writes it.
     """
 
+    pictures: tuple[str, ...] = ()
+    """
+    The media type of each image the call handed the model, in the order it handed them.
+
+    The types and not the bytes, because a page draws an image by asking for it and the bytes are
+    already in the call's record: carried here they would be in every render of the transcript and
+    every message on the live connection, which a screenshot makes megabytes. Which image is which
+    is its place in this tuple, and that is the address the page asks by.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class ToolUse:
@@ -1473,6 +1506,14 @@ class ToolUse:
     `returned is None` is the whole of "still out", rather than a separate flag beside a result
     that would then have to be kept in step with it. It is also the only thing on this console
     that is genuinely in flight *within* a turn, so it is what a spinner is drawn from.
+    """
+
+    call: str
+    """
+    The id the model gave this call, which is the name its record is under, `turn:{n}:tool:{id}`.
+
+    Carried for the one thing a page has to ask the console for rather than draw from this value: an
+    image the call handed the model, whose bytes are in that record and nowhere on the page.
     """
 
     tool: str
@@ -1547,6 +1588,24 @@ class Command:
     """Whether it ran with the network on in a session whose commands otherwise have it off."""
     pushed: str | None = None
     """The branch this console pushed, where this is a push rather than a line somebody typed."""
+    job: Job | None = None
+    """What a reader needs of this command as a job, where it is one; nothing for a push or a command
+    recorded before there were jobs."""
+
+
+@dataclass(frozen=True, slots=True)
+class Job:
+    """
+    What a reader needs of a job beyond its line: where to open it, and what started it.
+
+    `port` is the one this console listens on outside, which is what the link reaches, for a job
+    that serves; nothing for one that does not, and nothing for the instant between the record and
+    its first start. `started_by` is what the page says started it: the model, a plugin by name, or
+    nothing where the person did.
+    """
+
+    port: int | None = None
+    started_by: str | None = None
 
 
 type Block = Prose | Steering | Guidance | Command | Reasoning | ToolUse
@@ -1967,9 +2026,7 @@ def returns_in(messages: Sequence[ModelMessage]) -> dict[str, Returned]:
             continue
         for part in message.parts:
             if isinstance(part, ToolReturnPart):
-                found[part.tool_call_id] = Returned(
-                    outcome=part.outcome, content=part.model_response_str(), metadata=part.metadata
-                )
+                found[part.tool_call_id] = returned_of(part)
             elif isinstance(part, RetryPromptPart) and part.tool_call_id is not None:
                 found[part.tool_call_id] = Returned(outcome="failed", content=part.model_response())
     return found
@@ -2019,7 +2076,11 @@ def blocks_in(
                 yield Reasoning(text=thought if inner is None else f"{inner}\n\n{rest}".strip())
             case ToolCallPart(tool_name=tool, tool_call_id=call):
                 yield ToolUse(
-                    tool=tool, arguments=part.args_as_json_str(), returned=returned.get(call), took=took.get(call)
+                    call=call,
+                    tool=tool,
+                    arguments=part.args_as_json_str(),
+                    returned=returned.get(call),
+                    took=took.get(call),
                 )
             case _:
                 continue
@@ -2142,28 +2203,74 @@ def system_prompt_in(messages: Sequence[ModelMessage]) -> str | None:
     return told
 
 
+def pictures_of(part: ToolReturnPart) -> tuple[BinaryContent, ...]:
+    """
+    The images in one call's result, in the order the model was shown them.
+
+    The one answer to which file is the `n`th picture, asked by the page that counts them and by the
+    route that serves one, so the number a link carries is the image it was drawn for.
+    """
+    return tuple(file for file in part.files if isinstance(file, BinaryContent) and file.is_image)
+
+
+def returned_of(part: ToolReturnPart) -> Returned:
+    """
+    One call's result as a reader sees it, which is the words the model read and the images beside them.
+
+    `model_response_str` is the text and leaves any image out, which is what the model read as text
+    too; the images are counted beside it rather than drawn into it, so the page can ask for each.
+    """
+    return Returned(
+        outcome=part.outcome,
+        content=part.model_response_str(),
+        metadata=part.metadata,
+        pictures=tuple(picture.media_type for picture in pictures_of(part)),
+    )
+
+
+def held_part(held: records.Returned) -> ToolReturnPart:
+    """
+    A call's record as the part the loop sends for it, which is what both readers of a record read.
+
+    Nameless, since what a part is *called* is in the response that asked for it rather than in the
+    record; what this is for is the content, read back through `told` exactly as `Tools.call` reads
+    it, and the outcome, which decides how a failure is worded.
+    """
+    return ToolReturnPart(tool_name="", content=told(held.returned), outcome=held.outcome, metadata=held.metadata)
+
+
+def picture_in(recorded: Mapping[str, object], turn: int, call: str, index: int) -> BinaryContent | None:
+    """
+    The `index`th image one call handed the model, out of the call's own record, or nothing.
+
+    Read from `turn:{n}:tool:{id}` because that record holds it on every turn, running or settled,
+    and asked by the key the writer used rather than found by scanning, for `calls_in`'s reason.
+    Nothing is the same answer for a turn, a call or a place that is not there, since what asks is
+    an `<img>` and all three are a missing image to it.
+    """
+    held = recorded.get(tool_key(turn, call))
+    if held is None:
+        return None
+    pictures = pictures_of(held_part(parse_returned(held)))
+    return pictures[index] if 0 <= index < len(pictures) else None
+
+
 def returned_step(held: records.Returned) -> Returned:
     """
     What one recorded tool step is as a reader sees it, in the words the settled reading would use.
 
-    The text has to match what `ToolReturnPart.model_response_str` produces for the same value, and
-    matching it is the point rather than a nicety: the same call is read from this step while the
-    turn runs and from the turn's messages once it ends, so any difference here is a result that
-    silently rewrites itself under the reader the moment the turn lands. Hence `to_json` rather than
-    the standard library's `dumps`, whose spacing differs.
+    **Read through the very part the loop sends**, built from the record by `told` as `Tools.call`
+    builds it, and then through `returned_of`, which is how the settled reading reads that part out
+    of the turn's messages. Agreeing is the point rather than a nicety: the same call is read from
+    this step while the turn runs and from the messages once it ends, so any difference here is a
+    result that silently rewrites itself under the reader the moment the turn lands. One path rather
+    than a second rendering held to match the first, which is how a failure's `{"error": ...}`
+    wrapping and an image left out of the text both come out the same on both sides.
 
-    A failure is wrapped in the `{"error": ...}` object the settled reading wraps a failed
-    `ToolReturnPart` in, for the same reason: the two readings of one call have to agree to the
-    character. What a tool recorded beside its return is on the record already unwrapped, because
-    the loop splits a `ToolReturn` before anything is written, so it is carried across as it is.
+    What a tool recorded beside its return is on the record already unwrapped, because the loop
+    splits a `ToolReturn` before anything is written, so it is carried across as it is.
     """
-    if held.returned is None:
-        said = ""
-    else:
-        said = held.returned if isinstance(held.returned, str) else to_json(held.returned).decode()
-    if held.outcome == "failed":
-        return Returned(outcome="failed", content=to_json({"error": said}).decode(), metadata=held.metadata)
-    return Returned(outcome="success", content=said, metadata=held.metadata)
+    return returned_of(held_part(held))
 
 
 def recorded_command(said: str, *, online: bool = False) -> dict[str, object]:
@@ -2184,6 +2291,101 @@ def recorded_push(branch: str) -> dict[str, object]:
     `push` in the sandbox: see `records.Command.pushed`.
     """
     return records.Command(said=PUSHED, pushed=branch).recorded()
+
+
+def recorded_job(
+    said: str,
+    *,
+    port: int | None = None,
+    asked: str | None = None,
+    plugin: str | None = None,
+    online: bool = False,
+) -> dict[str, object]:
+    """
+    A job to keep running, as the value the store's codec will take.
+
+    A command record carrying `job`, so it is drawn, placed, and carried into a fork exactly as a
+    command is; what makes it a job is that field alone, and what keeps it running is its having no
+    result. See `records.Job` for what the three fields beside the line are for.
+    """
+    return records.Command(said=said, online=online, job=records.Job(port=port, asked=asked, plugin=plugin)).recorded()
+
+
+def recorded_listening(port: int) -> dict[str, object]:
+    """The port a job is listened on for, as the value the store's codec will take."""
+    return records.Listening(port=port).recorded()
+
+
+def listening_in(recorded: Mapping[str, object], entry: str) -> int | None:
+    """The port this console listens on for the job under `entry`, or nothing before it first started."""
+    held = recorded.get(listening_key(entry))
+    return None if held is None else records.Listening.model_validate(held).port
+
+
+@dataclass(frozen=True, slots=True)
+class Wanted:
+    """
+    One job the checkpoint says should be running: no result has been written for it.
+
+    What the reconciler in `jobs.py` makes the processes agree with, so a job the page draws as
+    running and a job the console has running are read off one answer.
+    """
+
+    entry: str
+    said: str
+    job: records.Job
+    online: bool
+    port: int | None
+    """The port recorded the first time it started, which a restart listens on again."""
+
+
+def jobs_in(recorded: Mapping[str, object]) -> tuple[tuple[str, records.Command, records.Job], ...]:
+    """Every job this session has started, ended or not, in the order they were started."""
+    return tuple(
+        (at.key, at.what, at.what.job)
+        for at in posted_in(recorded)
+        if isinstance(at.what, records.Command) and at.what.job is not None
+    )
+
+
+def wanted_in(recorded: Mapping[str, object]) -> tuple[Wanted, ...]:
+    """
+    Every job this session holds with no result beside it, in the order they were started.
+
+    Nothing at all for an archived session, because archiving is what ends every one of them: the
+    reconciler then sees a session that wants nothing and stops whatever it still has running.
+    """
+    if ARCHIVED_KEY in recorded:
+        return ()
+    return tuple(
+        Wanted(entry=entry, said=was.said, job=job, online=was.online, port=listening_in(recorded, entry))
+        for entry, was, job in jobs_in(recorded)
+        if result_key(entry) not in recorded
+    )
+
+
+def asked_in(recorded: Mapping[str, object], asked: str) -> str | None:
+    """
+    The entry a start already appended under this name, or nothing where it has not.
+
+    Read before appending, so a pass run again over a start whose own record never landed finds the
+    job it made rather than starting a second; see `records.Job.asked`.
+    """
+    return next((entry for entry, _, job in jobs_in(recorded) if job.asked == asked), None)
+
+
+def started_by(job: records.Job) -> str | None:
+    """
+    What the page says started a job: a plugin by name, the model, or nothing for the person.
+
+    Read off what the start recorded rather than recorded as a word, so the vocabulary is the page's
+    to change.
+    """
+    if job.plugin is not None:
+        return job.plugin
+    if job.asked is not None:
+        return "the model"
+    return None
 
 
 def commit_command(message: str) -> str:
@@ -2227,7 +2429,14 @@ def command_from(entry: str, was: records.Command, recorded: Mapping[str, object
     Written once for the two places a command is drawn from, inside a turn and queued past the last
     one, so a field added to the record reaches both or neither.
     """
-    return Command(entry=entry, text=was.said, result=result_in(recorded, entry), online=was.online, pushed=was.pushed)
+    return Command(
+        entry=entry,
+        text=was.said,
+        result=result_in(recorded, entry),
+        online=was.online,
+        pushed=was.pushed,
+        job=(None if was.job is None else Job(port=listening_in(recorded, entry), started_by=started_by(was.job))),
+    )
 
 
 def ran_in(recorded: Mapping[str, object], held: Sequence[Posted], turn: int) -> tuple[tuple[int, Command], ...]:
@@ -3304,6 +3513,7 @@ async def setting_plugins_up(
     declared: Sequence[Installed],
     tended: Tending,
     checkout: Checkout | None,
+    jobs: Jobs | None = None,
 ) -> tuple[Enrolled, ...] | None:
     """
     Set up exactly the plugins somebody left switched on, and record what each of them contributed.
@@ -3335,6 +3545,13 @@ async def setting_plugins_up(
     too**, under `SETUP_ENVIRONMENT_KEY` and before either registration, so a session past its step
     always has an answer there. It is written even where nothing asked for anything, which is what
     keeps a missing key from meaning two different things. See `asking.asked_to_set`.
+
+    **The jobs a setup declared are started once both registrations are down**, through `jobs`, each
+    under a name made of this session, the plugin and its place in the list. A pass that fell over
+    between the registrations and the last start finds the registrations recorded and starts what is
+    missing; the name is what keeps it from starting one twice. This session's own id is in the name
+    because a fork carries its parent's jobs as ended, and runs the same setup again: a name the
+    parent's entries already hold would be a job the branch never starts.
     """
     if setups_in(run.recorded) == 0:
         return None
@@ -3369,7 +3586,23 @@ async def setting_plugins_up(
     settled: list[Enrolled] = []
     for key, _ in asking:
         settled.extend(await run.step(key, partial(recorded_plugins, ready.get(key, ())), parse_registration))
+    if jobs is not None:
+        await starting_declared(run, jobs, settled)
     return tuple(settled)
+
+
+async def starting_declared(run: Run, jobs: Jobs, enrolled: Sequence[Enrolled]) -> None:
+    """
+    Start every job a setup declared that this session has not started already.
+
+    Asked of what the pass loaded first, which is free, and only then of `jobs`, which reads the
+    checkpoint again: a later pass finds every name already there and starts nothing.
+    """
+    for plugin in enrolled:
+        for at, declared in enumerate(plugin.described.jobs):
+            asked = f"setup:{run.workflow}:{plugin.qualified}:{at}"
+            if asked_in(run.recorded, asked) is None:
+                await jobs.start(run.workflow, declared.command, declared.port, asked, plugin.qualified)
 
 
 async def recorded_plugins(enrolled: Sequence[Enrolled]) -> object:
@@ -3390,6 +3623,7 @@ def conversing(
     config_home: Path | None = None,
     delivering: Callable[[str, records.Note], Awaitable[None]] | None = None,
     artifacts: Database | None = None,
+    jobs: Jobs | None = None,
 ) -> Callable[[Run], Awaitable[Ended]]:
     """
     The workflow body every session runs, closed over everything it takes to build an agent.
@@ -3425,6 +3659,10 @@ def conversing(
 
     `artifacts` is the database the artifact store is in, which every turn's agent reaches as that
     turn: a version records the call that kept it, and a call is keyed by its session and turn.
+
+    `jobs` is what keeps the console's jobs running, reached by each turn's agent as that turn for
+    the same reason: a job the model starts records the call that asked for it. A setup that
+    declares jobs starts them through it too; see `setting_plugins_up`.
 
     **The first pass of a session answers nothing, and that is the shape rather than an accident.**
     It plants the checkout and asks every plugin what it is, records both, and then reaches
@@ -3521,7 +3759,7 @@ def conversing(
         enrolled = registered_in(run.recorded)
         if enrolled is None:
             try:
-                enrolled = await setting_plugins_up(run, sourcing, declared, tended, checkout)
+                enrolled = await setting_plugins_up(run, sourcing, declared, tended, checkout, jobs)
             except (PluginFailed, Refused, BadDeclaration) as raised:
                 # **Recorded against the attempt it belongs to**, which is what makes the step
                 # somebody can act on: turning the plugin off and pressing again opens a new attempt
@@ -3645,6 +3883,10 @@ def conversing(
                 environment=environment_in(run.recorded),
                 output_cap=cap,
                 artifacts=None if artifacts is None else Artifacts(artifacts, run.workflow, at.turn),
+                # Off the same record as the cap and for the same reason read here; not recorded
+                # either, since what the model was sent is, in the call's own record.
+                seeing=prices is not None and prices.sees(chosen),
+                jobs=None if jobs is None else JobsInTurn(jobs, run.workflow, at.turn),
             )
 
             # The turn's *prefix* rather than the run: the requests this block makes are numbered

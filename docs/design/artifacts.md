@@ -113,9 +113,23 @@ frame inherits the page's policy rather than the one written for the document.
 ## The pages
 
 The **catalogue** lists every artifact at its current version, newest first, reached from the
-dashboard's section of the most recent few. An **artifact's page** shows one version: which version
-of how many, when it was kept, the turn that kept it, the preview, the download, and the version
-history. Both are the dashboard card's rows, so a list of artifacts reads like a list of sessions.
+dashboard's section of the most recent few. Its rows are the dashboard card's, so a list of
+artifacts reads like a list of sessions.
+
+An **artifact's page** is one version, as a bar over the preview, and the preview takes the rest of
+the window. The bar reads as a path at the left, the console's mark, the catalogue, and the title,
+then which version of how many; at the right, when it was kept, the turn that kept it, and the
+download. The version history is a disclosure hanging from "version 2 of 3", in the same rows, laid
+over the preview when open rather than under it, because a list under the frame is what made the
+page scroll and capped the frame short of the window.
+
+**It is the one page drawn without the session list.** An artifact is not a conversation, and what
+somebody came to it for is the document, as large as the window allows; the console's mark is still
+there, and the dashboard is where every other place is reached from. With no list there is nothing
+for the live connection to redraw, so the page holds none. The cost, stated: reaching another
+session from here is two presses rather than one. An artifact's page might one day want a list of
+its own, of artifacts rather than sessions, and that is a separate decision rather than something
+this one owes.
 
 Listings page by keyset rather than offset, so a version kept while somebody pages does not shift
 the page under them: the catalogue by the order versions were kept in, a history by version. A page

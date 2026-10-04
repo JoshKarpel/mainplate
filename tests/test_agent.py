@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,8 @@ from mainplate.sandbox import OverEverything
 from mainplate.snapshots import Checkout
 from mainplate.snapshots import Store
 from mainplate.tools import GitTracked
+from mainplate.tools import JobsInTurn
+from mainplate.tools import Listed
 from mainplate.tools import Scratch
 from mainplate.tools import System
 
@@ -144,3 +147,45 @@ class TestWhichToolsASessionIsGiven:
         agent = agent_for(Provider().endpoints(), chosen, INSTRUCTIONS, checkout, SCRATCH, bwrap)
         named = {name for toolset in agent.toolsets if isinstance(toolset, FunctionToolset) for name in toolset.tools}
         assert named == given
+
+    @pytest.mark.parametrize(
+        ("filesystem", "checkout", "bwrap"),
+        [
+            (Filesystem.CHECKOUT, CHECKOUT, BWRAP),
+            (Filesystem.CHECKOUT, CHECKOUT, None),
+            (Filesystem.NOTHING, None, BWRAP),
+            (Filesystem.NOTHING, None, None),
+        ],
+        ids=["checkout", "checkout-no-sandbox", "nothing", "nothing-no-sandbox"],
+    )
+    def test_the_job_tools_go_where_bash_goes(
+        self, filesystem: Filesystem, checkout: Checkout | None, bwrap: str | None
+    ) -> None:
+        """A job runs in the sandbox a command runs in, so a session with no shell has nothing for one."""
+        chosen = replace(DEFAULT_CHOICE, isolation=Isolation(filesystem=filesystem))
+        jobs = JobsInTurn(jobs=Unrun(), session="s", turn=0)
+        agent = agent_for(Provider().endpoints(), chosen, INSTRUCTIONS, checkout, SCRATCH, bwrap, jobs=jobs)
+        named = {name for toolset in agent.toolsets if isinstance(toolset, FunctionToolset) for name in toolset.tools}
+        assert ("bash" in named) == JOB_TOOLS.issubset(named)
+        assert ("bash" in named) == bool(JOB_TOOLS & named)
+
+
+JOB_TOOLS = {"start_job", "list_jobs", "read_job", "wait_job", "stop_job"}
+
+
+class Unrun:
+    """Jobs nothing calls, for a test about which tools are offered rather than what they do."""
+
+    async def start(  # pragma: no cover
+        self, session: str, said: str, port: int | None, asked: str | None, plugin: str | None
+    ) -> str:
+        raise AssertionError("not called")
+
+    async def stop(self, session: str, entry: str, why: str, telling: bool) -> bool:  # pragma: no cover
+        raise AssertionError("not called")
+
+    async def listed(self, session: str) -> tuple[Listed, ...]:  # pragma: no cover
+        raise AssertionError("not called")
+
+    async def waited(self, session: str, entry: str, within: timedelta) -> Listed | None:  # pragma: no cover
+        raise AssertionError("not called")

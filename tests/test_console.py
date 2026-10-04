@@ -369,6 +369,25 @@ class TestReadingWhereAMessageIsGoing:
 NEW_PAGE: Final = "/sessions/new?workspace=nothing"
 
 
+class TestAWriteFromAnotherPage:
+    async def test_a_session_asked_for_by_a_page_on_another_port_is_refused_and_not_created(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """The whole of why `origins.py` exists, end to end: a form on a dev server's page."""
+        async with calling(app) as caller:
+            refused = await caller.post("/sessions", starting_form(), headers=((b"sec-fetch-site", b"same-site"),))
+        assert refused.status == 403
+        assert await service.listed() == ()
+
+    async def test_the_same_post_from_the_console_s_own_page_creates_the_session(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """The control: the post above is one the route would have answered."""
+        async with calling(app) as caller:
+            await caller.post("/sessions", starting_form(), headers=((b"sec-fetch-site", b"same-origin"),))
+        assert len(await service.listed()) == 1
+
+
 class TestTheConsole:
     async def test_the_new_session_page_offers_the_choices_and_creates_nothing(
         self, app: ASGIApp, service: Service

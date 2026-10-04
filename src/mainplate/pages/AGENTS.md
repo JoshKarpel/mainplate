@@ -27,15 +27,22 @@ so a duration a page prints is measured by the caller and handed in; see `Conver
 what lets `scripts/gallery.py` draw every page from fixtures with no server behind it, and a function
 here that reaches for anything is a page the gallery can no longer draw.
 
-## Every page is a `document`, and every page but a refusal is a `shell`
+## Every page is a `document`, and every page has `home` on it
 
-`document` is the head, the scripts, the stylesheet and the live connection; `shell` is the session
-list, the phone's bar, and the pane. A new page is `document(links, heading, shell(..., pane=[...]))`
-like its neighbours in `session.py` and `dashboard.py`. A page without the shell has no way back to
-the conversation it came from and no list to go anywhere else.
+`document` is the head, the scripts, the stylesheet and the live connection. **`home` is the one
+piece of navigation every page owes a reader**: the console's mark, linking to the dashboard, which
+is where every other place is reached from. A refusal's way back is its own sentence linking there.
 
-**The bar across the top is drawn only on a phone and holds only the name.** Somewhere new to go
-from every page is a section on the dashboard, which is where a reader starting from nothing lands.
+`shell` is the session list, with `home` at its head, the phone's bar, and the pane, and it is what a
+page about conversations is drawn in: `document(links, heading, shell(..., pane=[...]))`, like its
+neighbours in `session.py` and `dashboard.py`. A page whose subject is something else may leave the
+list off and draw `home` in a bar of its own, as an artifact's page does, so that its subject gets
+the window; it then holds no live connection (`live=False`), since the list is the region the
+stream redraws. The cost, stated: from such a page another session is two presses away rather than
+one.
+
+**The shell's bar across the top is drawn only on a phone and holds only the name.** Somewhere new to
+go from every page is a section on the dashboard, which is where a reader starting from nothing lands.
 
 ## Every address comes from `Links`
 

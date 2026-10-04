@@ -22,6 +22,13 @@ only under crash-resume. A fresh namespace costs a couple of milliseconds agains
 hundreds, and leaves no process to supervise, reap, or reconstruct. The tool's own description says
 nothing persists, and `test_sandbox.py` asserts it.
 
+**A job is the one namespace that lasts, and it is not an executor.** It runs one program the
+checkpoint names and nothing a call says reaches it afterwards: the model's `bash` cannot reach it at
+all, and `read_job`, which reads what it printed, has its answer recorded like any call's, so a
+resumed pass is handed what the first one saw. Which jobs should be running is recorded too, and the
+console starts them again after a restart, so what state survives is the same on every pass. See
+[Jobs](jobs.md).
+
 Six things about the policy are decided rather than incidental:
 
 - **The checkout is bound read-write whole, `.git` included.** It is a repository of the session's
@@ -191,9 +198,11 @@ directory exist `read` would name a path nothing ever creates.
 **Binding a port works; reaching it does not.** `--unshare-net` gives a namespace with loopback up,
 so a command can start a server and curl it within one call, which covers integration tests. What it
 cannot do is make that port visible to a person, and that is deliberate: a dev server somebody
-watches is the harness's to run, outside the sandbox, not something an agent tool call should leave
-behind. `Venue.CONNECTED`, the arm a session picks with the network on, is the whole network for a
-command, and a server one starts still ends with the call.
+watches is the console's to run, not something a tool call should leave behind. So the console runs
+it, as [a job](jobs.md): in the session's own sandbox, under the same network answer, in a namespace
+of its own that lasts until the job is stopped, with the listening socket made on the host and
+handed in. `Venue.CONNECTED`, the arm a session picks with the network on, is the whole network for a
+command, and a server a *command* starts still ends with the call.
 
 Network is **off** unless a session picks it, and off or on rather than allowlisted. An allowlist
 containing github.com contains gists, one containing a package registry contains a package anybody
