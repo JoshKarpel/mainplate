@@ -221,6 +221,13 @@ the record, driven through a real pass, and it needs `tendings` for the reason a
 plugin **into the repository a session plants from**, which is not incidental: the namespace binds
 the checkout, its store and two scratches, so a script anywhere else is one `bwrap` cannot find.
 
+**A claim about what network a command can reach is marked `network`**, and
+`TestOnARunnerWithNoNetwork` runs every marked test again in a child `pytest` with no network, which
+is what a session of this console developing this console is. So a claim has to hold on both
+runners: assert it against something on the runner's own loopback, or against which namespace a
+command is in, and never against a public name or a count of routes, which pass or fail by where the
+suite happens to run rather than by what the sandbox did.
+
 **What that stub cannot cover is asserted against arguments instead.**
 `TestWhereARepositorysPluginRuns` reads the `bwrap` argv this console builds - the network on `setup`
 and shut everywhere else, the session's scratch and the environment file on `setup` and nowhere else,

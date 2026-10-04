@@ -127,6 +127,9 @@ addopts = [
     "--strict-markers",
 ]
 testpaths = ["tests"]
+markers = [
+    "network: a claim about the network a command can reach, which the suite runs a second time on a runner with none",
+]
 asyncio_mode = "auto"
 
 # So `scripts/` imports as a package. The browser tests drive the gallery, and the gallery is

@@ -550,10 +550,11 @@ class TestRunningOne:
         assert printed.startswith(RESTARTED)
 
 
-# How many IPv4 routes a command can see: none in a network namespace of its own, and the machine's
-# where it shares the host's. Routes rather than interfaces, because tunnel devices like `gre0` are
-# created in every new namespace on a machine with the module loaded.
-ROUTES = "tail -n +2 /proc/net/route | wc -l"
+# Which network namespace a command is in: a new one where its network is off, and the console's own
+# where it is on. The namespace's identity rather than anything inside it, such as a count of routes,
+# because a runner with no network has none either way, which is a session of this console with its
+# own network off; what `online` changes is whose namespace the command shares, and that is the claim.
+NETWORK_NAMESPACE = "readlink /proc/self/ns/net"
 
 
 class TestRunningOneOnline:
@@ -564,17 +565,19 @@ class TestRunningOneOnline:
     and so the page, keeps saying it happened.
     """
 
+    @pytest.mark.network
     async def test_it_reaches_the_network_the_session_s_own_commands_do_not(
         self, running: Service, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
         session = await planted(running, workspaces, on_fixture)
-        confined = await ran(running, session, ROUTES)
-        assert confined.output.strip() == "0", "the control: a session's own command has no route anywhere"
+        console = str(Path("/proc/self/ns/net").readlink())
+        confined = await ran(running, session, NETWORK_NAMESPACE)
+        assert confined.output.strip() != console, "the control: a session's own command has a namespace of its own"
 
-        entry = await running.run(session, ROUTES, online=True)
+        entry = await running.run(session, NETWORK_NAMESPACE, online=True)
 
         assert entry is not None
-        assert int((await settled(running, session, entry)).output) > 0
+        assert (await settled(running, session, entry)).output.strip() == console
 
     async def test_it_is_recorded_as_having_run_online(
         self, running: Service, workspaces: Workspaces, on_fixture: Choice

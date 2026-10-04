@@ -1,0 +1,302 @@
+{
+  "$comment": "What a plugin prints in answer to setup.",
+  "$defs": {
+    "AnswerInput": {
+      "enum": [
+        "required",
+        "optional",
+        "none"
+      ],
+      "type": "string"
+    },
+    "Answering": {
+      "additionalProperties": false,
+      "description": "One answer a plugin contributes to the composer, which is a leader somebody types.",
+      "properties": {
+        "leader": {
+          "title": "Leader",
+          "type": "string"
+        },
+        "saying": {
+          "title": "Saying",
+          "type": "string"
+        },
+        "input": {
+          "$ref": "#/$defs/AnswerInput",
+          "default": "required"
+        }
+      },
+      "required": [
+        "leader",
+        "saying"
+      ],
+      "title": "Answering",
+      "type": "object"
+    },
+    "Card": {
+      "additionalProperties": false,
+      "description": "A plugin's own card, declared once and drawn by the console.",
+      "properties": {
+        "heading": {
+          "title": "Heading",
+          "type": "string"
+        },
+        "rows": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Row"
+          },
+          "title": "Rows",
+          "type": "array"
+        }
+      },
+      "required": [
+        "heading"
+      ],
+      "title": "Card",
+      "type": "object"
+    },
+    "Declared": {
+      "additionalProperties": false,
+      "description": "One tool a plugin contributes: what the model sees, and nothing about how it is run.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "schema": {
+          "additionalProperties": true,
+          "title": "Schema",
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ],
+      "title": "Declared",
+      "type": "object"
+    },
+    "Event": {
+      "enum": [
+        "setup",
+        "tool",
+        "before_tool",
+        "before_request",
+        "before_turn_end",
+        "after_turn",
+        "compose",
+        "action"
+      ],
+      "type": "string"
+    },
+    "Job": {
+      "additionalProperties": false,
+      "description": "One job a setup asks for: a shell command, and the port it serves on where it serves one.",
+      "properties": {
+        "command": {
+          "title": "Command",
+          "type": "string"
+        },
+        "port": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Port"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "title": "Job",
+      "type": "object"
+    },
+    "Number": {
+      "additionalProperties": false,
+      "description": "One control holding a count, which is an integer setting and how to draw it.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "default": {
+          "type": "integer",
+          "default": 0,
+          "title": "Default"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "least": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Least"
+        },
+        "most": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Most"
+        }
+      },
+      "required": [
+        "name",
+        "label"
+      ],
+      "title": "Number",
+      "type": "object"
+    },
+    "Row": {
+      "additionalProperties": false,
+      "description": "One line of a card, which is exactly one control.",
+      "properties": {
+        "switch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Switch"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "number": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "Row",
+      "type": "object"
+    },
+    "Switch": {
+      "additionalProperties": false,
+      "description": "One control holding a yes or a no, which is a boolean setting and its label.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "default": {
+          "type": "boolean",
+          "default": false,
+          "title": "Default"
+        }
+      },
+      "required": [
+        "name",
+        "label"
+      ],
+      "title": "Switch",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Everything a plugin contributes, which comes back from one call.",
+  "properties": {
+    "events": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Event"
+      },
+      "title": "Events",
+      "type": "array"
+    },
+    "tools": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Declared"
+      },
+      "title": "Tools",
+      "type": "array"
+    },
+    "answers": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Answering"
+      },
+      "title": "Answers",
+      "type": "array"
+    },
+    "card": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Card"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "instructions": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Instructions"
+    },
+    "jobs": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Job"
+      },
+      "title": "Jobs",
+      "type": "array"
+    }
+  },
+  "title": "Described",
+  "type": "object"
+}

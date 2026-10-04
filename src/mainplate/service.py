@@ -121,9 +121,10 @@ from mainplate.settings import DEFAULT_WATCHING
 #
 # The effective claim deadline is the earlier of the store's liveness and budget deadlines. It and
 # the delivery moment come back with the store's own now beside them, rather than as durations
-# already subtracted. Both readings need them that way: `attention` subtracts, so that the one clock
-# each moment was written against is the one it is measured against and no two machines' clocks ever
-# meet; and `token` must not, because a duration shrinks between two polls with nothing having
+# already subtracted. Both readings need them that way: `attention` subtracts, so that the one machine
+# each moment was written on is the one it is measured against and no two machines' clocks ever meet
+# (one machine, though not quite one clock: the delivery is stamped finer than the store reads, which
+# `attention_of` allows for); and `token` must not, because a duration shrinks between two polls with nothing having
 # happened, and a token that moves on its own is a page that re-renders for ever. `NULL` from either
 # subquery is a row that does not exist, which is its own answer in both cases.
 #
@@ -197,6 +198,13 @@ def waiting_out(deferred: records.Deferred | None, now: datetime) -> records.Def
     return deferred if deferred is not None and deferred.until > now else None
 
 
+# How finely SQLite's `unixepoch('now', 'subsec')` reads the clock, in the Unix seconds `Attended`
+# carries rather than a `timedelta`, since the only thing done with it is comparing two of the
+# store's own numbers. A millisecond, and not a guess: SQLite keeps `now` as a whole number of
+# milliseconds. See `attention_of` for why a reading needs it.
+STORE_CLOCK_RESOLUTION = 0.001
+
+
 def attention_of(claimed_until: float | None, due_at: float | None, asked_at: float) -> Attention:
     """
     What the worker is doing about a session, out of what the store said about it.
@@ -211,6 +219,13 @@ def attention_of(claimed_until: float | None, due_at: float | None, asked_at: fl
     due later is one held back, which is what the worker leaving a failed pass's delivery unanswered
     produces; no row at all is a session nothing is coming for.
 
+    **Due within `STORE_CLOCK_RESOLUTION` counts as due.** `asked_at` is SQLite's `now`, which stops at
+    the millisecond, while `without-durability-sqlite` stamps a delivery with Python's clock, which
+    does not; so a session queued in the same millisecond as the read is stamped *after* a moment
+    taken later, and read strictly it is `Delayed` by microseconds. Nothing defers a session by less
+    than a millisecond, so the cost is nothing a page could draw, and the vacuum's quiet look stops
+    missing a session the instant it is queued.
+
     Pure, and taking the readings rather than the session, so the states a page draws are testable
     without a store: three values in, one arm out. The three rather than an `Attended`, because the
     list reads them for every session without the count that reading also carries.
@@ -220,7 +235,7 @@ def attention_of(claimed_until: float | None, due_at: float | None, asked_at: fl
     if due_at is None:
         return Idle()
     waiting = due_at - asked_at
-    return Queued() if waiting <= 0 else Delayed(until=timedelta(seconds=waiting))
+    return Queued() if waiting < STORE_CLOCK_RESOLUTION else Delayed(until=timedelta(seconds=waiting))
 
 
 def token_of(attended: Attended) -> str:

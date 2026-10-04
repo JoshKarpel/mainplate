@@ -135,8 +135,8 @@ def index(entries: tuple[Entry, ...]) -> str:
     Advertise skills but not commands; a skill's contents stay on demand.
 
     Where to read comes before the description and the description ends the row, so it is printed
-    exactly as its author wrote it: nothing follows it that would need a full stop between them, which
-    is what doubled a description's own punctuation when the path came after it.
+    exactly as its author wrote it. A path after it would need a full stop between the two, doubling
+    the punctuation of any description that brings its own.
     """
     rows = [
         f"- `{entry.qualified}` ("

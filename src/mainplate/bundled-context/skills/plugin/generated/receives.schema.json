@@ -1,0 +1,662 @@
+{
+  "$comment": "What a plugin reads on stdin, one object per run.",
+  "$defs": {
+    "Acting": {
+      "additionalProperties": false,
+      "description": "A control on this plugin's card was pressed, with the value it now holds.",
+      "properties": {
+        "event": {
+          "const": "action",
+          "default": "action",
+          "title": "Event",
+          "type": "string"
+        },
+        "session": {
+          "title": "Session",
+          "type": "string"
+        },
+        "plugin": {
+          "title": "Plugin",
+          "type": "string"
+        },
+        "settings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Setting"
+          },
+          "title": "Settings",
+          "type": "object"
+        },
+        "checkout": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checkout"
+        },
+        "scratch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scratch"
+        },
+        "state": {
+          "additionalProperties": true,
+          "title": "State",
+          "type": "object"
+        },
+        "control": {
+          "title": "Control",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/Setting"
+        }
+      },
+      "required": [
+        "session",
+        "plugin",
+        "control",
+        "value"
+      ],
+      "title": "Acting",
+      "type": "object"
+    },
+    "Calling": {
+      "additionalProperties": false,
+      "description": "One of this plugin's tools, called by the model, with the arguments it was called with.",
+      "properties": {
+        "event": {
+          "const": "tool",
+          "default": "tool",
+          "title": "Event",
+          "type": "string"
+        },
+        "session": {
+          "title": "Session",
+          "type": "string"
+        },
+        "plugin": {
+          "title": "Plugin",
+          "type": "string"
+        },
+        "settings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Setting"
+          },
+          "title": "Settings",
+          "type": "object"
+        },
+        "checkout": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checkout"
+        },
+        "scratch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scratch"
+        },
+        "state": {
+          "additionalProperties": true,
+          "title": "State",
+          "type": "object"
+        },
+        "tool": {
+          "title": "Tool",
+          "type": "string"
+        },
+        "args": {
+          "additionalProperties": true,
+          "title": "Args",
+          "type": "object"
+        }
+      },
+      "required": [
+        "session",
+        "plugin",
+        "tool"
+      ],
+      "title": "Calling",
+      "type": "object"
+    },
+    "Composing": {
+      "additionalProperties": false,
+      "description": "One of this plugin's answers in the composer was submitted, with whatever was in the box.",
+      "properties": {
+        "event": {
+          "const": "compose",
+          "default": "compose",
+          "title": "Event",
+          "type": "string"
+        },
+        "session": {
+          "title": "Session",
+          "type": "string"
+        },
+        "plugin": {
+          "title": "Plugin",
+          "type": "string"
+        },
+        "settings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Setting"
+          },
+          "title": "Settings",
+          "type": "object"
+        },
+        "checkout": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checkout"
+        },
+        "scratch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scratch"
+        },
+        "state": {
+          "additionalProperties": true,
+          "title": "State",
+          "type": "object"
+        },
+        "leader": {
+          "title": "Leader",
+          "type": "string"
+        },
+        "said": {
+          "default": "",
+          "title": "Said",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "plugin",
+        "leader"
+      ],
+      "title": "Composing",
+      "type": "object"
+    },
+    "Ending": {
+      "additionalProperties": false,
+      "description": "A turn that has just been recorded, with the numbers a plugin decides on.",
+      "properties": {
+        "event": {
+          "const": "after_turn",
+          "default": "after_turn",
+          "title": "Event",
+          "type": "string"
+        },
+        "session": {
+          "title": "Session",
+          "type": "string"
+        },
+        "plugin": {
+          "title": "Plugin",
+          "type": "string"
+        },
+        "settings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Setting"
+          },
+          "title": "Settings",
+          "type": "object"
+        },
+        "checkout": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checkout"
+        },
+        "scratch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scratch"
+        },
+        "state": {
+          "additionalProperties": true,
+          "title": "State",
+          "type": "object"
+        },
+        "turn": {
+          "title": "Turn",
+          "type": "integer"
+        },
+        "opened_on": {
+          "$ref": "#/$defs/Opening"
+        },
+        "context": {
+          "default": 0,
+          "title": "Context",
+          "type": "integer"
+        },
+        "window": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Window"
+        }
+      },
+      "required": [
+        "session",
+        "plugin",
+        "turn",
+        "opened_on"
+      ],
+      "title": "Ending",
+      "type": "object"
+    },
+    "Gating": {
+      "additionalProperties": false,
+      "description": "A tool the model has called, of any toolset, before it runs.",
+      "properties": {
+        "event": {
+          "const": "before_tool",
+          "default": "before_tool",
+          "title": "Event",
+          "type": "string"
+        },
+        "session": {
+          "title": "Session",
+          "type": "string"
+        },
+        "plugin": {
+          "title": "Plugin",
+          "type": "string"
+        },
+        "settings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Setting"
+          },
+          "title": "Settings",
+          "type": "object"
+        },
+        "checkout": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checkout"
+        },
+        "scratch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scratch"
+        },
+        "state": {
+          "additionalProperties": true,
+          "title": "State",
+          "type": "object"
+        },
+        "tool": {
+          "title": "Tool",
+          "type": "string"
+        },
+        "args": {
+          "additionalProperties": true,
+          "title": "Args",
+          "type": "object"
+        }
+      },
+      "required": [
+        "session",
+        "plugin",
+        "tool"
+      ],
+      "title": "Gating",
+      "type": "object"
+    },
+    "Opening": {
+      "additionalProperties": false,
+      "description": "What a turn opened on, as the two things a plugin has to be able to tell apart.",
+      "properties": {
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "plugin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plugin"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "Opening",
+      "type": "object"
+    },
+    "Requesting": {
+      "additionalProperties": false,
+      "description": "A model request about to be sent, with the history it will carry.",
+      "properties": {
+        "event": {
+          "const": "before_request",
+          "default": "before_request",
+          "title": "Event",
+          "type": "string"
+        },
+        "session": {
+          "title": "Session",
+          "type": "string"
+        },
+        "plugin": {
+          "title": "Plugin",
+          "type": "string"
+        },
+        "settings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Setting"
+          },
+          "title": "Settings",
+          "type": "object"
+        },
+        "checkout": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checkout"
+        },
+        "scratch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scratch"
+        },
+        "state": {
+          "additionalProperties": true,
+          "title": "State",
+          "type": "object"
+        },
+        "messages": {
+          "default": [],
+          "items": {},
+          "title": "Messages",
+          "type": "array"
+        }
+      },
+      "required": [
+        "session",
+        "plugin"
+      ],
+      "title": "Requesting",
+      "type": "object"
+    },
+    "Setting": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "integer"
+        }
+      ]
+    },
+    "SettingUp": {
+      "additionalProperties": false,
+      "description": "The first call, which asks a plugin to get ready and say what it is.",
+      "properties": {
+        "event": {
+          "const": "setup",
+          "default": "setup",
+          "title": "Event",
+          "type": "string"
+        },
+        "session": {
+          "title": "Session",
+          "type": "string"
+        },
+        "plugin": {
+          "title": "Plugin",
+          "type": "string"
+        },
+        "settings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Setting"
+          },
+          "title": "Settings",
+          "type": "object"
+        },
+        "checkout": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checkout"
+        },
+        "scratch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scratch"
+        },
+        "state": {
+          "additionalProperties": true,
+          "title": "State",
+          "type": "object"
+        }
+      },
+      "required": [
+        "session",
+        "plugin"
+      ],
+      "title": "SettingUp",
+      "type": "object"
+    },
+    "Stopping": {
+      "additionalProperties": false,
+      "description": "The model has answered and is about to stop, unless a plugin says otherwise.",
+      "properties": {
+        "event": {
+          "const": "before_turn_end",
+          "default": "before_turn_end",
+          "title": "Event",
+          "type": "string"
+        },
+        "session": {
+          "title": "Session",
+          "type": "string"
+        },
+        "plugin": {
+          "title": "Plugin",
+          "type": "string"
+        },
+        "settings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Setting"
+          },
+          "title": "Settings",
+          "type": "object"
+        },
+        "checkout": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checkout"
+        },
+        "scratch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scratch"
+        },
+        "state": {
+          "additionalProperties": true,
+          "title": "State",
+          "type": "object"
+        },
+        "turn": {
+          "title": "Turn",
+          "type": "integer"
+        },
+        "opened_on": {
+          "$ref": "#/$defs/Opening"
+        },
+        "attempt": {
+          "default": 0,
+          "title": "Attempt",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "session",
+        "plugin",
+        "turn",
+        "opened_on"
+      ],
+      "title": "Stopping",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "action": "#/$defs/Acting",
+      "after_turn": "#/$defs/Ending",
+      "before_request": "#/$defs/Requesting",
+      "before_tool": "#/$defs/Gating",
+      "before_turn_end": "#/$defs/Stopping",
+      "compose": "#/$defs/Composing",
+      "setup": "#/$defs/SettingUp",
+      "tool": "#/$defs/Calling"
+    },
+    "propertyName": "event"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/SettingUp"
+    },
+    {
+      "$ref": "#/$defs/Calling"
+    },
+    {
+      "$ref": "#/$defs/Gating"
+    },
+    {
+      "$ref": "#/$defs/Requesting"
+    },
+    {
+      "$ref": "#/$defs/Stopping"
+    },
+    {
+      "$ref": "#/$defs/Ending"
+    },
+    {
+      "$ref": "#/$defs/Composing"
+    },
+    {
+      "$ref": "#/$defs/Acting"
+    }
+  ]
+}
