@@ -264,6 +264,132 @@ class TestTakingAnArchivedSessionOffTheDisk:
         assert await planting.checkpointer.load(session) == before
 
 
+async def indexed(service: Service, session: str) -> bool:
+    """Whether the index still holds a row for this session, listed or not, which no reader here asks."""
+    rows = await service.database.run(
+        lambda connection: connection.execute("SELECT count(*) FROM sessions WHERE id = ?", (session,)).fetchone()
+    )
+    return bool(rows[0])
+
+
+class TestDeletingASession:
+    async def test_a_deleted_session_is_off_every_list_from_the_press(self, service: Service) -> None:
+        """Absent to every reader at once, though its rows are only taken out on the reconciler's round."""
+        session = await started(service, "first", DEFAULT_CHOICE)
+        kept = await started(service, "second", DEFAULT_CHOICE)
+        await service.archive(session.id)
+
+        assert await service.delete(session.id)
+
+        assert await read_session(service.database, session.id) is None
+        assert [each.id for each in await service.listed()] == [kept.id]
+        assert [each.id for each in await service.deleted()] == [session.id]
+        assert await indexed(service, session.id), "the row is the fact, and stays until the round"
+
+    async def test_a_live_session_cannot_be_deleted(self, service: Service) -> None:
+        """Archiving is the step in front, and the statement is what refuses, whoever reads first."""
+        session = await started(service, "first", DEFAULT_CHOICE)
+
+        assert not await service.delete(session.id)
+
+        assert await read_session(service.database, session.id) is not None
+        assert await service.deleted() == ()
+
+    async def test_a_deleted_session_cannot_be_forked(self, service: Service) -> None:
+        """A fork copying keys out of a checkpoint the next round discards would carry half of it."""
+        session = await started(service, "first", DEFAULT_CHOICE)
+        await answered(service, session.id)
+        await service.archive(session.id)
+        await service.delete(session.id)
+
+        assert await service.fork(session.id, at=1, chosen=DEFAULT_CHOICE) is None
+
+
+class TestTakingADeletedSessionOutOfTheDatabase:
+    async def test_a_session_deleted_before_its_files_came_off_is_gone_in_one_round(
+        self, service: Service, workspaces: Workspaces, places: Places
+    ) -> None:
+        """Archive and delete pressed together: the files come off first, then every row goes."""
+        planting, session = await working(service, workspaces, places)
+        await planting.archive(session)
+        await planting.delete(session)
+        holder = Footprints(current={session: Footprint(allocated=30_000, measured_at=WHEN)})
+
+        await reconciled(planting, places, holder, now=lambda: WHEN)
+
+        assert not any(place.exists() for place in places.of(session, FIXTURE))
+        assert await planting.checkpointer.load(session) == {}
+        assert not await indexed(planting, session)
+        assert await planting.deleted() == ()
+        assert session not in holder.current, "a session that is gone has no figure to draw"
+
+    async def test_a_held_session_stays_until_the_claim_ends(
+        self, service: Service, workspaces: Workspaces, places: Places
+    ) -> None:
+        planting, session = await working(service, workspaces, places)
+        await planting.archive(session)
+        await reconciled(planting, places, Footprints())
+        await planting.delete(session)
+        holder = await claimed(planting.checkpointer, session)
+        try:
+            await reconciled(planting, places, Footprints())
+            assert await indexed(planting, session), "held, so left for the next round"
+            assert ARCHIVED_KEY in await planting.checkpointer.load(session)
+        finally:
+            await planting.checkpointer.release(holder)
+
+        await reconciled(planting, places, Footprints())
+
+        assert not await indexed(planting, session)
+
+    async def test_a_round_that_fell_over_halfway_is_finished_by_the_next(
+        self, service: Service, workspaces: Workspaces, places: Places
+    ) -> None:
+        """
+        The checkpoint gone and the row still there, which is the crash `taken_out`'s order allows.
+
+        The archive key went with the checkpoint, so the row reads as a session nobody archived; the
+        round must finish it off the column alone rather than skip it for not being archived.
+        """
+        planting, session = await working(service, workspaces, places)
+        await planting.archive(session)
+        await reconciled(planting, places, Footprints())
+        await planting.delete(session)
+        await planting.durable.delete(session)
+
+        await reconciled(planting, places, Footprints())
+
+        assert not await indexed(planting, session)
+
+    async def test_a_fork_of_a_deleted_session_carries_on_as_a_root(
+        self, service: Service, workspaces: Workspaces, places: Places
+    ) -> None:
+        """A fork copied its turns, so it holds the whole conversation it had and loses nothing."""
+        planting, session = await working(service, workspaces, places)
+        await answered(planting, session)
+        forked = await planting.fork(session, at=1, chosen=DEFAULT_CHOICE)
+        assert forked is not None
+        await planting.archive(session)
+        await planting.delete(session)
+
+        await reconciled(planting, places, Footprints())
+
+        assert [each.id for each in await planting.listed()] == [forked.id]
+        assert messages_key(0) in await planting.checkpointer.load(forked.id)
+
+    async def test_a_session_nobody_deleted_keeps_its_rows(
+        self, service: Service, workspaces: Workspaces, places: Places
+    ) -> None:
+        """The control: an archived session's round takes its files and leaves the conversation."""
+        planting, session = await working(service, workspaces, places)
+        await planting.archive(session)
+
+        await reconciled(planting, places, Footprints())
+
+        assert await indexed(planting, session)
+        assert ARCHIVED_KEY in await planting.checkpointer.load(session)
+
+
 class TestWhatThePageDoesWithAnArchivedSession:
     @pytest.fixture
     def app(self, service: Service, assets: Inventory) -> ASGIApp:
@@ -295,7 +421,7 @@ class TestWhatThePageDoesWithAnArchivedSession:
         assert '<div class="fact"><dt>since</dt><dd title="2031-03-14 15:09:' in answered_with.text
         assert '+00:00">2031-03-14 15:09</dd>' in answered_with.text
         assert f'href="/sessions/{session.id}/forks/new?at=1"' in answered_with.text
-        assert '<details class="archive">' not in answered_with.text
+        assert '<summary class="archive__head">Archive</summary>' not in answered_with.text
 
     async def test_the_row_is_marked_in_the_sidebar(self, app: ASGIApp, service: Service) -> None:
         session = await started(service, "first", DEFAULT_CHOICE)
@@ -368,6 +494,52 @@ class TestWhatThePageDoesWithAnArchivedSession:
         found = await read_session(service.database, session.id)
         assert found is not None
         assert found.archived is not None
+
+    async def test_an_archived_card_offers_delete_behind_a_disclosure_and_a_live_one_does_not(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        closed = await started(service, "first", DEFAULT_CHOICE)
+        live = await started(service, "second", DEFAULT_CHOICE)
+        await service.archive(closed.id)
+
+        async with calling(app) as caller:
+            archived_page = await caller.get(f"/sessions/{closed.id}")
+            live_page = await caller.get(f"/sessions/{live.id}")
+            listing = await caller.get("/")
+
+        assert '<summary class="archive__head">Delete</summary>' in archived_page.text
+        assert f'action="/sessions/{closed.id}/delete"' in archived_page.text
+        assert "/delete" not in live_page.text
+        assert f'action="/sessions/{closed.id}/delete"' not in listing.text, "the card and not the row"
+
+    async def test_the_press_deletes_and_lands_on_the_dashboard(self, app: ASGIApp, service: Service) -> None:
+        session = await started(service, "first", DEFAULT_CHOICE)
+        await service.archive(session.id)
+
+        async with calling(app) as caller:
+            pressed = await caller.post(f"/sessions/{session.id}/delete", {})
+            page = await caller.get(f"/sessions/{session.id}")
+            listing = await caller.get("/")
+            again = await caller.post(f"/sessions/{session.id}/delete", {})
+
+        assert pressed.status == 303
+        assert pressed.location == "/"
+        assert page.status == 404
+        assert f"/sessions/{session.id}" not in listing.text
+        assert again.status == 404, "nothing is left for a second press to land on"
+
+    async def test_a_live_session_is_refused_and_a_missing_one_is_not_found(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        session = await started(service, "first", DEFAULT_CHOICE)
+
+        async with calling(app) as caller:
+            live = await caller.post(f"/sessions/{session.id}/delete", {})
+            missing = await caller.post("/sessions/nothing-here/delete", {})
+
+        assert live.status == 422
+        assert missing.status == 404
+        assert await read_session(service.database, session.id) is not None
 
     async def test_an_archived_session_can_still_be_forked_from_its_end(self, app: ASGIApp, service: Service) -> None:
         """The way back, and the reason the conversation is kept at all."""

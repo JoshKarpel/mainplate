@@ -14,6 +14,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from calling import calling
+from conftest import DEFAULT_CHOICE
+from conftest import started
 from pydantic_ai import ModelRetry
 from pydantic_ai.messages import ToolReturn
 from pydantic_ai.models.test import TestModel
@@ -334,10 +336,22 @@ class TestThePages:
         assert f'href="{LINKS.to_artifact_download(first.artifact, 1)}"' in page.text
 
     async def test_an_artifact_page_links_to_the_turn_that_kept_it(self, app: ASGIApp, service: Service) -> None:
+        session = await started(service, "draw the poll", DEFAULT_CHOICE)
+        kept = await artifacts.keep(service.database, FIRST, by("call-a", session=session.id, turn=4), KEPT_AT)
+        async with calling(app) as client:
+            page = await client.get(LINKS.to_artifact(kept.artifact))
+        assert f'href="{LINKS.to_turn(session.id, 4)}"' in page.text
+
+    async def test_a_version_from_a_deleted_session_names_it_without_a_link(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """An artifact outlives the session that made it, and a link to a session that is gone leads nowhere."""
         kept = await artifacts.keep(service.database, FIRST, by("call-a", turn=4), KEPT_AT)
         async with calling(app) as client:
             page = await client.get(LINKS.to_artifact(kept.artifact))
-        assert f'href="{LINKS.to_turn(kept.made_by.session, 4)}"' in page.text
+        assert page.status == 200
+        assert f'<span title="That session was deleted">{kept.made_by.session}, turn 4</span>' in page.text
+        assert LINKS.to_session(kept.made_by.session) not in page.text
 
     async def test_an_artifact_nothing_kept_is_a_page_saying_so(self, app: ASGIApp) -> None:
         async with calling(app) as client:

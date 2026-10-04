@@ -650,6 +650,24 @@ class TestTheConsole:
         assert second.type == "loaded"
         assert ended is None, "and nothing after it, since the page it was talking to is gone"
 
+    async def test_a_stream_for_a_session_deleted_while_watched_says_once_to_reload(
+        self, app: ASGIApp, service: Service
+    ) -> None:
+        """
+        A page left open on a session somebody deletes elsewhere is told to reload, which lands on the
+        page saying there is no such session, rather than holding a connection that ends unexplained.
+        """
+        session = await a_session(app, service)
+        await service.archive(session)
+        async with calling(app) as caller, caller.watching(f"/fragments/stream?session={session}") as events:
+            first = await anext(events)
+            await service.delete(session)
+            second = await anext(events)
+            ended = await anext(events, None)
+        assert first.type == "message", "the control: the session was there to watch"
+        assert second.type == "loaded"
+        assert ended is None
+
     async def test_a_page_on_the_step_reconnecting_after_the_change_is_told_at_once(
         self, app: ASGIApp, service: Service
     ) -> None:

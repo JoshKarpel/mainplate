@@ -137,7 +137,11 @@ async def watching(
             showing: Conversation | None = None
             if session is not None:
                 showing = await service.read(session)
-                if showing is None:  # pragma: no cover - the route checked, and nothing deletes a session
+                if showing is None:
+                    # Deleted while the page was open. Told to reload rather than left with a
+                    # connection that ends for no stated reason, and the reload is the page saying
+                    # there is no such session, which is the truth.
+                    yield Event(data="", type=LOADED, id=now)
                     return
                 # The page's shape against the checkpoint's, before anything is rendered: a partial
                 # with nowhere to go is silently dropped, so a page on the step being sent the

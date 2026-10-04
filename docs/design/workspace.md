@@ -460,3 +460,43 @@ and what a person wants back is the conversation with somewhere to work, which i
 fresh checkout at the archived tree and a scratch of its own. Putting the archived session itself
 back would mean reconstructing a scratch that was deliberately not snapshotted, which is a second
 mechanism to keep for a state a fork already reaches.
+
+## Deleting
+
+**Deleting an archived session takes its conversation as well, which is the space archiving
+leaves.** A session goes active, then archived with its files still on the disk, then archived with
+nothing left there, then deleted, and every step is the one after the last: the press is offered only
+on an archived session's card, and the statement recording it refuses one that is not archived. It
+is not offered on an archived row of the list, so deleting a conversation means opening it first,
+and what somebody last sees before the press is what they are about to lose.
+
+**The press records a fact and the archiving reconciler acts on it**, for archiving's reason and on
+the same round. The press may come any time after archiving, including before the files have come
+off, so the round takes a deleted session's files off the disk exactly as it does an archived one's,
+and takes it out of the database only once it holds nothing and nothing holds it. That is the
+session's checkpoint, its place in the queue and its claim, in one commit through the store's own
+`delete`, and then its row in the index. From the moment of the press the session is absent to every
+reader but the reconciler, so the list drops its row, its page answers `404`, and nothing forks from
+a checkpoint the next round is about to discard.
+
+**The fact is a column on the index, `deleted_at`, where `archived` is a checkpoint key**, and the
+reconciler is what decides it. Taking a session out discards its checkpoint first and its row last,
+so a console that dies between the two leaves a row with nothing under it. A key in the checkpoint
+would have gone with the first half, and a row nothing marks would never be looked at again; the row
+is what outlives the first half, so it is where the fact goes, and the next round finishes the job
+off the column alone. It is not a copy of anything said, which is the only kind of column the index
+refuses.
+
+**What a session made beside its conversation stays**:
+
+- **Its artifacts**, which [outlive the session that made them](artifacts.md#what-is-not-here) and
+  may have been updated from other sessions since.
+- **Its snapshots in the store**, under its refs, because a fork carries its parent's `tree` keys and
+  those name commits reachable only through the parent's refs. Without them, a `git gc` on the store
+  would take trees a surviving fork can still fork from.
+- **Every fork of it**, which carries its own copy of the turns it began with, and is drawn as a root
+  once the session it came from is gone.
+
+The cost, stated: freeing a session's rows does not shrink the database file. SQLite reuses the
+pages for whatever is written next, so the file stops growing, and it stays the size it reached
+until something runs `VACUUM`.

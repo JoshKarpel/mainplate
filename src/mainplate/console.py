@@ -88,6 +88,7 @@ from mainplate.sandbox import Isolation
 from mainplate.service import InvalidAnswerInput
 from mainplate.service import Service
 from mainplate.sessions import TITLE_FIELD
+from mainplate.sessions import read_session
 from mainplate.sessions import read_tending
 from mainplate.snapshots import parse_branch
 from mainplate.snapshots import parse_commitish
@@ -776,7 +777,9 @@ async def redrawn(service: Service, session: str, reader: Reader) -> Response:
     about its own write that reading again does not already show.
     """
     asked = await service.read(session)
-    if asked is None:  # pragma: no cover - read a line ago, and nothing deletes a session
+    if (
+        asked is None
+    ):  # pragma: no cover - read a line ago, and only an archived session, which takes no writes, is deleted
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
     return page_response(200, await asyncio.to_thread(lambda: fragment(transcript_region(LINKS, reader, asked))))
 
@@ -1270,6 +1273,27 @@ async def archive(service: Service, session: str) -> Response:
     return seeing(LINKS.to_session(session))
 
 
+@post(t"/sessions/{session_id}/delete", session_id, summary="Delete an archived session, conversation and all")
+async def delete(service: Service, session: str) -> Response:
+    """
+    Delete the session, and go to the dashboard, since the session's own page is gone with it.
+
+    `archive`'s shape, a form answered with a `303`, for `archive`'s reason: the row leaves the list
+    and the page that was showing the session has nothing left to show. Where it lands is the one
+    page every other is reached from, rather than the next session down, which would be a choice
+    about what somebody wanted to read next.
+
+    `422` for a session that is not archived, since archiving is the step in front of this one and
+    the only one that takes the box away. A second press finds no session and says so with a `404`,
+    which is the truth: unlike archiving, the press leaves nothing behind for a second one to land on.
+    """
+    if await read_session(service.database, session) is None:
+        return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
+    if not await service.delete(session):
+        return page_response(422, refusal_page(LINKS, 422, f"session {session} is not archived; archive it first"))
+    return seeing(LINKS.to_home())
+
+
 def opened_at(scheme: str, sent: RawHeaders, port: int) -> str:
     """
     Where a browser opens a job serving on `port`: the host it reached this console at, on that port.
@@ -1483,6 +1507,7 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     press,
     rename_session,
     archive,
+    delete,
     open_job,
     stop_job,
     job_output,
@@ -1509,6 +1534,7 @@ LINKS = Links(
     press=press,
     rename=rename_session,
     archive=archive,
+    delete=delete,
     job=open_job,
     stop_job=stop_job,
     job_output=job_output,

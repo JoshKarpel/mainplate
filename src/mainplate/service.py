@@ -101,10 +101,12 @@ from mainplate.sessions import Origin
 from mainplate.sessions import Queued
 from mainplate.sessions import Session
 from mainplate.sessions import enrol
+from mainplate.sessions import mark_deleted
 from mainplate.sessions import mint_session_id
 from mainplate.sessions import name_from
 from mainplate.sessions import name_if_untitled
 from mainplate.sessions import now_utc
+from mainplate.sessions import read_deleted
 from mainplate.sessions import read_session
 from mainplate.sessions import read_sessions
 from mainplate.sessions import rename
@@ -1085,6 +1087,28 @@ class Service:
         if self.jobs is not None:
             self.jobs.look(session)
         return await read_session(self.database, session)
+
+    async def delete(self, session: str) -> bool:
+        """
+        Delete an archived session: the conversation goes, and so does every row the database holds for it.
+
+        `archive`'s split again, and for its reason: the press records a fact and the reconciler
+        acts on it. What this writes is the moment, on the session's row, and from then the session
+        is absent to every reader but the reconciler, so the page the press redirects to no longer
+        lists it. Taking it out of the database waits for its files to come off the disk, which an
+        archive pressed a moment earlier may not have done yet, and that is why a press may come
+        any time after archiving rather than only once the disk is clear.
+
+        `False` where the session is not archived, which is the order this console closes things in:
+        archiving is what takes away the box and the files, and deleting is only ever the step after
+        it. What a session made beside its conversation stays: its artifacts, which outlive the
+        session that made them, and its snapshots in the store, which a fork of it may still name.
+        """
+        return await mark_deleted(self.database, session, self.now())
+
+    async def deleted(self) -> tuple[Session, ...]:
+        """Every session somebody pressed delete on that is still in the database, for the reconciler."""
+        return await read_deleted(self.database)
 
     async def run(self, session: str, said: str, *, online: bool = False) -> str | None:
         """

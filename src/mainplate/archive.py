@@ -13,6 +13,11 @@
 # the pass that follows reads the key and stops. A command a person is still running is the same case
 # from the other side. Both are read off live state rather than recorded, since both are true only at
 # the instant they are read.
+#
+# Deleting is the same loop one step further, on the same diff: a session somebody pressed delete on
+# wants nothing on the disk *and* nothing in the database. Its files come off first, exactly as an
+# archived session's do, and only a session holding nothing and held by nothing is taken out, so the
+# order the press could not wait for is the order the round keeps.
 
 from __future__ import annotations
 
@@ -32,6 +37,7 @@ from mainplate.service import Service
 from mainplate.sessions import Footprint
 from mainplate.sessions import Session
 from mainplate.sessions import now_utc
+from mainplate.sessions import unenrol
 from mainplate.snapshots import SnapshotFailed
 
 logger = logging.getLogger(__name__)
@@ -79,19 +85,44 @@ async def taken_off(service: Service, places: Places, session: Session) -> None:
             await asyncio.to_thread(shutil.rmtree, place)
 
 
+async def taken_out(service: Service, session: str) -> None:
+    """
+    Every row the database holds for this session, gone: its checkpoint, its queue and its claim, then its row.
+
+    **Checkpoint first and row last**, because the row is what says the session was deleted, and a
+    crash between the two has to leave a round something to find. The checkpoint goes in one commit
+    with the session's wakeups and a raised fence, so no pass can write a record back after it; a row
+    left behind with nothing under it is still on `read_deleted`, its directories are already gone,
+    and the next round's `durable.delete` finds nothing and the `unenrol` after it finishes.
+
+    The session's artifacts and its snapshot refs in the store are not its rows and stay, which is
+    `Service.delete`'s to say.
+    """
+    await service.durable.delete(session)
+    await unenrol(service.database, session)
+
+
 async def reconciled(
     service: Service, places: Places, footprints: Footprints, now: Callable[[], datetime] = now_utc
 ) -> None:
     """
-    One round: every archived session still holding directories, taken off the disk where nothing holds it.
+    One round: every archived session still holding directories, taken off the disk where nothing
+    holds it, and every deleted one holding none taken out of the database.
 
     A session that will not come off is logged and left for the next round, which is the retry a
     reconciler gets for free: nothing here is recorded, so nothing has to be undone. The figure on its
     row is re-measured afterwards rather than left for the next sweep, since the whole point of the
     press was to get the space back and a row saying otherwise for five minutes reads as the press
     having failed.
+
+    A deleted session is on neither list a page reads, so it is read on its own and goes through the
+    same first loop: pressed a moment after archiving, its files may still be on the disk. Its last
+    tree is captured on the way out like any archived session's, which a deleted session will never
+    fork from; one path rather than a second that skips the capture, at the cost of a capture nobody
+    reads.
     """
-    for session in await service.listed():
+    deleted = await service.deleted()
+    for session in (*await service.listed(), *deleted):
         if session.archived is None or not holding(places, session):
             continue
         if await service.held(session.id):
@@ -105,6 +136,14 @@ async def reconciled(
         logger.info(f"{session.id} is archived and its files are off the disk")
         allocated = await asyncio.to_thread(measured, places.of(session.id, session.repository))
         footprints.current = {**footprints.current, session.id: Footprint(allocated=allocated, measured_at=now())}
+    for session in deleted:
+        # Not `session.archived`: a round that fell over between the two halves of `taken_out` left a
+        # row whose checkpoint, and so whose archive key, is already gone.
+        if holding(places, session) or await service.held(session.id):
+            continue
+        await taken_out(service, session.id)
+        logger.info(f"{session.id} is deleted and out of the database")
+        footprints.current = {each: footprint for each, footprint in footprints.current.items() if each != session.id}
 
 
 async def reconciling(service: Service, places: Places, footprints: Footprints, every: timedelta) -> None:

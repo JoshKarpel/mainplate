@@ -125,6 +125,11 @@ off the disk once no turn is running in it. The conversation stays readable, and
 last turn forks from the end, which is how an archived session comes back: a live one with every
 turn and a fresh checkout at the files it ended with.
 
+**Deleting an archived session gives the database back too.** `Delete`, on the same card once a
+session is archived, takes it off the list at once, and the same loop takes every row recorded for it
+out of the database once its files are off the disk. Its artifacts stay, and so does every fork of it,
+since a fork carries its own copy of the turns it began with.
+
 ## What a model costs
 
 No gateway reached so far publishes a price anywhere in its model list, and what it does publish is
@@ -486,9 +491,9 @@ Named plainly, because they are the next things rather than omissions nobody not
   VM. Anywhere else it reaches nothing, so the picker does not appear and the console is a place to
   talk. Reaching GitHub through an App, so this works off exe.dev, is another class behind the same
   interface.
-- **Nothing prunes a store.** Archiving a session takes its checkout away, but the repository's
-  store keeps every tree and commit any session snapshotted, so a fork can still plant at it, and it
-  only grows.
+- **Nothing prunes a store.** Archiving a session takes its checkout away and deleting it takes its
+  rows, but the repository's store keeps every tree and commit any session snapshotted, so a fork can
+  still plant at it, and it only grows.
 - **No streaming.** A streamed model request inside a session raises rather than running
   unrecorded, so the refusal is loud rather than a silently unrecorded call. Closing it means
   recording the stream's events alongside its response.
@@ -497,7 +502,8 @@ Named plainly, because they are the next things rather than omissions nobody not
 - **`install` is Linux only.** It renders a user systemd unit and knows no other service manager.
   `serve` itself is portable, so elsewhere it is a foreground process and whatever you already use
   to keep one running.
-- **Nothing deletes a session.** They accumulate, and the only way to remove one is the file.
+- **Nothing shrinks the database file.** Deleting a session frees its rows for SQLite to reuse, so
+  the file stops growing, but it stays the size it reached until something runs `VACUUM` on it.
 
 ## Why it is built this way
 

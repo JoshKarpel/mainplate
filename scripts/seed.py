@@ -32,6 +32,7 @@ from pathlib import Path
 from mainplate import artifacts
 from mainplate import records
 from mainplate.app import open_store
+from mainplate.archive import taken_out
 from mainplate.catalogue import Catalogues
 from mainplate.conversation import CHOICE_KEY
 from mainplate.conversation import DECLARED_KEY
@@ -59,19 +60,18 @@ DEFAULT_DATABASE = Path("mainplate-demo.db")
 LEASE = timedelta(minutes=10)
 
 
-# The console never takes a session out of its index, since a conversation ends by being archived,
-# so there is no function for it beside `enrol` and this is written here instead: a way to delete a
-# session is something the console would then be tempted to use.
-UNENROL = "DELETE FROM sessions WHERE id = ?"
-
-
 async def discard(service: Service, session: str) -> bool:
-    """Take one session out of the index and forget everything recorded under it, if it was there."""
-    if await read_session(service.database, session) is None:
-        return False
-    await service.durable.delete(session)
-    await service.database.run(lambda connection: connection.execute(UNENROL, (session,)))
-    return True
+    """
+    Take one session out of the index and forget everything recorded under it, if it was there.
+
+    `taken_out` without the press or the archive in front of it, which the console needs and a
+    fixture does not: nothing ever ran in one, so there is nothing on the disk to wait for. Taken out
+    whether or not the index lists it, because a fixture somebody pressed delete on in the demo is
+    off the list and still in the table, and planting over its row would leave it marked deleted.
+    """
+    listed = await read_session(service.database, session) is not None
+    await taken_out(service, session)
+    return listed
 
 
 async def plant(service: Service, fixture: Fixture) -> None:
@@ -101,7 +101,7 @@ async def plant(service: Service, fixture: Fixture) -> None:
         await service.checkpointer.supply(fixture.session.id, key, value)
 
 
-# The console never deletes an artifact, for the reason it never deletes a session, so this is written
+# The console never deletes an artifact, deleting the session that made it included, so this is written
 # here rather than beside `keep`: replacing a fixture's artifact means taking out every version of it.
 FORGET_VERSIONS = "DELETE FROM artifact_versions WHERE artifact = ?"
 FORGET_ARTIFACT = "DELETE FROM artifacts WHERE id = ?"
