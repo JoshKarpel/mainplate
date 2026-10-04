@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+import sqlite3
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 
+import pytest
 from conftest import DEFAULT_CHOICE
 from conftest import WHEN
 from conftest import started
@@ -107,6 +110,31 @@ class TestWhatAVacuumDoes:
         await vacuumed_if_due(service, DAY, now=lambda: WHEN)
 
         assert Path(f"{database}-wal").stat().st_size == 0
+
+    async def test_a_log_another_connection_is_still_reading_is_said_to_be_left_full(
+        self, service: Service, database: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """
+        A busy checkpoint answers rather than raising, so nothing but its first column says the log
+        still holds the second copy. No busy timeout on the console's side, so the checkpoint gives
+        up at once rather than after the store's five seconds.
+        """
+        session = await settled(service)
+        for each in range(200):
+            await service.checkpointer.supply(session, f"filler:{each}", {"said": "x" * 20_000})
+        await service.database.run(lambda connection: connection.execute("PRAGMA busy_timeout = 0"))
+        reader = sqlite3.connect(database, isolation_level=None)
+        try:
+            reader.execute("BEGIN")
+            reader.execute("SELECT count(*) FROM workflow_checkpoint").fetchone()
+
+            with caplog.at_level(logging.WARNING, logger="mainplate.vacuum"):
+                assert await vacuumed_if_due(service, DAY, now=lambda: WHEN)
+        finally:
+            reader.close()
+
+        assert Path(f"{database}-wal").stat().st_size > 0, "the control: the log really was left full"
+        assert "could not empty its write-ahead log" in caplog.text
 
     async def test_a_vacuum_that_fails_is_recorded_as_attempted_and_not_retried_for_a_day(
         self, service: Service

@@ -126,8 +126,8 @@ last turn forks from the end, which is how an archived session comes back: a liv
 turn and a fresh checkout at the files it ended with.
 
 **Deleting an archived session gives the database back too.** `Delete`, on the same card once a
-session is archived, takes it off the list at once, and the same loop takes every row recorded for it
-out of the database once its files are off the disk. Its artifacts stay, and so does every fork of it,
+session is archived, takes it off the list at once, and the same loop takes its conversation out of
+the database once its files are off the disk. Its artifacts stay, and so does every fork of it,
 since a fork carries its own copy of the turns it began with.
 
 ## What a model costs
@@ -505,7 +505,7 @@ Named plainly, because they are the next things rather than omissions nobody not
 - **The console holds still while the database is vacuumed.** Once a day, at a moment nothing is
   working, the file is rewritten to give back what deleted sessions freed, and every page and pass
   waits for it: seconds on a file of a few hundred megabytes. A second process writing to the same
-  file in those seconds is refused rather than kept waiting.
+  file in those seconds waits too, and is refused if the vacuum outlasts its five-second busy timeout.
 
 ## Why it is built this way
 

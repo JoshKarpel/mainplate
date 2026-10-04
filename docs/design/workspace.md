@@ -474,10 +474,12 @@ and what somebody last sees before the press is what they are about to lose.
 the same round. The press may come any time after archiving, including before the files have come
 off, so the round takes a deleted session's files off the disk exactly as it does an archived one's,
 and takes it out of the database only once it holds nothing and nothing holds it. That is the
-session's checkpoint, its place in the queue and its claim, in one commit through the store's own
-`delete`, and then its row in the index. From the moment of the press the session is absent to every
-reader but the reconciler, so the list drops its row, its page answers `404`, and nothing forks from
-a checkpoint the next round is about to discard.
+session's checkpoint and its place in the queue, in one commit through the store's own `delete`, and
+then its row in the index. Its claim stays, superseded: the store raises the token on it and keeps
+the row, because that row is the fence that refuses a pass coming back with an older token, which
+costs one small row per deleted session a pass ever took. From the moment of the press the session
+is absent to every reader but the reconciler, so the list drops its row, its page answers `404`, and
+nothing forks from a checkpoint the next round is about to discard.
 
 **The fact is a column on the index, `deleted_at`, where `archived` is a checkpoint key**, and the
 reconciler is what decides it. Taking a session out discards its checkpoint first and its row last,
@@ -521,4 +523,5 @@ interval still gets one, and a failed attempt counts as one, so a disk without r
 tried again a day later rather than rewritten into once a minute.
 
 The cost, stated: the whole console holds still for the seconds it runs, which can land while
-somebody is reading, and a second process writing to the file in those seconds is refused.
+somebody is reading, and a second process writing to the file in those seconds is refused once the
+vacuum outlasts its busy timeout.

@@ -591,8 +591,9 @@ async def mark_deleted(database: Database, session: str, at: datetime) -> bool:
     """
     Record that somebody pressed delete on this archived session, and say whether that is what happened.
 
-    `False` is a session that is not archived, already deleted, or not in the index at all; the
-    caller has already told the last apart, so what is left is the press refused.
+    `False` is a session that is not archived, already deleted, or not in the index at all. The
+    caller tells those apart by reading afterwards, since only a read after this update sees what a
+    press racing this one did.
 
     **A column, where `archived` is a checkpoint key, and the reconciler is what decides it.** Taking
     a session out of the database discards its checkpoint first and its row here second, and a crash
@@ -657,6 +658,14 @@ async def saw(database: Database, session: str) -> None:
 # worker is doing, since the row draws that too. The count is of the sessions the list draws rather
 # than of rows, so a press of delete takes a row off every open list at once and not a round later,
 # when the reconciler takes it out of a table it was already missing from.
+#
+# Taking a deleted session out can *lower* `max(seq)`, since the newest rows may be the ones taken and
+# the store's key is not `AUTOINCREMENT`, so the numbers it gave up are handed out again. That does not
+# let a stale token pass for a current one, because a stream compares against the last token it sent
+# and not against any older one: the round that lowers the maximum also unenrols the row, taking a
+# `seen_seq` that a session somebody opened to press delete on always has out of the sum, so the next
+# poll sees a token that moved. Missing the change would need the take-out, the writes refilling those
+# numbers, and looks restoring the sum to the exact figure all to land inside one poll.
 LISTING = """
 SELECT (SELECT max(seq) FROM workflow_checkpoint),
        count(*) FILTER (WHERE deleted_at IS NULL),

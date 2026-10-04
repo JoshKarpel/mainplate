@@ -829,7 +829,15 @@ class Service:
         for every claim, beside the commands this process holds, rather than `held` per session,
         because the loop asks about all of them every few seconds.
         """
-        claimed = {session for session, attention in (await self.attending()).items() if isinstance(attention, Claimed)}
+        return self.holding_from(await self.attending())
+
+    def holding_from(self, attending: Mapping[str, Attention]) -> frozenset[str]:
+        """
+        `holding`, from a reading of `attending` the caller already has, for a caller asking that
+        reading something else as well: two readings would be two moments, and a session could move
+        between them.
+        """
+        claimed = {session for session, attention in attending.items() if isinstance(attention, Claimed)}
         running = {slot.session for slot in self.commands.running.values()} if self.commands is not None else set()
         return frozenset(claimed | running)
 
@@ -1090,7 +1098,7 @@ class Service:
 
     async def delete(self, session: str) -> bool:
         """
-        Delete an archived session: the conversation goes, and so does every row the database holds for it.
+        Delete an archived session: the conversation goes, and so do its rows in the database.
 
         `archive`'s split again, and for its reason: the press records a fact and the reconciler
         acts on it. What this writes is the moment, on the session's row, and from then the session
@@ -1099,10 +1107,12 @@ class Service:
         archive pressed a moment earlier may not have done yet, and that is why a press may come
         any time after archiving rather than only once the disk is clear.
 
-        `False` where the session is not archived, which is the order this console closes things in:
-        archiving is what takes away the box and the files, and deleting is only ever the step after
-        it. What a session made beside its conversation stays: its artifacts, which outlive the
-        session that made them, and its snapshots in the store, which a fork of it may still name.
+        `False` where the session is not archived, already deleted, or not there at all. The first
+        is the order this console closes things in: archiving is what takes away the box and the
+        files, and deleting is only ever the step after it. What a session made beside its
+        conversation stays: its artifacts, which outlive the session that made them, and its
+        snapshots in the store, which a fork of it may still name. So does its superseded claim,
+        which is the store's fence; see `archive.taken_out`.
         """
         return await mark_deleted(self.database, session, self.now())
 

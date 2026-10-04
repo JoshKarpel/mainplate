@@ -14,7 +14,8 @@
 # store's five-second busy timeout with `database is locked`. A stall is the better of the two,
 # because a pass's record that waits is a record and one that fails is a pass redelivered and a press
 # that answers with an error. The cost, stated: the whole console holds still while it runs, and a
-# second process sharing the file, which is not the deployment this is for, still sees the failure.
+# second process sharing the file, which is not the deployment this is for, still sees the failure
+# whenever the vacuum outlasts its busy timeout.
 #
 # Which is why it waits for a quiet moment rather than firing on the hour: no pass holding a session,
 # none queued to, and no command a person is running. A session deferred until a provider's minute is
@@ -27,6 +28,7 @@ import logging
 import sqlite3
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from typing import Final
@@ -73,26 +75,52 @@ async def last_vacuumed(database: Database) -> datetime | None:
 
 
 async def quiet(service: Service) -> bool:
-    """Whether nothing is working right now: no pass holding a session, none queued, no command running."""
-    if await service.holding():
-        return False
-    return not any(isinstance(attention, Queued) for attention in (await service.attending()).values())
-
-
-def vacuumed(connection: sqlite3.Connection, at: datetime) -> tuple[int, int]:
     """
-    Rewrite the file, give the WAL's copy of it back, and record the attempt: the file's size before and after.
+    Whether nothing is working right now: no pass holding a session, none queued, no command running.
+
+    One reading of `attending` for both questions, so a session handed from the queue to a pass
+    between two readings cannot be missed by both.
+    """
+    attending = await service.attending()
+    if service.holding_from(attending):
+        return False
+    return not any(isinstance(attention, Queued) for attention in attending.values())
+
+
+@dataclass(frozen=True, slots=True)
+class Vacuumed:
+    """
+    What one vacuum came to: the file's size before and after, and whether the log was given back.
+
+    The sizes are the file's alone, since `page_count` does not see the log, which is why `truncated`
+    is a field rather than something the sizes could be read for: a log left full is a second copy of
+    the database that neither figure includes.
+    """
+
+    before: int
+    after: int
+    truncated: bool
+
+
+def vacuumed(connection: sqlite3.Connection, at: datetime) -> Vacuumed:
+    """
+    Rewrite the file, give the WAL's copy of it back, and record the attempt.
 
     The checkpoint is half the job rather than tidying. Under WAL a vacuum writes the whole new file
     into the log first, so without `TRUNCATE` the disk holds a second copy of the database until
     some later checkpoint happens to reset the log, which SQLite does not shrink on its own.
+
+    **A checkpoint that cannot finish does not raise**: another connection still reading the old
+    file, the `sqlite3` shell or a backup, is a busy checkpoint, and SQLite says so in the first
+    column it returns and leaves the log as it was. So the column is read rather than trusted to an
+    exception, and the next checkpoint after that reader lets go gives the log back.
     """
     before = file_size(connection)
     # The attempt first, so the checkpoint below is the last write and the log is left empty.
     connection.execute(ATTEMPTED, (at.isoformat(),))
     connection.execute("VACUUM")
-    connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    return before, file_size(connection)
+    (busy, _, _) = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    return Vacuumed(before=before, after=file_size(connection), truncated=busy == 0)
 
 
 def file_size(connection: sqlite3.Connection) -> int:
@@ -121,18 +149,35 @@ async def vacuumed_if_due(service: Service, every: timedelta, now: Callable[[], 
         return False
     started = time.monotonic()
     try:
-        before, after = await service.database.run(lambda connection: vacuumed(connection, at))
+        done = await service.database.run(lambda connection: vacuumed(connection, at))
     except sqlite3.Error as failed:
         logger.warning(f"could not vacuum the database, and will try again in {every}: {failed!r}")
         return False
     logger.info(
-        f"vacuumed the database in {time.monotonic() - started:.1f}s, from {before / 1e6:.0f} MB to {after / 1e6:.0f} MB"
+        f"vacuumed the database in {time.monotonic() - started:.1f}s,"
+        f" from {done.before / 1e6:.0f} MB to {done.after / 1e6:.0f} MB"
     )
+    if not done.truncated:
+        logger.warning(
+            "vacuumed the database but could not empty its write-ahead log, which another connection"
+            " was still reading; it holds a second copy of the file until the next checkpoint"
+        )
     return True
 
 
 async def vacuuming(service: Service, every: timedelta) -> None:
-    """Look after look, for as long as this is running. First at once, since one may already be due."""
+    """
+    Look after look, for as long as this is running. First at once, since one may already be due.
+
+    **A look that raises is logged and the next one comes a minute later**, rather than ending the
+    loop: a background task that raises stops quietly until the process exits, so one bad look would
+    be a console that never vacuums again with nothing in the log to say so. Everything, rather than
+    the errors a look is known to meet, for `Jobs.looked`'s reason, which is the same loop shape; the
+    cost is a fault nobody anticipated logged once a minute instead of once.
+    """
     while True:
-        await vacuumed_if_due(service, every)
+        try:
+            await vacuumed_if_due(service, every)
+        except Exception:
+            logger.exception(f"could not look for a moment to vacuum the database, and will look again in {LOOK}")
         await asyncio.sleep(LOOK.total_seconds())

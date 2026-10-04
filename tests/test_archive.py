@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import shutil
+import sqlite3
 from dataclasses import replace
 from pathlib import Path
 
@@ -361,6 +363,31 @@ class TestTakingADeletedSessionOutOfTheDatabase:
 
         assert not await indexed(planting, session)
 
+    async def test_a_round_refused_the_write_lock_leaves_the_session_for_the_next(
+        self, service: Service, workspaces: Workspaces, places: Places, database: Path
+    ) -> None:
+        """
+        Another process holding the write lock past the busy timeout, which is what a second process
+        on the file does. Raised out of the round, it would end the loop for every session until a
+        restart; no busy timeout on the console's side, so the refusal comes at once.
+        """
+        planting, session = await working(service, workspaces, places)
+        await planting.archive(session)
+        await reconciled(planting, places, Footprints())
+        await planting.delete(session)
+        await planting.database.run(lambda connection: connection.execute("PRAGMA busy_timeout = 0"))
+        locking = sqlite3.connect(database, isolation_level=None)
+        try:
+            locking.execute("BEGIN IMMEDIATE")
+            await reconciled(planting, places, Footprints())
+            assert await indexed(planting, session), "refused, so left for the next round"
+        finally:
+            locking.close()
+
+        await reconciled(planting, places, Footprints())
+
+        assert not await indexed(planting, session)
+
     async def test_a_fork_of_a_deleted_session_carries_on_as_a_root(
         self, service: Service, workspaces: Workspaces, places: Places
     ) -> None:
@@ -527,6 +554,23 @@ class TestWhatThePageDoesWithAnArchivedSession:
         assert page.status == 404
         assert f"/sessions/{session.id}" not in listing.text
         assert again.status == 404, "nothing is left for a second press to land on"
+
+    async def test_a_double_click_is_one_delete_and_one_not_found(self, app: ASGIApp, service: Service) -> None:
+        """
+        Two presses at once both find the session there before either deletes it, so the loser has to
+        be told apart after its update: the browser keeps the second answer, and "not archived" about
+        a session that was would be the page lying.
+        """
+        session = await started(service, "first", DEFAULT_CHOICE)
+        await service.archive(session.id)
+
+        async with calling(app) as caller:
+            pressed = await asyncio.gather(
+                caller.post(f"/sessions/{session.id}/delete", {}),
+                caller.post(f"/sessions/{session.id}/delete", {}),
+            )
+
+        assert sorted(each.status for each in pressed) == [303, 404]
 
     async def test_a_live_session_is_refused_and_a_missing_one_is_not_found(
         self, app: ASGIApp, service: Service

@@ -1795,6 +1795,23 @@ class TestSendingBackToTheParent:
             branched = await caller.get(f"/sessions/{stepped}")
         assert 'value="parent"' in branched.text
 
+    async def test_the_way_back_is_withdrawn_once_the_parent_is_deleted(self, app: ASGIApp, service: Service) -> None:
+        """
+        The row keeps naming its parent after the parent is gone, so an offer read off the row alone
+        is one only a `404` answers, and what was typed is lost with it.
+        """
+        session = await a_session(app, service)
+        stepped = await self.stepped(service, session)
+        await registered(service, stepped)
+        await service.archive(session)
+        await service.delete(session)
+
+        async with calling(app) as caller:
+            branched = await caller.get(f"/sessions/{stepped}")
+
+        assert 'class="composer"' in branched.text, "the control: the branch still has its box"
+        assert 'value="parent"' not in branched.text
+
 
 class TestSayingWhetherTheCacheIsStillWarm:
     """

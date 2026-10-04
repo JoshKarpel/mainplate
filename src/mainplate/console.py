@@ -777,9 +777,8 @@ async def redrawn(service: Service, session: str, reader: Reader) -> Response:
     about its own write that reading again does not already show.
     """
     asked = await service.read(session)
-    if (
-        asked is None
-    ):  # pragma: no cover - read a line ago, and only an archived session, which takes no writes, is deleted
+    # Read a line ago, and only an archived session, which takes no writes, can be deleted.
+    if asked is None:  # pragma: no cover
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
     return page_response(200, await asyncio.to_thread(lambda: fragment(transcript_region(LINKS, reader, asked))))
 
@@ -1286,12 +1285,16 @@ async def delete(service: Service, session: str) -> Response:
     `422` for a session that is not archived, since archiving is the step in front of this one and
     the only one that takes the box away. A second press finds no session and says so with a `404`,
     which is the truth: unlike archiving, the press leaves nothing behind for a second one to land on.
+
+    **Which of the two is told apart after the update, not before it.** A double click is two presses
+    that both read the session as there, and the one that loses the update would then call a session
+    already deleted "not archived". Read afterwards, the loser finds it gone and says so.
     """
+    if await service.delete(session):
+        return seeing(LINKS.to_home())
     if await read_session(service.database, session) is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
-    if not await service.delete(session):
-        return page_response(422, refusal_page(LINKS, 422, f"session {session} is not archived; archive it first"))
-    return seeing(LINKS.to_home())
+    return page_response(422, refusal_page(LINKS, 422, f"session {session} is not archived; archive it first"))
 
 
 def opened_at(scheme: str, sent: RawHeaders, port: int) -> str:
