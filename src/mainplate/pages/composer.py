@@ -654,6 +654,7 @@ def composer(
                             "disabled": refusing,
                             "placeholder": "Say something",
                             "aria-label": "Message",
+                            "autocapitalize": "off",
                         }
                     ),
                     # A label and not a div, so the empty part of the row focuses the box: a label

@@ -15,6 +15,13 @@ each one writes, which is also the order of how much they can break:
 
 Sorting them this way is what keeps the cheap ones cheap. Three of the four need no new mechanism.
 
+## Keep the case that was typed
+
+The composer asks the keyboard not to capitalise automatically, because the same box takes
+prose, code and commands, and case can change what the latter two mean.
+The cost is that a sentence's opening capital is the person's to type rather than the keyboard's
+to supply.
+
 ## The disposition
 
 **One field on the composer's form, not one button per endpoint**, because every disposition takes

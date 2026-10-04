@@ -3813,6 +3813,7 @@ class TestWhereTheCursorIsOnArrival:
     async def test_a_phone_opens_without_it(self, phone: Page, console: tuple[str, Service]) -> None:
         await a_conversation(console, phone)
         await expect(phone.locator(".composer textarea")).not_to_be_focused()
+        await expect(phone.locator(".composer textarea")).to_have_attribute("autocapitalize", "off")
 
 
 class TestWhereTheCursorIsAfterSending:
