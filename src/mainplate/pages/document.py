@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Final
@@ -24,6 +25,7 @@ from without_html import dt
 from without_html import element
 from without_html import h1
 from without_html import head
+from without_html import header
 from without_html import html
 from without_html import link
 from without_html import meta
@@ -177,6 +179,8 @@ class Links:
     artifact_content: Reversible
     artifact_download: Reversible
     picture: Reversible
+    debug: Reversible
+    debug_json: Reversible
     # A prefix rather than a route, and the one exception: the route serving the assets needs an
     # inventory that does not exist until startup, where every field above is a module-level
     # value. Both are built from one constant, so they cannot disagree about where they are.
@@ -318,6 +322,14 @@ class Links:
     def to_job_output(self, session: str, entry: str) -> str:
         """What a running job has printed so far, as plain text."""
         return url_for(self.job_output, {"session": session, "entry": entry})
+
+    def to_debug(self) -> str:
+        """What this process is holding, as the debug page reads it when it is asked for."""
+        return url_for(self.debug)
+
+    def to_debug_json(self) -> str:
+        """The debug page's reading as JSON, for a program rather than a person."""
+        return url_for(self.debug_json)
 
     def to_artifacts(self, before: int | None = None) -> str:
         """Every artifact, newest first; `before` continues a listing from the last one it held."""
@@ -625,6 +637,27 @@ def home(links: Links) -> Element:
                 children=element("use", attrs={"href": f"{links.to_asset('icon.svg')}#plate"}),
             ),
             span(cls="home__name", children=DASHBOARD),
+        ],
+    )
+
+
+def pagebar(links: Links, title: str, up: Element | None = None, after: Sequence[Element] = ()) -> Element:
+    """
+    The bar a page whose subject is not a conversation draws instead of the session list: `home`,
+    the way up where the page has one, the page's own title, then whatever else it says about itself.
+
+    **A path, home to here.** The slash before each step is drawn by the stylesheet on the step and
+    never on the link inside it, so a press lands on the words rather than on the slash beside them,
+    and a screen reader hears the links and the heading without it. One function for every such page,
+    so the way home and the way up look the same from each of them.
+    """
+    return header(
+        cls="pagebar",
+        children=[
+            home(links),
+            *((span(cls="pagebar__step", children=up),) if up is not None else ()),
+            h1(cls="pagebar__title", children=title),
+            *after,
         ],
     )
 

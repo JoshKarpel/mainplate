@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **A debug page.** `/debug`, reached from the last section of the dashboard, says what the process
+  is holding in memory for the pages it draws: one budget shared by everything memoized
+  (`MAINPLATE_MEMO_BYTES`, 128 MiB by default), and each memoized function's hits, misses, entries,
+  bytes and evictions. `/api/debug` is the same reading as JSON.
 - **Artifacts: pages a session keeps.** `file_to_artifact` keeps a self-contained HTML file as a
   new artifact or as the next version of one, refusing an update onto a version that is no longer
   current; `artifact_to_file` writes a version back out; `list_artifacts` finds them. An artifact
@@ -93,6 +97,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   after a send.
 
 ### Changed
+- **A long session redraws in tens of milliseconds rather than hundreds**, so a turn being watched
+  costs the console far less while it runs. What each read, diff and argument draws as is kept once
+  it is drawn, within the memo's budget, and a turn cut into a pass per request replays its earlier
+  requests for about half of what it did. The console also no longer stops for up to a sixth of a
+  second at a time to collect garbage: what startup built is frozen out of collection, and the
+  collector looks at new objects less often (`MAINPLATE_COLLECT_YOUNG_AFTER`).
+- **Pages and the live connection are compressed**, in zstd where the browser takes it, then brotli,
+  then gzip. The live connection is compressed as one stream with
+  the widest window a browser takes, so a message redrawing a long transcript costs about what
+  changed rather than the whole transcript again: a 5.9 MB render sent twice costs under a kilobyte
+  the second time.
 - **A session's checkout is a repository of its own, and git works in it.** It has its own `.git`, so
   `add`, `commit`, `rebase`, `stash` and the rest work from `bash` against that session's refs and
   nobody else's, and `git fetch`, by name or not, brings the repository's current branches with no

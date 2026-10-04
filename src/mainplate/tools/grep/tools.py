@@ -15,6 +15,7 @@ from mainplate.tools.files.anchors import Anchored
 from mainplate.tools.files.tools import Files
 from mainplate.tools.files.tools import GitTracked
 from mainplate.tools.files.tools import Refused
+from mainplate.tools.schemas import add_function
 
 CONTEXT: Final = 2
 MAX_CONTEXT: Final = 3
@@ -175,5 +176,5 @@ def grep_tools(files: Files) -> FunctionToolset[None]:
         except Refused as refusal:
             raise ModelRetry(str(refusal)) from None
 
-    toolset.add_function(grep)
+    add_function(toolset, grep)
     return toolset

@@ -3,8 +3,8 @@
 #
 # The wire is what is built once and held for the process, because it carries an SDK provider which
 # carries an HTTP client with a connection pool. The agent is not: every model over one endpoint
-# shares that endpoint's client, and an agent costs tens of microseconds against a model call that
-# costs seconds, so there is nothing to gain by keeping a mapping of them and something to lose,
+# shares that endpoint's client, and an agent costs under a tenth of a millisecond against a model call
+# that costs seconds, so there is nothing to gain by keeping a mapping of them and something to lose,
 # which is that the set of models is discovered and changes while this process runs.
 #
 # So the split is along what varies. An endpoint is written down and fixed, and building its wire
@@ -1065,8 +1065,11 @@ def agent_for(
 
     Built rather than looked up, because the models an endpoint offers are discovered and change
     while this process runs, so a mapping built at startup would be a snapshot going stale. It
-    costs a few tens of microseconds against a turn that costs seconds, and the connection pool -
-    the part that is genuinely expensive to build - belongs to the endpoint and is not rebuilt.
+    costs under a tenth of a millisecond against a turn that costs seconds, because the one part of
+    it that is not cheap, working a tool's schema out of its signature, is done by the first pass in
+    the process for every pass after it (`tools/schemas.py`); that first build is about ten
+    milliseconds. The connection pool, the part that is genuinely expensive to build, belongs to the
+    endpoint and is not rebuilt.
 
     The settings come off the choice rather than being passed in, because they are recorded with it
     and are as fixed as it is: a pass that resumed a session at a different effort would continue a

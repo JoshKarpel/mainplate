@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -27,6 +28,7 @@ from without_asgi import Inventory
 from mainplate.agent import Wires
 from mainplate.app import build_app
 from mainplate.app import open_console
+from mainplate.app import settle_collector
 from mainplate.conversation import DECLARED_KEY
 from mainplate.conversation import messages_key
 from mainplate.plugins.installed import Installed
@@ -257,3 +259,18 @@ async def test_a_turn_of_more_than_one_request_is_carried_on_by_the_pass_after_i
             async with asyncio.timeout(PATIENCE):
                 while messages_key(0) not in await service.checkpointer.load(session):
                     await asyncio.sleep(0.05)
+
+
+def test_settling_the_collector_freezes_what_exists_and_sets_only_the_youngest_threshold() -> None:
+    """
+    The process's own collector, put back afterwards: the suite runs each worker in a process of its
+    own, but a test that left the threshold raised would change what every later test there measures.
+    """
+    before = gc.get_threshold()
+    try:
+        settle_collector(31_337)
+        assert gc.get_freeze_count() > 0
+        assert gc.get_threshold() == (31_337, before[1], before[2])
+    finally:
+        gc.unfreeze()
+        gc.set_threshold(*before)

@@ -80,6 +80,17 @@ Three things about that connection are decided rather than incidental:
   cursor, a dropped frame costs nothing, and a duplicate morphs to a no-op. It is also why the first
   thing a stream sends is the current state: what a page that has just connected needs and what one
   connected for an hour needs are the same thing.
+- **And the stream is compressed as one stream, so a whole render costs about what changed.** A long
+  session's render runs to megabytes, sent again whenever the turn in flight records anything.
+  Compressed on its own, a message is about a tenth of that; compressed with a window that reaches
+  back over the message before it, the next render is encoded as references to the last, and a
+  5.9 MB render sent twice costs under a kilobyte the second time. That is the delta this design
+  declines to compute, recovered by the codec, and it is why `compressing.py` gives zstd and brotli
+  the widest windows a browser takes, 8 MiB and 16 MiB, and prefers zstd. The cost, stated: a
+  compressor of about the window's size held for as long as each page is open, and a decoder of the
+  same size in each tab, and past 8 MiB a browser taking zstd is sent every render compressed from
+  scratch. It is also a risk accepted rather than missed, which
+  [security](security.md#what-is-deliberately-not-defended) names.
 - **The server notices by polling a change token**, not by being told. `Service.token` counts a
   session's recorded steps and reads where it stands with the worker, which is cheap because it
   decodes no value and is three rows by primary key. The two halves of the process stay joined only
@@ -739,6 +750,58 @@ will draw one.
 
 The two converters, and why a message's newlines are treated differently from a document's, are in
 [what a session is told](../plugins/guidance.md#the-system-prompt-is-drawn-as-a-panel).
+
+## The memo, and the debug page
+
+**Everything the render memoizes shares one budget, counted in bytes.** A transcript is drawn whole
+every time anything is recorded, so what is a pure function of settled text is kept: a message's
+Markdown and a document's, a run of output with its URLs linked, a read or a search as the file's
+coloured lines, an edit's diff and a batch's, a command or a created file's content as an argument.
+Each is `@MEMO.memoized`, and `memo.py` keeps them all in one cachetools LRU weighed by what each
+result and its key take, up to `memo_bytes` (128 MiB by default, about twice what a real console's
+eight largest sessions came to, so more than a person moves between in a sitting stays warm). One figure rather than one per
+function, because what the memoizing costs this process should be one number however many functions
+come to use it, and because a count of entries says nothing about memory: one held document weighs
+as much as fifty held messages. It is not a copy of anything said, for the reason in `memo.py`: what
+it holds is computed from values that never change, so it can never disagree with them, and
+dropping any of it costs only the next call's time. The cost, stated: no function is promised room,
+so several large sessions opened together push the least recently drawn one's blocks out, and what
+is weighed is an estimate, exact for text and shallow for anything else.
+
+**What is kept is a block's rendered markup, and only the outermost one.** A read is kept as the HTML
+of its `pre`, which goes back into the page as a `Markup` child that is copied rather than walked,
+and not as the tree it was built from, which at an element per line would be many times the size of
+what it renders to. And `highlighted`, the costliest step inside a block, is not memoized at all:
+held as well as the block around it, it was the same file twice, a third of the memo, and the LRU
+cannot tell the redundant layer from the useful one, since both are made at the same moment and age
+together. The rule is to memoize the outermost pure function and nothing inside it. Measured on a
+real console's eight largest sessions, that holds all of them in about 60 MiB with nothing evicted,
+and redraws each in 20 to 65 ms where it took 65 to 415; the first draw of a session in a process
+is unchanged, at a second or two for one with hundreds of reads.
+
+**The budget is set once, before the console serves.** The decorators run at import, before any
+setting is read, so the memo exists first at the default size and `serve` starts it over at
+`memo_bytes` before anything has been computed into it. A change to the setting is a restart.
+
+**And the collector is told what startup settled.** A render allocates enough to set Python's cyclic
+collector off many times over, and each full collection walked everything long-lived again: the
+modules, the catalogue, every decoded conversation and the memo itself. So once the console is
+ready, and before it serves, `serve` collects, freezes everything that exists out of every
+collection to come, and lets the youngest generation grow to `collect_young_after` (fifty thousand)
+before it is looked at. Measured over the eight largest sessions drawn cold and then warm, that took
+the time spent collecting from 1.8 seconds to 0.06 and the longest pause from 162 ms to 8, with no
+more memory held; the freeze alone was most of it. The cost, stated: a cycle made after startup is
+freed later than it would have been, and a figure measured on rendering is what a pass's allocation
+is judged by too, which has not been measured.
+
+**The debug page is where the budget is judged.** `/debug` draws what the memo may hold, what it
+holds, and every memoized function's hits, misses, entries, bytes and evictions, heaviest first, and
+`/api/debug` is the same reading as JSON for a program. It is drawn in a bar of its own, as an
+artifact's page is, since it is about the console rather than any conversation, and the dashboard's
+last section is the way to it. **It is a reading taken once, and not live**, because every render goes
+through the memo: a page whose figures moved under a reader would be counting its own redraws in what
+it shows, and a reload says exactly what was true at one moment. The cost, stated: watching the memo
+fill during a turn is a reload per look.
 
 ## Panels and rules
 

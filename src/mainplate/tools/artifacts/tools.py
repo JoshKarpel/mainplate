@@ -23,6 +23,7 @@ from without_durability_sqlite import Database
 from mainplate import artifacts
 from mainplate.tools.files import Files
 from mainplate.tools.files.tools import Refused as FileRefused
+from mainplate.tools.schemas import add_function
 
 # Where `file_to_artifact` records which version it kept, under the call's `metadata`, for the page
 # to link to. The model is never sent it; it has the same two numbers in words.
@@ -111,7 +112,7 @@ def artifact_tools(store: Artifacts, files: Files | None) -> FunctionToolset[Non
             f"No versions of {artifact}.",
         )
 
-    toolset.add_function(list_artifacts)
+    add_function(toolset, list_artifacts)
     if files is None:
         return toolset
 
@@ -184,8 +185,8 @@ def artifact_tools(store: Artifacts, files: Files | None) -> FunctionToolset[Non
             raise ModelRetry(str(refused)) from None
         return f"Wrote {said(kept)} to {path}, {len(html)} bytes."
 
-    toolset.add_function(file_to_artifact, takes_ctx=True)
-    toolset.add_function(artifact_to_file)
+    add_function(toolset, file_to_artifact, takes_ctx=True)
+    add_function(toolset, artifact_to_file)
     return toolset
 
 

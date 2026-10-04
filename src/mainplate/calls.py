@@ -39,6 +39,7 @@ from without_html import dl
 from without_html import dt
 from without_html import img
 from without_html import pre
+from without_html import render
 from without_html import span
 
 from mainplate.conversation import ToolUse
@@ -46,6 +47,7 @@ from mainplate.markup import SHELL
 from mainplate.markup import highlighted
 from mainplate.markup import language_of
 from mainplate.markup import linked_text
+from mainplate.memo import MEMO
 from mainplate.tools.artifacts.tools import KEPT
 from mainplate.tools.files.anchors import ALPHABET
 from mainplate.tools.files.anchors import GUTTER
@@ -248,10 +250,19 @@ def line_element(gutter: str | None, marked: Markup | str, mark: str | None = No
     )
 
 
-def anchored_element(content: str, language: str | None) -> Element:
+@MEMO.memoized
+def anchored_element(content: str, language: str | None) -> Markup:
     """
     What `read`, `create`, `edit` and `grep` return: the tool's own lines, and the file's without
     the anchors the tool drew in front of them.
+
+    **Memoized as the markup it renders to, not as the tree.** It is a pure function of what the tool
+    returned and the grammar it is coloured in, and a transcript is drawn whole on every record, so a
+    session's reads were split, coloured and built into a span per line again each time: the largest
+    single cost of a warm render. The tree would be the obvious thing to keep and is the wrong one, at
+    an element, its attributes and its children per line, many times the size of the HTML they
+    render to; the HTML goes back into the page as a `Markup` child, which is copied rather than
+    walked.
 
     The anchors are left out rather than drawn faint, because they are the model's names for lines
     and say nothing to a person: what tells a file's line from the tool's is the tone the stylesheet
@@ -273,7 +284,7 @@ def anchored_element(content: str, language: str | None) -> Element:
         else:
             marked = tuple(escape(row.text) for row in rows)
         lines.extend(line_element(None, markup, said=not is_file) for markup in marked)
-    return pre(cls="lines", children=code(children=lines))
+    return Markup(render(pre(cls="lines", children=code(children=lines))))
 
 
 # --- A diff ---------------------------------------------------------------------------------------
@@ -367,18 +378,23 @@ def diff_lines(changes: Sequence[Change], width: int) -> list[Element]:
     return lines
 
 
-def diff_element(diff: str) -> Element:
+@MEMO.memoized
+def diff_element(diff: str) -> Markup:
     """
     The change an `edit` made, as the diff the tool recorded beside its reply.
 
     The numbers on each side are the gutter, carried as data on each line's own `.line` block and
     painted in front of it by the stylesheet: copied, the block is a diff with its marks and without
     the numbers the console drew. The mark is text, since a diff without its `-` and `+` is not one.
+
+    Memoized as the markup it renders to, for `anchored_element`'s reason.
     """
     if not diff:
-        return span(cls="tool__silent", children="no change")
+        return Markup(render(span(cls="tool__silent", children="no change")))
     changes = tuple(changes_of(diff))
-    return pre(cls=("lines", "diff"), children=code(children=diff_lines(changes, gutter_width(changes))))
+    return Markup(
+        render(pre(cls=("lines", "diff"), children=code(children=diff_lines(changes, gutter_width(changes)))))
+    )
 
 
 def changes_by_file(diff: str) -> tuple[tuple[str, tuple[Change, ...]], ...]:
@@ -504,7 +520,21 @@ def block_element(marked: tuple[Markup, ...]) -> Element:
     return pre(cls="lines", children=code(children=[line_element(None, line) for line in marked]))
 
 
-def value_element(tool: str, handed: Mapping[str, object], name: str, value: object) -> Element:
+@MEMO.memoized
+def coloured_block(language: str | None, text: str) -> Markup:
+    """
+    An argument that is code, a command or a file's content, as lines coloured by `language`, or
+    escaped where there is none, rendered to markup.
+
+    Memoized for `anchored_element`'s reason, and the one place an argument's highlighting is kept:
+    `highlighted` is not memoized itself, so this and `anchored_element` are where each text's
+    colouring is held, once.
+    """
+    marked = highlighted(language, text) if language else tuple(map(escape, text.split("\n")))
+    return Markup(render(block_element(marked)))
+
+
+def value_element(tool: str, handed: Mapping[str, object], name: str, value: object) -> Element | Markup:
     """
     One argument as a reader sees it, which depends on what it is and, twice, on which tool got it.
 
@@ -515,11 +545,10 @@ def value_element(tool: str, handed: Mapping[str, object], name: str, value: obj
     """
     if isinstance(value, str):
         if tool == "bash" and name == "command":
-            return block_element(highlighted(SHELL, value))
+            return coloured_block(SHELL, value)
         if tool == "create" and name == "content":
             path = handed.get("path")
-            language = language_of(path) if isinstance(path, str) else None
-            return block_element(highlighted(language, value) if language else tuple(map(escape, value.split("\n"))))
+            return coloured_block(language_of(path) if isinstance(path, str) else None, value)
         if "\n" in value:
             return block_element(tuple(map(escape, value.split("\n"))))
         return code(children=value)

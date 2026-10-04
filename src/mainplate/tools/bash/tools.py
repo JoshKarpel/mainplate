@@ -13,6 +13,7 @@ from mainplate.sandbox import confined_by
 from mainplate.sandbox import home_in
 from mainplate.sandbox import scratch_of
 from mainplate.sandbox import starting_at
+from mainplate.tools.schemas import add_function
 
 SHELL: Final = "/bin/sh"
 
@@ -179,5 +180,5 @@ def bash_tools(
         except Refused as refusal:
             raise ModelRetry(str(refusal)) from None
 
-    toolset.add_function(bash)
+    add_function(toolset, bash)
     return toolset

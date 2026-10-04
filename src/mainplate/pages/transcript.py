@@ -15,6 +15,7 @@ from itertools import groupby
 from typing import Final
 from typing import assert_never
 
+from markupsafe import Markup
 from without_html import Child
 from without_html import Element
 from without_html import a
@@ -25,6 +26,7 @@ from without_html import div
 from without_html import form
 from without_html import p
 from without_html import pre
+from without_html import render
 from without_html import span
 from without_html import summary
 
@@ -48,6 +50,7 @@ from mainplate.conversation import Transcript
 from mainplate.markup import as_document
 from mainplate.markup import as_message
 from mainplate.markup import linked_text
+from mainplate.memo import MEMO
 from mainplate.pages.document import Links
 from mainplate.pages.document import opens
 from mainplate.pages.document import rule_id
@@ -1017,10 +1020,16 @@ def panel_element(links: Links, session: str, panel: Panel) -> Element:
 LONGEST_OPEN_DIFF: Final = 150
 
 
-def batch_element(anchor: str, diff: str) -> Element | None:
+@MEMO.memoized
+def batch_element(anchor: str, diff: str) -> Markup | None:
     """
     The net change a batch made, as a fold of its own below the panel's calls, or nothing where no
     file's lines changed.
+
+    Memoized as the markup it renders to, for `anchored_element`'s reason: a recorded diff never
+    changes, and a merge or a formatter run is thousands of numbered lines rebuilt on every record
+    otherwise. Keyed by the diff as recorded rather than by the changes read out of it, so finding it
+    again costs hashing a string Python has already hashed rather than every line of the diff.
 
     Not shaped as a call, because it is not one: it is what the batch's calls came to, so it stands
     under them as a labelled rule with the diff bare beneath it, where a card like theirs read as a
@@ -1039,7 +1048,7 @@ def batch_element(anchor: str, diff: str) -> Element | None:
     added = sum(change.mark == "+" for change in changes)
     removed = sum(change.mark == "-" for change in changes)
     lines = len(files) + len(changes)
-    return details(
+    folded = details(
         cls="batch",
         attrs={"id": f"{anchor}-diff", **opens(lines <= LONGEST_OPEN_DIFF)},
         children=[
@@ -1061,6 +1070,7 @@ def batch_element(anchor: str, diff: str) -> Element | None:
             div(cls="batch__body", children=block_diff_element(files)),
         ],
     )
+    return Markup(render(folded))
 
 
 def panel_meta(

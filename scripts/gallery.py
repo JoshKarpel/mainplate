@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import shutil
 import sys
+from collections.abc import Callable
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import replace
@@ -49,6 +50,9 @@ from mainplate.agent import Listed
 from mainplate.agent import drawing_note
 from mainplate.agent import network_note
 from mainplate.agent import working_note
+from mainplate.calls import anchored_element
+from mainplate.calls import coloured_block
+from mainplate.calls import diff_element
 from mainplate.catalogue import Catalogue
 from mainplate.catalogue import Offering
 from mainplate.catalogue import retention_for
@@ -89,15 +93,24 @@ from mainplate.durability import ModelResponseTypeAdapter
 from mainplate.forge import Fetched
 from mainplate.forge import Reachable
 from mainplate.forge import Repository
+from mainplate.markup import as_document
+from mainplate.markup import as_message
+from mainplate.markup import language_of
+from mainplate.markup import linked_text
+from mainplate.memo import DEFAULT_MEMO_BYTES
+from mainplate.memo import Account
+from mainplate.memo import Tally
 from mainplate.pages.artifacts import RECENT
 from mainplate.pages.artifacts import artifact_page
 from mainplate.pages.artifacts import catalogue_page
 from mainplate.pages.dashboard import dashboard_page
+from mainplate.pages.debug import debug_page
 from mainplate.pages.document import Links
 from mainplate.pages.moments import Reader
 from mainplate.pages.session import fork_page
 from mainplate.pages.session import new_session_page
 from mainplate.pages.session import session_page
+from mainplate.pages.transcript import batch_element
 from mainplate.plugins.installed import Enrolled
 from mainplate.plugins.installed import Installed
 from mainplate.plugins.installed import Tier
@@ -122,6 +135,7 @@ from mainplate.settings import DEFAULT_INSTRUCTIONS
 from mainplate.snapshots import branch_named
 from mainplate.tools.artifacts.tools import KEPT
 from mainplate.tools.files.tools import sized
+from mainplate.tools.schemas import prototype
 
 ASSETS = Path(__file__).resolve().parent.parent / "src" / "mainplate" / "assets"
 
@@ -372,6 +386,31 @@ LISTED = (
         footprint=Footprint(allocated=0, measured_at=MEASURED),
     ),
 )
+
+
+def named(function: Callable[..., object]) -> str:
+    """A memoized function's name as the memo files it, taken off the function so it cannot drift."""
+    return f"{function.__module__}.{function.__qualname__}"
+
+
+TALLIES = (
+    Tally(name=named(anchored_element), hits=9129, misses=848, entries=848, weight=30_283_000, evicted=0),
+    Tally(name=named(batch_element), hits=3818, misses=373, entries=373, weight=17_784_000, evicted=0),
+    Tally(name=named(as_document), hits=1076, misses=46, entries=46, weight=5_369_000, evicted=0),
+    Tally(name=named(linked_text), hits=5442, misses=509, entries=509, weight=4_740_000, evicted=0),
+    Tally(name=named(as_message), hits=13572, misses=1300, entries=1300, weight=2_999_000, evicted=0),
+    Tally(name=named(diff_element), hits=3787, misses=360, entries=360, weight=1_416_000, evicted=0),
+    Tally(name=named(coloured_block), hits=4784, misses=430, entries=430, weight=503_000, evicted=0),
+    Tally(name=named(language_of), hits=7580, misses=120, entries=120, weight=31_000, evicted=0),
+    Tally(name=named(prototype), hits=0, misses=0, entries=0, weight=0, evicted=0),
+)
+
+# What the memo held after a real console drew its eight largest sessions, cold and then warm, so the
+# debug page is drawn with the figures it exists to show: a session's reads and diffs outweighing
+# everything, documents few and heavy, the language lookups nearly free, and the tool schemas never
+# asked for, since drawing pages runs no pass. What is held is what the rows hold, as it is in the
+# memo, and nothing was evicted, since all of it fits the default budget.
+ACCOUNT = Account(budget=DEFAULT_MEMO_BYTES, held=sum(tally.weight for tally in TALLIES), tallies=TALLIES)
 
 # The archived row above, as the page it opens on: there is no box, the transcript says why, the
 # rail's card says when, and the fork from the end is the one control left.
@@ -1933,6 +1972,7 @@ CAPTIONS: Final[dict[str, str]] = {
     "artifacts.html": "Every artifact, newest first, each at its current version.",
     "artifact.html": "One artifact at its current version: where it came from, the preview, the download, and its versions.",
     "artifact-earlier.html": "The same artifact at an earlier version, which says a later one has been kept since.",
+    "debug.html": "What the process holds: the memo's budget, and every memoized function's hits and bytes.",
 }
 
 
@@ -2173,6 +2213,7 @@ def pages(links: Links = LINKS) -> dict[str, str]:
         "artifacts.html": catalogue_page(links, READER, LISTED, REACHABLE, current),
         "artifact.html": artifact_page(links, READER, LISTED, poll[0], poll),
         "artifact-earlier.html": artifact_page(links, READER, LISTED, poll[-1], poll),
+        "debug.html": debug_page(links, ACCOUNT),
     }
 
 

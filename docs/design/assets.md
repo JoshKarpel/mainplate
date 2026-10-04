@@ -343,8 +343,12 @@ older than its file and compresses at startup where it does not, and the levels 
 are not ones a start could pay: brotli at its ceiling takes six seconds over the diagram library and
 ships 13% less than the default a start would use, which takes under a tenth of one. The recipe runs
 only on a bump, so it takes every coding's highest level rather than weighing each against what the
-next release of a library makes it worth. A sidecar is derived bytes and carries no digest; the
-suite decodes each one against the digest of its file. The cost, stated: about two and a half
+next release of a library makes it worth, holding back only zstd's window: its top level declares
+128 MiB, and RFC 9659 lets a browser refuse a zstd frame needing more than 8 MiB, so the recipe caps
+it there at no cost in ratio on files this small. A sidecar is derived bytes and carries no digest;
+the suite decodes each one against the digest of its file, and a `.zst` with a decoder held to that
+8 MiB, since the stdlib's own reads sixteen times as far as a browser has to and so passes a sidecar
+no browser need accept. The cost, stated: about two and a half
 megabytes more in the repository per version of the diagram library, and a sidecar older than its
 file is ignored for a startup compression with nothing but a log line to say so, which is why the
 suite also asks the inventory what it actually serves. Which files get sidecars at all is a second

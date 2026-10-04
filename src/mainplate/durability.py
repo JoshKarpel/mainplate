@@ -764,8 +764,12 @@ class Stepping:
             await self.wrote(at - 1, before, after)
 
         async def ask() -> object:
+            # Prepared here, inside the step, so a request already recorded never pays for it: it
+            # walks the whole history, which is longer every request, and every pass replays every
+            # request before its own, so done outside the step it was a quadratic paid for nothing.
+            prepared = model.prepare_messages(messages, model_request_parameters)
             started = monotonic()
-            answered = await model.request(messages, model_settings, model_request_parameters)
+            answered = await model.request(prepared, model_settings, model_request_parameters)
             self.stamp(answered, timedelta(seconds=monotonic() - started))
             self.price(answered)
             return records.Response(response=ModelResponseTypeAdapter.dump_python(answered, mode="json")).recorded()

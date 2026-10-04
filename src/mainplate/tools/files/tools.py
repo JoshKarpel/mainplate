@@ -64,6 +64,7 @@ from mainplate.tools.files.anchors import Operation
 from mainplate.tools.files.anchors import Written
 from mainplate.tools.files.anchors import anchor
 from mainplate.tools.files.anchors import written
+from mainplate.tools.schemas import add_function
 
 # The most a single read will show without being asked for more. A whole file is the common case and
 # the right default, so this is a bound on the pathological one rather than a page size: a generated
@@ -956,11 +957,11 @@ def file_tools(files: Files, *, seeing: bool) -> FunctionToolset[None]:
         return await guarded(files.create(path, content, root))
 
     for tool in (read, edit, create):
-        toolset.add_function(tool)
+        add_function(toolset, tool)
     if not files.has_repository:
         return toolset
     # Asked for as `list`, which is the word a model reaches for, and defined as `listing`, because
     # `list` is a builtin and shadowing one inside this scope is a lint error rather than a style
     # question. The name the model sees is the only one that matters, so it is set here explicitly.
-    toolset.add_function(listing, name="list")
+    add_function(toolset, listing, name="list")
     return toolset

@@ -18,6 +18,12 @@ a checkout root has to be resolved against, or how a command is confined.
 A further tool is a new package beside `files/` and `bash/` and one more name in that list. It is not
 an edit to anything that already imports them.
 
+**Every tool is added with `add_function` from `tools/schemas.py`, never the toolset's own.** A
+toolset is rebuilt every pass, and that is what works each schema out once a process rather than
+once a pass, keeping no pass's closure while it does. A tool added directly still works, and quietly
+costs every pass a few milliseconds again; `tests/test_tool_schemas.py` holds every tool a session
+gets against the tool Pydantic AI would build from the same function.
+
 The one reader outside the harness that reaches past the constructors is `calls.py`, the page's
 rendering of a call, which imports the anchor scheme's constants to tell a file's lines from the
 tool's own and `DIFF` to find an edit's diff. That is the page knowing the shape of what a tool

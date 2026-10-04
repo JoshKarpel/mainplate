@@ -36,9 +36,10 @@ is where every other place is reached from. A refusal's way back is its own sent
 `shell` is the session list, with `home` at its head, the phone's bar, and the pane, and it is what a
 page about conversations is drawn in: `document(links, heading, shell(..., pane=[...]))`, like its
 neighbours in `session.py` and `dashboard.py`. A page whose subject is something else may leave the
-list off and draw `home` in a bar of its own, as an artifact's page does, so that its subject gets
-the window; it then holds no live connection (`live=False`), since the list is the region the
-stream redraws. The cost, stated: from such a page another session is two presses away rather than
+list off and draw `home` in a bar of its own, as an artifact's page and the debug page do, so that its
+subject gets the window. **That bar is `pagebar`**, home and the way up and the title as one path, and
+not a header drawn again; such a page holds no live connection (`live=False`), since the list is the
+region the stream redraws. The cost, stated: from such a page another session is two presses away rather than
 one.
 
 **The shell's bar across the top is drawn only on a phone and holds only the name.** Somewhere new to

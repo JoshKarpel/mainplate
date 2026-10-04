@@ -2461,9 +2461,10 @@ pre.lines > code {
     height: var(--visible-height, 100dvh);
 }
 
-/* One line on a wide window, wrapping on a narrow one rather than shedding anything: where the page
-   is in the console at the left, what this version is and where it came from at the right. */
-.artifact__bar {
+/* The bar a page draws when its subject is not a conversation, an artifact's and the debug page:
+   one line on a wide window, wrapping on a narrow one rather than shedding anything. Where the page
+   is in the console at the left, and what the page says about itself after its title. */
+.pagebar {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -2473,36 +2474,80 @@ pre.lines > code {
 }
 
 /* The way up and the title after it read as a path, home to here. The slashes are drawn rather than
-   written, with no text for a screen reader, which reads three links and a heading without them. */
-.artifact__up,
-.artifact__title {
+   written, with no text for a screen reader, which reads the links and a heading without them. Each
+   is drawn on the step and not on the link inside it, so the link's box, and its underline, is the
+   words alone: a slash drawn on the link was part of what a press on it pressed. */
+.pagebar__step,
+.pagebar__title {
     display: flex;
     align-items: center;
     gap: var(--space-5);
     min-width: 0;
 }
 
-.artifact__up::before,
-.artifact__title::before {
+.pagebar__step::before,
+.pagebar__title::before {
     content: "/" / "";
     color: var(--edge);
     font-weight: 400;
 }
 
-.artifact__up {
+/* Any link the bar carries besides the way home, the way up included: faint, so the title is what
+   the bar says, and underlined when it is about to be pressed. */
+.pagebar__link {
     color: var(--ink-faint);
     text-decoration: none;
 }
 
-.artifact__up:hover,
-.artifact__up:focus-visible {
+.pagebar__link:hover,
+.pagebar__link:focus-visible {
     text-decoration: underline;
 }
 
-.artifact__title {
+.pagebar__title {
     margin: 0;
     font-size: 1rem;
     overflow-wrap: anywhere;
+}
+
+/* The debug page has no shell, so it carries the gutter `main` would have given it, under the bar
+   rather than around it, so the bar's rule still runs edge to edge as it does on an artifact's. */
+.debug > .dashboard {
+    padding-inline: var(--gap);
+}
+
+/* The debug page's figures, one function to a row, in a markdown table's lines and padding so a
+   table on this page reads like a table in a reply. It scrolls sideways inside the card rather than
+   pushing the page, since a module path is as wide as it is. The figures are right-aligned in the
+   monospace face, so a column of counts lines up digit for digit. */
+.debug__table {
+    overflow-x: auto;
+}
+
+.debug__table table {
+    border-collapse: collapse;
+    font-size: 0.9em;
+}
+
+.debug__table th,
+.debug__table td {
+    padding: 0.25rem 0.6rem;
+    border: 1px solid var(--edge);
+    font-family: var(--mono);
+    text-align: right;
+    white-space: nowrap;
+}
+
+.debug__table thead th {
+    background: var(--sunk);
+    font-family: inherit;
+}
+
+/* Under the table's own selector, which a bare `.debug__name` loses to: the cells' right alignment is
+   `.debug__table th`, and a name shorter than the rest was pushed right by it. */
+.debug__table thead th:first-child,
+.debug__table .debug__name {
+    text-align: left;
 }
 
 /* The disclosure the history hangs from, the composer menu's shape: a `<details>`, its marker drawn
@@ -4855,10 +4900,11 @@ main:has(> .forking) {
             padding: var(--space-3) var(--space-5);
         }
 
-        /* The mark alone on an artifact's bar, which is still the way home and is what lets the path
-           and the version share the first row; spelled out, the name pushed the title onto a row of
-           its own and the bar took a fifth of the screen. The link keeps the name as its label. */
-        .artifact__bar .home__name {
+        /* The mark alone on a page's own bar, which is still the way home and is what lets the path
+           and what follows it share the first row; spelled out, the name pushed an artifact's title
+           onto a row of its own and the bar took a fifth of the screen. The link keeps the name as
+           its label. */
+        .pagebar .home__name {
             position: absolute;
             width: 1px;
             height: 1px;
@@ -4867,12 +4913,12 @@ main:has(> .forking) {
             white-space: nowrap;
         }
 
-        .artifact__bar {
+        .pagebar {
             column-gap: var(--space-4);
         }
 
-        .artifact__up,
-        .artifact__title {
+        .pagebar__step,
+        .pagebar__title {
             gap: var(--space-4);
         }
 
