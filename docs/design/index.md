@@ -30,6 +30,9 @@ the cross-cutting rules the pages cite rather than restate.
   version is served in a sandbox.
 - **[Where a command runs](sandbox.md)** is the mount namespace `bash` runs behind, and the two
   isolation axes a session picks.
+- **[Jobs](jobs.md)** is the one thing a session runs that outlives the call that asked for it:
+  how a job is recorded and kept running, how a job that serves reaches a browser through a sandbox
+  with no network, and how a setup declares one.
 - **[What runs, and as whom](security.md)** is the boundary between the parent and the sandbox: what
   is untrusted, why nothing trusted may discover its inputs from a tree a session can write, and
   what is deliberately left undefended.

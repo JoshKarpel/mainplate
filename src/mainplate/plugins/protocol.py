@@ -313,6 +313,19 @@ class Answering(Speech):
     input: AnswerInput = "required"
 
 
+class Job(Speech):
+    """
+    One job a setup asks for: a shell command, and the port it serves on where it serves one.
+
+    **It must be idempotent.** A job is kept running: one that exits is over, but one a console
+    restart interrupted is started again from the top, with a line at the head of its output saying
+    so. A dev server or a watcher is that already; anything that is not is the plugin's to make so.
+    """
+
+    command: str
+    port: int | None = None
+
+
 class Described(Speech):
     """
     Everything a plugin contributes, which comes back from one call.
@@ -341,6 +354,16 @@ class Described(Speech):
     A `setup` contribution rather than an event for the reason tools are: instructions sit in
     front of the cached prefix, so they have to be settled for the session or every request under
     them is re-priced.
+    """
+
+    jobs: tuple[Job, ...] = ()
+    """
+    Jobs to start in the session once it is set up, such as the dev server every session on a
+    repository wants, without anybody having to ask the model for one.
+
+    A `setup` contribution because it is about the session rather than any moment in it, and setup is
+    when a session gets ready. They run in the session's own sandbox like any job, and a fork runs
+    setup again and starts its own.
     """
 
     @property

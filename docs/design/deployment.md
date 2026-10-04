@@ -45,3 +45,8 @@ console, since anybody who can may start a session on the whole machine.
 `just serve` and `just install` are on different ports on purpose, so a foreground run for a quick
 look never takes down the service. `just demo` is the same foreground console on a database of its
 own, for poking at a page without touching real sessions.
+
+**A session's jobs that serve are listened on at the console's own address**, on ports from
+`MAINPLATE_SERVING_LOWEST` to `MAINPLATE_SERVING_HIGHEST`, 3000 to 9999 by default because that is
+what exe.dev's proxy forwards. Whatever lets a browser reach the console has to let it reach those
+ports too; see [Jobs](jobs.md#how-a-browser-reaches-it).

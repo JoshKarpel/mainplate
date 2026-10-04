@@ -56,6 +56,20 @@ exclusive forms are also the only way a span reaches a blank line.
 
 The formatter is not wired into `edit` either. It was tried and dropped.
 
+## `read` shows an image only to a model known to see one
+
+`pictured` decides by the bytes a file opens with, and `FORMATS` is the four every wire here takes
+inside a tool result. **Do not make `seeing` default to true, or read an unknown trait as yes**: an
+image sent to a model that cannot take one is a request the provider refuses, and every request
+after it carries the image, so the session is never answered again. A refusal costs the model one
+sentence. `tests/test_reference.py` holds `Prices.sees` to that.
+
+**An image comes back as a list, `[line, BinaryImage]`, as the return value**, not as
+`ToolReturn.content`: the loop refuses `content`, and what it records has to be what a replay
+sends. `durability.told` is what turns the recorded base64 back into an image, for the loop and for
+the page, so anything that builds a `ToolReturnPart` out of a record goes through it. See [Reading an
+image](../../../../docs/design/tools.md#reading-an-image).
+
 ## Read and write with `newline=""`
 
 `Text` carries the line endings and the final newline that `splitlines` throws away, and universal

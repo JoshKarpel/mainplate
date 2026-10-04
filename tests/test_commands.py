@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import shlex
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
@@ -37,6 +38,7 @@ from mainplate.conversation import model_key
 from mainplate.conversation import parse_result
 from mainplate.conversation import reached
 from mainplate.conversation import recorded_command
+from mainplate.conversation import recorded_job
 from mainplate.conversation import recorded_push
 from mainplate.conversation import recorded_result
 from mainplate.conversation import result_key
@@ -44,6 +46,8 @@ from mainplate.conversation import transcript
 from mainplate.forge import Reachable
 from mainplate.forge import Reaching
 from mainplate.forge import Workspaces
+from mainplate.jobs import RESTARTED
+from mainplate.jobs import Jobs
 from mainplate.pages.picker import BASIS_ID
 from mainplate.pages.picker import BRANCHES_ID
 from mainplate.service import Service
@@ -55,11 +59,19 @@ PATIENCE = timedelta(seconds=20)
 
 
 @pytest.fixture
-def running(service: Service, workspaces: Workspaces) -> Service:
-    """A console that can run a command, which needs somewhere to run one and something to run it."""
-    return replace(
-        service, workspaces=workspaces, commands=Commands(checkpointer=service.checkpointer, patience=PATIENCE)
-    )
+async def running(service: Service, workspaces: Workspaces) -> AsyncIterator[Service]:
+    """
+    A console that can run a command and push, which needs somewhere to run one and the two places
+    that do: a command is a job, and a push is `Commands`'.
+
+    Its jobs are stopped at the end the way a console stopping stops them, without recording an end.
+    No port range worth naming, since nothing here serves.
+    """
+    jobs = Jobs(checkpointer=service.checkpointer, workspaces=workspaces, host="127.0.0.1", lowest=0, highest=0)
+    try:
+        yield replace(service, workspaces=workspaces, commands=Commands(checkpointer=service.checkpointer), jobs=jobs)
+    finally:
+        await jobs.aclose()
 
 
 @pytest.fixture
@@ -432,18 +444,22 @@ class TestRunningOne:
 
         assert came.output.strip() == "DENIED"
 
-    async def test_a_command_that_will_not_stop_is_killed_and_says_so(
+    async def test_a_command_that_will_not_stop_runs_until_it_is_stopped_and_keeps_what_it_said(
         self, running: Service, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
-        impatient = replace(
-            running, commands=Commands(checkpointer=running.checkpointer, patience=timedelta(milliseconds=200))
-        )
-        session = await planted(impatient, workspaces, on_fixture)
+        """A job: nothing bounds how long it runs, and stopping it is what ends it."""
+        session = await planted(running, workspaces, on_fixture)
+        entry = await running.run(session, "echo starting; sleep 30")
+        assert entry is not None
+        async with asyncio.timeout(PATIENCE.total_seconds()):
+            while "starting" not in (running.printed(session, entry) or ""):
+                await asyncio.sleep(0.01)
 
-        came = await ran(impatient, session, "echo starting; sleep 30")
+        assert await running.stop(session, entry)
 
-        assert "starting" in came.output, "what it managed to say survives being killed"
-        assert "killed after" in came.output
+        came = await settled(running, session, entry)
+        assert "starting" in came.output, "what it managed to say survives being stopped"
+        assert "[stopped from the console]" in came.output
 
     async def test_three_commands_posted_at_once_each_take_an_entry_of_their_own(
         self, running: Service, workspaces: Workspaces, on_fixture: Choice
@@ -477,7 +493,7 @@ class TestRunningOne:
         entry = await running.run(session, "echo late")
 
         assert entry is not None
-        assert (await running.checkpointer.load(session))[entry] == recorded_command("echo late")
+        assert (await running.checkpointer.load(session))[entry] == recorded_job("echo late")
 
     async def test_a_command_before_the_first_turn_says_the_checkout_is_not_there_yet(
         self, running: Service, on_fixture: Choice
@@ -509,24 +525,29 @@ class TestRunningOne:
 
         assert await without.run(session, "echo nowhere") is None
 
-    async def test_stopping_the_console_records_that_it_stopped_rather_than_leaving_a_panel_running(
+    async def test_a_command_the_console_stopped_under_is_run_again_by_the_next_and_says_so(
         self, running: Service, workspaces: Workspaces, on_fixture: Choice
     ) -> None:
         """
-        A record left unwritten is a command that says it is still going for ever, which nobody can
-        tell from one that is. The write is shielded for exactly this, and the database outlives the
-        cancellation because `open_store` closes the runner inside its own `finally`.
+        A command is a job, and a console stopping is not an end: the next console starts it again
+        from the top, and what it prints opens with the line saying why.
         """
         session = await planted(running, workspaces, on_fixture)
-        entry = await running.run(session, "sleep 30")
+        entry = await running.run(session, "echo once; sleep 30")
         assert entry is not None
-        assert running.commands is not None
+        assert running.jobs is not None
+        await running.jobs.aclose()
+        assert result_key(entry) not in await running.checkpointer.load(session), "the control: no end"
 
-        await running.commands.aclose()
+        again = replace(running.jobs, running={}, tasks={})
+        try:
+            await again.reconcile(session, restarted=True)
+            printed = again.output(session, entry)
+        finally:
+            await again.aclose()
 
-        came = await settled(running, session, entry)
-        assert came.status == UNFINISHED
-        assert "the console stopped" in came.output
+        assert printed is not None
+        assert printed.startswith(RESTARTED)
 
 
 # How many IPv4 routes a command can see: none in a network namespace of its own, and the machine's
@@ -563,7 +584,7 @@ class TestRunningOneOnline:
         entry = await running.run(session, "true", online=True)
 
         assert entry is not None
-        assert (await running.checkpointer.load(session))[entry] == recorded_command("true", online=True)
+        assert (await running.checkpointer.load(session))[entry] == recorded_job("true", online=True)
 
     async def test_in_a_session_whose_network_is_already_on_it_is_an_ordinary_run(
         self, running: Service, workspaces: Workspaces, on_fixture: Choice
@@ -575,7 +596,7 @@ class TestRunningOneOnline:
         entry = await running.run(session, "true", online=True)
 
         assert entry is not None
-        assert (await running.checkpointer.load(session))[entry] == recorded_command("true")
+        assert (await running.checkpointer.load(session))[entry] == recorded_job("true")
 
     async def test_the_panel_says_it_ran_online(self, app: ASGIApp, service: Service) -> None:
         session = await started(service, "have a look", DEFAULT_CHOICE)
@@ -681,7 +702,7 @@ class TestThroughTheConsole:
 
         assert answer.status == 200
         recorded = await running.checkpointer.load(session)
-        entry = next(key for key, held in recorded.items() if held == recorded_command("echo hello"))
+        entry = next(key for key, held in recorded.items() if held == recorded_job("echo hello"))
         assert (await settled(running, session, entry)).output.strip() == "hello"
 
     async def test_the_command_is_drawn_rather_than_sent_as_a_message(
@@ -757,7 +778,7 @@ class TestThroughTheConsole:
             answer = await caller.post(f"/sessions/{session}/messages", {"prompt": "echo hi", "disposition": "online"})
 
         assert answer.status == 200
-        assert recorded_command("echo hi", online=True) in (await running.checkpointer.load(session)).values()
+        assert recorded_job("echo hi", online=True) in (await running.checkpointer.load(session)).values()
 
     async def test_pushing_through_the_console_takes_an_empty_box(
         self, app: ASGIApp, running: Service, workspaces: Workspaces, on_fixture: Choice
@@ -800,7 +821,7 @@ class TestCommittingThroughTheConsole:
             answer = await caller.post(f"/sessions/{session}/messages", {"prompt": said, "disposition": disposition})
         assert answer.status == 200
         recorded = await running.checkpointer.load(session)
-        wanted = recorded_command(commit_command(said) if disposition == "commit" else said)
+        wanted = recorded_job(commit_command(said) if disposition == "commit" else said)
         entry = next(key for key, held in recorded.items() if held == wanted)
         return await settled(running, session, entry)
 
@@ -858,7 +879,7 @@ class TestCommittingThroughTheConsole:
 
         assert refused.status == 422
         recorded = (await running.checkpointer.load(without.id)).values()
-        assert recorded_command(commit_command("a message")) not in recorded
+        assert recorded_job(commit_command("a message")) not in recorded
 
 
 @pytest.mark.parametrize(

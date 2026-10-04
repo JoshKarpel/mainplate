@@ -134,13 +134,25 @@ than a thing it has to learn.
 including this one. Diagnostics go to stderr, where the console logs them and a `print` left in while
 debugging is not a protocol error. A setup that fetches is the case where this bites, since the
 things it shells out to are chatty: `exec 1>&2` at the top of a script that answers nothing is the
-whole of the fix, and this repository's own carries it.
+whole of the fix, and `exec 3>&1 1>&2`, answering on `3` at the end, is the same for one that
+answers; this repository's own carries the second.
 
 A plugin may also return **`instructions`**, which are composed into what the session is answered
 under. Those are a `setup` contribution rather than an event for the reason tools are: they sit
 in front of the cached prefix, so they have to be settled for the session or every request under
 them is re-priced. It is what lets [the guidance
 system](#both-are-ported-and-that-is-the-test) be a plugin at all.
+
+A plugin may also return **`jobs`**, each a `command` and an optional `port`, which the console starts
+in the session's sandbox once the session is set up and keeps running for as long as the session is:
+the dev server every session on a repository wants, without anybody asking the model for one. They
+are [jobs](jobs.md) like any other, so **each must be idempotent**, since a console restart starts it
+again from the top. A setup contribution because a job is one more thing a session gets when it is
+set up; a fork runs setup again and starts its own.
+
+```json
+← {"jobs": [{"command": ".mainplate/demo", "port": 8101}]}
+```
 
 ### One event, and it is named after the stage
 
@@ -1381,8 +1393,11 @@ told.
 `.mainplate/setup` installs mise into the session's scratch, runs `mise install` for the tools
 `mise.toml` pins, runs `just setup` under them, appends one `PATH` line to
 `$MAINPLATE_ENV` putting mise's shims first, then mise's own directory, then the system's, and
-**prints nothing**. So it declares no events and is never asked anything again, and nothing in the
-console knows what a shim is, where mise keeps them, or that Python has an interpreter directory.
+**answers with one job**: `.mainplate/demo`, the demo console on its seeded fixtures, which starts
+against a stand-in endpoint on its own loopback because the session may have no network and cannot
+see the operator's configuration. It declares no events and is never asked anything again, and
+nothing in the console knows what a shim is, where mise keeps them, or that Python has an interpreter
+directory.
 `just setup` also installs pre-commit in the session's checkout. The plugin's switch on the settings
 step chooses whether to prepare the checkout this way; the cost is a hook in every session that
 leaves it on, including ones that never commit.

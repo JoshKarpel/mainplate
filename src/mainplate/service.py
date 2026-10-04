@@ -27,6 +27,7 @@ from datetime import timedelta
 from functools import partial
 from pathlib import Path
 
+from pydantic_ai.messages import BinaryContent
 from without_durability_sqlite import Database
 from without_durability_sqlite import SqliteCheckpointer
 from without_durability_sqlite import SqliteDurable
@@ -35,8 +36,8 @@ from mainplate import records
 from mainplate.agent import Choice
 from mainplate.catalogue import Catalogues
 from mainplate.catalogue import retention_for
+from mainplate.commands import UNFINISHED
 from mainplate.commands import Commands
-from mainplate.commands import Running
 from mainplate.commands import Slot
 from mainplate.context import Entry
 from mainplate.context import body as context_body
@@ -47,32 +48,36 @@ from mainplate.conversation import ARCHIVED_KEY
 from mainplate.conversation import CHOICE_KEY
 from mainplate.conversation import CONTEXT_KEY
 from mainplate.conversation import LEADERS
+from mainplate.conversation import Result
 from mainplate.conversation import Transcript
 from mainplate.conversation import before
 from mainplate.conversation import choice_of
 from mainplate.conversation import declared_in
 from mainplate.conversation import deferred_in
-from mainplate.conversation import environment_in
 from mainplate.conversation import failure_in
 from mainplate.conversation import fork_branch
 from mainplate.conversation import fork_point
 from mainplate.conversation import opening_tree_key
+from mainplate.conversation import picture_in
 from mainplate.conversation import plugins_refused_in
 from mainplate.conversation import recorded_choice
-from mainplate.conversation import recorded_command
 from mainplate.conversation import recorded_prompt
 from mainplate.conversation import recorded_push
+from mainplate.conversation import recorded_result
 from mainplate.conversation import recorded_steer
 from mainplate.conversation import refusal_in
 from mainplate.conversation import registered_in
+from mainplate.conversation import result_key
 from mainplate.conversation import setup_key
 from mainplate.conversation import setup_refused_in
 from mainplate.conversation import setups_in
 from mainplate.conversation import transcript
+from mainplate.conversation import wanted_in
 from mainplate.footprint import Footprints
 from mainplate.forge import Fetched
 from mainplate.forge import Reachable
 from mainplate.forge import Workspaces
+from mainplate.jobs import Jobs
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.asking import Live
 from mainplate.plugins.asking import acted
@@ -87,8 +92,6 @@ from mainplate.reference import References
 from mainplate.reference import Resending
 from mainplate.reference import facts_of
 from mainplate.reference import resending
-from mainplate.sandbox import InACheckout
-from mainplate.sandbox import Venue
 from mainplate.sessions import LISTING
 from mainplate.sessions import Attention
 from mainplate.sessions import Claimed
@@ -338,7 +341,7 @@ class Conversation:
 
     Its own field rather than `checkout is not None`, because it is two questions and only one of
     them is about the session: whether this session has files, and whether this console was built to
-    run anything at all. A console with no `Commands` offers no `Run`, exactly as one with no sandbox
+    run anything at all. A console with no `Jobs` offers no `Run`, exactly as one with no sandbox
     offers no `bash`, and neither is a session's fault.
     """
 
@@ -531,15 +534,24 @@ class Service:
 
     commands: Commands | None = None
     """
-    What runs a command a person typed, or nothing at all for a console that runs none.
+    What pushes a session's branch, or nothing at all for a console that pushes none.
 
-    The one thing here that holds work in flight, which the module note above says this object does
-    not. Stated rather than quietly excepted: a running command belongs to this process and does not
-    survive a restart, where everything else here is a read of the store. What keeps it from
-    spreading is that the *answers* are still only in the checkpoint - the command and its result are
-    both recorded - so a page renders the same thing whichever process is asked. See `commands.py`.
+    One of the two things here that hold work in flight, `jobs` being the other, which the module
+    note above says this object does not. Stated rather than quietly excepted: a running push belongs
+    to this process and does not survive a restart, where everything else here is a read of the
+    store. What keeps it from spreading is that the *answers* are still only in the checkpoint - the
+    push and its result are both recorded - so a page renders the same thing whichever process is
+    asked. See `commands.py`.
 
-    Absent is a console that cannot run one, the way `workspaces` absent is a console with no files.
+    Absent is a console that cannot push, the way `workspaces` absent is a console with no files.
+    """
+    jobs: Jobs | None = None
+    """
+    What keeps a session's jobs running, a command the person typed among them, or nothing at all for
+    a console that runs none.
+
+    The second thing here holding work in flight, on `commands`' terms: which jobs should be running
+    is in the checkpoint, and this is the place the processes are. See `jobs.py`.
     """
     declaring: Declaring | None = None
     """
@@ -640,6 +652,19 @@ class Service:
             return None
         return await self.conversation(found, await self.checkpointer.load(session))
 
+    async def picture(self, session: str, turn: int, call: str, index: int) -> BinaryContent | None:
+        """
+        One image a call handed the model, or nothing where the session, the call or the image is not there.
+
+        The checkpoint and not the conversation, because the image is one record and a conversation
+        is every record decoded: the page asks for these one `<img>` at a time, and each building a
+        whole transcript to throw away would make a panel of screenshots the most expensive thing on
+        it. The index decides existence for `read`'s reason.
+        """
+        if await read_session(self.database, session) is None:
+            return None
+        return picture_in(await self.checkpointer.load(session), turn, call, index)
+
     async def forkable(self, session: str, at: int) -> tuple[Conversation, str | None] | None:
         """
         One session as the fork page asks about it: the conversation, and the branch a fork from
@@ -706,7 +731,7 @@ class Service:
             attention=await self.attention(found.id),
             repository=self.repository_of(chosen),
             checkout=self.workspaces.at(found.id) if self.workspaces is not None and working else None,
-            runnable=self.commands is not None and self.workspaces is not None and working,
+            runnable=self.jobs is not None and self.workspaces is not None and working,
             window=facts.context if facts is not None else None,
             since=since,
             retention=retention_for(self.catalogues.current, chosen),
@@ -984,6 +1009,17 @@ class Service:
             await switch(self.database, forked.id, parent.tending.enabled)
         for key, value in carried.items():
             await self.checkpointer.supply(forked.id, key, value)
+        # **A job still running in the parent does not start in the branch.** Its entry comes across
+        # like any command's, and with no result beside it the branch would want it running too: a
+        # second process, perhaps on a second port, in a checkout the branch has not planted yet. So
+        # the branch is told it ended where the parent's past did, and starts its own if it wants; a
+        # job a setup declared is started again by the branch's own setup.
+        for each in wanted_in(carried):
+            await self.checkpointer.supply(
+                forked.id,
+                result_key(each.entry),
+                recorded_result(Result(status=UNFINISHED, output="[not carried into a fork]\n")),
+            )
         # The checkout state of the turn being re-asked - its commit, its branch and its files -
         # carried across on its own even though that turn's prompt and messages are not. It is what
         # makes the branch answer the *same* question: the first pass plants the fork's checkout at
@@ -1045,54 +1081,40 @@ class Service:
         if found is None:
             return None
         await self.checkpointer.supply(session, ARCHIVED_KEY, records.Archived(at=self.now()).recorded())
+        # An archived session wants no jobs, so the reconciler's next look at it stops them.
+        if self.jobs is not None:
+            self.jobs.look(session)
         return await read_session(self.database, session)
 
     async def run(self, session: str, said: str, *, online: bool = False) -> str | None:
         """
-        Run `said` in this session's own checkout, and say which entry recorded it, or nothing at all
-        where this session has nowhere to run one.
+        Run `said` as a job in this session's own checkout, and say which entry recorded it, or
+        nothing at all where this session has nowhere to run one.
 
         Delivered to the session's inbox like a message, and read out of it by nobody: a pass passes
         over a command on its way down the queue. What being an entry buys is the one thing a slot
         could not give it, which is a *place*: the store files it in the order it arrived, so where it
         sits among the turn's model records is where it was run, and its panel stays there rather
-        than sinking as later answers land above it.
+        than sinking as later answers land above it. Two commands posted at once are two entries.
 
-        Nothing has to be claimed by trying any more, and nothing has to decide which turn it belongs
-        to. Both of those were answers to questions the key space asked; the store names the key, so
-        two commands posted at once are simply two entries.
-
-        Recorded *before* it is started, and both of those are here rather than in the handler so the
-        pair cannot come apart: a command started without a record would run with nothing on the page
-        saying it had, and a record with nothing running would be a panel that never resolves.
-
-        Nowhere to run one is `None` and not a raise: it is a state the page can explain, not a fault.
+        **A job like the model's**, recorded and then started by `Jobs.start`, so it runs until it
+        exits or somebody stops it, has its output readable while it runs, and is started again after
+        a console restart, which is the cost: a command a person types has to be one that is safe to
+        run twice, as every job does. Nowhere to run one is `None` and not a raise: it is a state the
+        page can explain, not a fault.
 
         **In the session's sandbox**, under its own network answer and the environment its setup
-        recorded, for the reason `commands.py` opens with: the checkout's git configuration is the
-        model's to write. `online` turns the network on for this one command whatever the session
-        chose, which is `Disposition.ONLINE`, and is recorded on the command so the page says so.
+        recorded, for the reason `jobs.py` gives: the checkout's git configuration is the model's to
+        write. `online` turns the network on for this one command whatever the session chose, which
+        is `Disposition.ONLINE`, and is recorded on the command so the page says so.
         """
-        if self.commands is None or self.workspaces is None or self.workspaces.bwrap is None:
+        if self.jobs is None or self.workspaces is None or self.workspaces.bwrap is None:
             return None
-        found = await self.read(session)
-        if found is None or found.chosen is None or found.chosen.repository is None:
+        found = await read_session(self.database, session)
+        chosen = choice_of(await self.checkpointer.load(session)) if found is not None else None
+        if chosen is None or chosen.repository is None:
             return None
-        running = Running(
-            confinement=InACheckout(
-                checkout=self.workspaces.checkout(session, found.chosen.repository),
-                scratch=self.workspaces.scratch_at(session),
-            ),
-            venue=Venue.CONNECTED if online else found.chosen.isolation.venue,
-            environment=environment_in(await self.checkpointer.load(session)),
-        )
-        # Appended rather than delivered, because there is nothing for a worker to do about it: a
-        # command reaches no model, so waking a pass to look at one would be a pass with no work.
-        entry = await self.checkpointer.append(
-            session, recorded_command(said, online=online and not found.chosen.isolation.network)
-        )
-        self.commands.start(Slot(session=session, entry=entry.key), said, running)
-        return entry.key
+        return await self.jobs.start(session, said, None, None, None, online=online and not chosen.isolation.network)
 
     async def push(self, session: str) -> str | None:
         """
@@ -1123,6 +1145,27 @@ class Service:
             found.chosen.branch,
         )
         return entry.key
+
+    async def stop(self, session: str, entry: str) -> bool:
+        """End one of this session's jobs, writing its result; whether it had one running to end."""
+        if self.jobs is None:
+            return False
+        return await self.jobs.stop(session, entry, "stopped from the console")
+
+    def printed(self, session: str, entry: str) -> str | None:
+        """What one of this session's jobs has printed so far, where this process is running it."""
+        return None if self.jobs is None else self.jobs.output(session, entry)
+
+    async def opened_on(self, session: str, entry: str) -> int | None:
+        """
+        The port one of this session's jobs is opened on, or nothing where it serves nothing or has
+        ended.
+
+        Read out of the checkpoint, so it is the recorded port and a job that has ended answers
+        nothing even in a process that never ran it.
+        """
+        recorded = await self.checkpointer.load(session)
+        return next((each.port for each in wanted_in(recorded) if each.entry == entry), None)
 
     async def live(self, session: str, found: Conversation) -> Live | None:
         """

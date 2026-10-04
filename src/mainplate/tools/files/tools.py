@@ -49,6 +49,7 @@ from typing import Final
 from typing import assert_never
 
 from pydantic_ai import ModelRetry
+from pydantic_ai.messages import BinaryImage
 from pydantic_ai.messages import ToolReturn
 from pydantic_ai.toolsets import FunctionToolset
 
@@ -82,6 +83,33 @@ MAX_ROWS: Final = 400
 # Under what name an edit's diff rides beside its reply, in the metadata the loop records and the
 # page reads. Named here because the page reads it by this name and nothing else does.
 DIFF: Final = "diff"
+
+
+@dataclass(frozen=True, slots=True)
+class Format:
+    """One kind of image `read` will show a model: the bytes it opens with, and what it is called."""
+
+    signature: bytes
+    media_type: str
+    name: str
+
+
+# The images `read` hands a model, recognised by the bytes each one opens with rather than by a
+# file's name, which is whatever somebody typed. These four because they are the formats every wire
+# this console speaks accepts inside a tool's result, and the four every browser draws in an `<img>`,
+# so what the model was shown is what the page shows. WebP is the one whose signature is not a
+# prefix, since a RIFF container names its kind after its length; `pictured` reads it apart.
+#
+# SVG is deliberately absent: it is text, `read` already anchors it, and no provider takes it as a
+# picture. A format outside these is refused as neither text nor an image this can show, which is
+# the sentence a model needs to go and convert it.
+FORMATS: Final = (
+    Format(signature=b"\x89PNG\r\n\x1a\n", media_type="image/png", name="PNG"),
+    Format(signature=b"\xff\xd8\xff", media_type="image/jpeg", name="JPEG"),
+    Format(signature=b"GIF87a", media_type="image/gif", name="GIF"),
+    Format(signature=b"GIF89a", media_type="image/gif", name="GIF"),
+)
+WEBP: Final = Format(signature=b"WEBP", media_type="image/webp", name="WebP")
 
 
 class ListingFailed(RuntimeError):
@@ -427,7 +455,14 @@ class Files:
             return path
         return f"{path} in {found.root.name}"
 
-    def loaded(self, path: str, root: str = "") -> tuple[Path, Text]:
+    def raw(self, path: str, root: str = "") -> tuple[Path, bytes]:
+        """
+        A file's bytes, once it is known to be a file small enough to read at all.
+
+        Bytes rather than text, because what a file *is* is decided by what it opens with, and
+        that is a question asked of the bytes before anything decodes them: `read` shows an image
+        where `edit` refuses one, and both start here.
+        """
         here = self.resolved(path, root).path
         if not here.exists():
             raise Refused(f"there is no file at {path!r}")
@@ -435,23 +470,50 @@ class Files:
             raise Refused(f"{path!r} is a directory, not a file")
         if here.stat().st_size > MAX_BYTES:
             raise Refused(f"{path!r} is larger than {MAX_BYTES // (1024 * 1024)}MiB, which is too large to read here")
-        try:
-            # `newline=""` turns off universal newlines, which would otherwise translate every
-            # `\r\n` to `\n` on the way in. `Text` exists to carry those endings back out again,
-            # and with the translation left on there would be nothing left for it to notice.
-            content = here.read_text(encoding="utf-8", newline="")
-        except UnicodeDecodeError:
-            raise Refused(f"{path!r} is not UTF-8 text, so it has no lines to anchor") from None
-        return here, Text.of(content)
+        return here, here.read_bytes()
 
-    async def read(self, path: str, offset: int, limit: int, root: str = "") -> str:
+    def loaded(self, path: str, root: str = "") -> tuple[Path, Text]:
+        here, content = self.raw(path, root)
+        text = decoded(content)
+        if text is None:
+            raise Refused(f"{path!r} is not UTF-8 text, so it has no lines to anchor")
+        return here, text
+
+    async def read(self, path: str, offset: int, limit: int, root: str = "", *, seeing: bool = False) -> str | Shown:
+        """
+        A file's lines under their anchors, or, where it is an image, the image itself.
+
+        `seeing` is whether the model this is for is known to take images, and an image read for one
+        that is not is refused rather than sent. A provider that cannot take one refuses the whole
+        request, and a request is re-sent with everything above it, so the image would be in front of
+        every request the session made from then on and the session could never be answered again.
+        Refusing at the call costs the model one sentence; sending costs the session.
+        """
         found = self.resolved(path, root)
         async with self.exclusively(found.path):
-            _, text = await asyncio.to_thread(self.loaded, path, root)
+            _, content = await asyncio.to_thread(self.raw, path, root)
+        named = self.naming(path, found)
+        if (kind := pictured(content)) is not None:
+            if not seeing:
+                raise Refused(
+                    f"{path!r} is a {kind.name} image, and the model answering this session is not known to "
+                    "see images, so it is not sent one. Look at it some other way, or say what you need "
+                    "from it to whoever asked."
+                )
+            return [
+                f"{named}, a {kind.name} image of {sized(len(content))}",
+                BinaryImage(data=content, media_type=kind.media_type),
+            ]
+        text = decoded(content)
+        if text is None:
+            raise Refused(
+                f"{path!r} is neither UTF-8 text nor a PNG, JPEG, GIF or WebP image, so `read` has nothing "
+                "to show of it. Convert an image in another format to one of those four first."
+            )
         anchored = Anchored.over(text.lines)
         start = max(0, offset - 1)
         stop = min(len(text.lines), start + max(1, limit))
-        said = reading(self.naming(path, found), len(text.lines), start, stop)
+        said = reading(named, len(text.lines), start, stop)
         return "\n".join((said, "", anchored.rendered(start, stop)))
 
     async def listing(self, path: str, depth: int) -> str:
@@ -560,8 +622,44 @@ class Files:
                 raise Refused(f"{path!r} already exists; write it somewhere new") from None
 
 
+type Shown = list[str | BinaryImage]
+"""
+What a read of an image hands back: a line saying what it is, then the image.
+
+A list because that is the shape Pydantic AI reads as text beside a file, and every wire here sends
+it as one tool result holding both. The line is what the page and a model that is shown the picture
+both read first, so it says which file it was and what kind.
+"""
+
+
 def counted(many: int, noun: str) -> str:
     return f"{many} {noun}" if many == 1 else f"{many} {noun}s"
+
+
+def sized(many: int) -> str:
+    """How large a file is, in the unit a person reads it in, which below a kibibyte is bytes."""
+    return counted(many, "byte") if many < 1024 else f"{many / 1024:.0f} KiB"
+
+
+def pictured(content: bytes) -> Format | None:
+    """Which of `FORMATS` a file is, by the bytes it opens with, or nothing where it is none of them."""
+    if content[:4] == b"RIFF" and content[8:12] == WEBP.signature:
+        return WEBP
+    return next((kind for kind in FORMATS if content.startswith(kind.signature)), None)
+
+
+def decoded(content: bytes) -> Text | None:
+    """
+    A file's bytes as lines, or nothing where they are not UTF-8.
+
+    Decoded from bytes rather than read as text, which also keeps every CRLF as it was: there is
+    no universal-newline translation on this path to turn off, and `Text` exists to carry those
+    endings back out again.
+    """
+    try:
+        return Text.of(content.decode("utf-8"))
+    except UnicodeDecodeError:
+        return None
 
 
 def catalogue(paths: Sequence[str], depth: int, level: int) -> Iterator[str]:
@@ -677,10 +775,15 @@ async def guarded[T](work: Awaitable[T]) -> T:
         raise ModelRetry(str(refusal)) from None
 
 
-def file_tools(files: Files) -> FunctionToolset[None]:
+def file_tools(files: Files, *, seeing: bool) -> FunctionToolset[None]:
     """
     `read`, `edit` and `create` over every root a session reaches, and `list` where one of them is a
     checkout.
+
+    `seeing` is whether the model is known to take images, which decides what `read` does with one
+    and nothing else: the tool and its description are the same either way, because a tool
+    definition sits in front of the cached prefix and whether a model sees is read per turn, off
+    reloadable configuration. See `Files.read` for why unknown is not yes.
 
     Built per session rather than declared once, because the roots are what make a path safe and
     every session has its own. `list` asks git, so it is offered only where `Files.has_repository`
@@ -729,9 +832,9 @@ def file_tools(files: Files) -> FunctionToolset[None]:
         """
         return await guarded(files.listing(path, depth))
 
-    async def read(path: str, offset: int = 1, limit: int = MAX_LINES, root: str = "") -> str:
+    async def read(path: str, offset: int = 1, limit: int = MAX_LINES, root: str = "") -> str | Shown:
         r"""
-        Read a file, with an anchor in front of every line that has one.
+        Read a file, with an anchor in front of every line that has one, or look at an image.
 
         Each line comes back as its anchor, then a `│`, then the line itself:
 
@@ -765,6 +868,11 @@ def file_tools(files: Files) -> FunctionToolset[None]:
         of identical lines, which shows as `----│    pass` with its content still there; address
         the unique lines around the run.
 
+        A PNG, JPEG, GIF or WebP file comes back as the image itself, with a line saying which file
+        and what kind, where you are able to see images; `offset` and `limit` do nothing to one. A
+        screenshot you took is read this way. An image you cannot be shown is refused, and so is a
+        file that is neither text nor one of those four.
+
         Args:
             path: Path to the file, relative to `root`.
             offset: First line to show, counting from 1.
@@ -773,7 +881,7 @@ def file_tools(files: Files) -> FunctionToolset[None]:
                 Left out, it is the first one, which is what a bare name has always meant.
 
         """
-        return await guarded(files.read(path, offset, limit, root))
+        return await guarded(files.read(path, offset, limit, root, seeing=seeing))
 
     async def edit(path: str, operations: list[Operation], root: str = "") -> ToolReturn:
         r"""

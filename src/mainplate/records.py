@@ -77,6 +77,7 @@ type StepKind = Literal[
     "environment",
     "archived",
     "wrote",
+    "listening",
 ]
 """
 What a record says it is, and what a turn's keys are named by.
@@ -276,6 +277,37 @@ class Steer(Record):
     said: str
 
 
+class Job(Record):
+    """
+    That a command is a job, kept running until it exits or is stopped, and what started it.
+
+    Not a checkpoint value on its own: it is only ever `Command.job`, which is why it carries no
+    `kind` and is not an arm of `Step`.
+    """
+
+    port: int | None = None
+    """
+    The port the job listens on inside its sandbox, where it is a server somebody opens in a
+    browser; nothing for a job nobody connects to.
+
+    Handed to the job as `$PORT` as well, and listened on outside at the same number wherever that
+    is free, so a server's own startup line names the port the link does.
+    """
+
+    asked: str | None = None
+    """
+    What started this, as a name the starter can find it by again: `{turn}:{call}` for the model's
+    `start_job`, `setup:{session}:{plugin}:{n}` for a plugin's setup, and nothing for the person.
+
+    What makes starting one safe to repeat: a pass that fell over after the entry was appended and
+    before it could record that it had runs the same start again, and finds its own entry by this
+    rather than appending a second job.
+    """
+
+    plugin: str | None = None
+    """The plugin whose setup declared this job, by qualified name, so the page can say so."""
+
+
 class Command(Record):
     """
     Something the person ran themselves, beside the conversation rather than inside it.
@@ -320,6 +352,35 @@ class Command(Record):
     whose branch was never recorded, so it reads as a command whose text is `push`, as it always
     did: there is nothing in it to recover the branch from.
     """
+
+    job: Job | None = None
+    """
+    That this command is a job, kept running until it exits or is stopped; nothing for a command
+    recorded before there were jobs, and for a push.
+
+    **A field rather than an arm of its own**, for `pushed`'s reason: an unknown field survives a
+    rollback and an unknown kind does not. What a build that predates it draws is a command with
+    no result yet, which is what a job still running is.
+
+    **The record is the whole of what says a job should be running.** A job with no `result:{entry}`
+    beside it is one that should be; `jobs.py` reads exactly that and makes the processes agree, so
+    a console that restarts starts it again, and stopping one is writing its result. A command with
+    no `job` and no result is one an older console was killed under, and nothing starts it again.
+    """
+
+
+class Listening(Record):
+    """
+    The port this console listens on for a job that serves, chosen the first time it was started.
+
+    **Recorded once and reused**, so a link somebody has open keeps working across a restart of the
+    console: the server is started again behind the same port. The cost, stated, is that a port
+    something else took while the console was down is a server that cannot come back, which is
+    recorded as its result rather than moved to another port nobody's tab knows about.
+    """
+
+    kind: Literal["listening"] = "listening"
+    port: int
 
 
 class Result(Record):
@@ -811,7 +872,8 @@ type Step = Annotated[
     | End
     | Environment
     | Wrote
-    | Archived,
+    | Archived
+    | Listening,
     Field(discriminator="kind"),
 ]
 """
@@ -825,9 +887,9 @@ unknown field is not.
 **Every record a checkpoint key may hold, and so the session-scoped ones too.** An arm missing here
 is not a tag this reads loosely, it is a session this cannot read at all: a bag holding one raises,
 and the sessions holding the ones easiest to leave out - archived, failed, deferred - are exactly the
-ones a migration is being written for. `Named` and `Enrolled` are the other way round and are
-deliberately out: they are members of `Declared` and `Registered` and are never a checkpoint value on
-their own, so a bag will not hold one.
+ones a migration is being written for. `Named`, `Enrolled` and `Job` are the other way round and
+are deliberately out: they are members of `Declared`, `Registered` and `Command` and are never a
+checkpoint value on their own, so a bag will not hold one.
 
 `choice` is not an arm, and that is a decision rather than an oversight. It is already a record this
 console owns and has grown fields twice without a migration, so the shape argument that put an

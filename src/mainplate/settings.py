@@ -27,12 +27,6 @@ DEFAULT_INSTRUCTIONS = "You are a helpful assistant, working with a software eng
 # the process: two defaults for one interval is a pair that can come to disagree.
 DEFAULT_WATCHING = timedelta(milliseconds=200)
 
-# How long a command a person runs may take before it is killed. Here rather than in `commands.py`
-# for the reason `DEFAULT_WATCHING` is here: `Commands` carries the value it was built with and this
-# is where the configured one enters the process, so two defaults for one bound is a pair that can
-# come to disagree.
-DEFAULT_PATIENCE = timedelta(minutes=10)
-
 
 class Settings(BaseSettings):
     """
@@ -73,8 +67,26 @@ class Settings(BaseSettings):
     """
 
     host: str = "127.0.0.1"
+    """
+    The address the console listens on, and the one it listens on for every job a session runs that
+    serves.
+
+    One address for both, because whatever reaches the console is what a person opens such a job
+    through: a proxy, a tunnel or a tailnet forwarding the one forwards the other on a second port.
+    """
 
     port: int = 8100
+
+    serving_lowest: int = Field(default=3000, gt=0, lt=65536)
+    serving_highest: int = Field(default=9999, gt=0, lt=65536)
+    """
+    The ports a session's jobs that serve may be listened on for, both ends included.
+
+    exe.dev's proxy forwards every port in this range to a VM, privately, so the default is that
+    range and a job serving there is reachable with nothing else configured. Anywhere else it is
+    whichever ports that machine's tunnel or firewall lets through; a port in the range something
+    else already holds is skipped, so the range only bounds where to look.
+    """
 
     passes: int = Field(default=8, gt=0)
     """
@@ -193,20 +205,6 @@ class Settings(BaseSettings):
         """
         named = self.workspaces if self.workspaces is not None else self.database.parent / "workspaces"
         return named.resolve()
-
-    patience: timedelta = Field(default=DEFAULT_PATIENCE, gt=timedelta())
-    """
-    How long a command a person runs may take before it is killed.
-
-    Bounded because nothing else bounds it: a command that never returns would hold its panel open
-    until the console restarted, and the process tree under it would keep the checkout busy. Ten
-    minutes, because the commands worth typing here are builds and test suites rather than one-liners
-    and the alternative to waiting is running the thing in a terminal instead.
-
-    Not the agent's: `bash` has its own bound inside the sandbox, and the two are answering different
-    questions. That one is how long a *model* may sit on a call before the turn moves on; this is how
-    long somebody is willing to watch their own command.
-    """
 
     allowance: int | None = Field(default=1, gt=0)
     """

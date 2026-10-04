@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# The demo console, as the job this repository's setup asks every session to keep running.
+#
+# `just demo` on the fixtures `just seed` plants, so a session working on mainplate has a console of
+# its own to look at as it changes it: `just demo` runs under `watchfiles` and restarts on any change
+# under `src/mainplate`, so an edit the session makes is on the page a moment later.
+#
+# **It runs in the session's sandbox, with whatever network the session has, which may be none.** So
+# it starts against a stand-in endpoint on its own loopback rather than the operator's configuration,
+# which it cannot see: the demo asks no model anything, and the stand-in lists one so the console
+# will start. The configuration lives in the session's scratch, outside the checkout.
+#
+# **It must be safe to run twice**, as every job must: a console restart starts it again from the
+# top. Seeding replaces the fixtures' sessions and nothing else, and the rest is a server.
+
+set -euo pipefail
+
+# A port of the sandbox's own for the stand-in. With the session's network off nothing else is in
+# there to take it; with it on, a port something on the machine holds is a stand-in that fails to
+# start, and the console with it, which says so in what this job printed.
+STANDIN=8199
+
+config="$MAINPLATE_SCRATCH/demo-config"
+mkdir -p "$config/mainplate"
+cat >"$config/mainplate/config.yaml" <<EOF
+default: stand-in
+endpoints:
+  stand-in:
+    format: anthropic
+    url: http://127.0.0.1:$STANDIN
+EOF
+
+python3 .mainplate/standin "$STANDIN" &
+
+just seed
+MAINPLATE_CONFIG_HOME="$config" exec just demo --port "$PORT"

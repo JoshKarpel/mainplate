@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from typing import Final
+from urllib.parse import quote
 from urllib.parse import urlencode
 
 from without_html import DOCTYPE
@@ -20,6 +21,7 @@ from without_html import body
 from without_html import dd
 from without_html import div
 from without_html import dt
+from without_html import element
 from without_html import h1
 from without_html import head
 from without_html import html
@@ -29,6 +31,7 @@ from without_html import p
 from without_html import render
 from without_html import script
 from without_html import span
+from without_html import svg
 from without_html import title
 from without_web import Reversible
 from without_web import url_for
@@ -164,10 +167,14 @@ class Links:
     press: Reversible
     rename: Reversible
     archive: Reversible
+    job: Reversible
+    stop_job: Reversible
+    job_output: Reversible
     artifacts: Reversible
     artifact: Reversible
     artifact_content: Reversible
     artifact_download: Reversible
+    picture: Reversible
     # A prefix rather than a route, and the one exception: the route serving the assets needs an
     # inventory that does not exist until startup, where every field above is a module-level
     # value. Both are built from one constant, so they cannot disagree about where they are.
@@ -203,7 +210,8 @@ class Links:
         A query parameter for the reason `to_endpoint_models` uses one: it narrows what a single
         connection reports on rather than picking a resource out. The stream is the page's, and the
         session is what the page happens to be looking at. A page looking at no session, which is the
-        start page, names none and is sent the one region every page has, the session list.
+        start page, names none and is sent the one region every page holding a stream has, the
+        session list.
 
         **The shape rides along because the page is the only thing that knows it.** The stream sends
         whichever regions the page's shape has, and a page still drawing the settings step has no
@@ -288,6 +296,23 @@ class Links:
         """Where the press that closes a session goes, which is a plain form post answered with a redirect."""
         return url_for(self.archive, {"session": session})
 
+    def to_job(self, session: str, entry: str) -> str:
+        """
+        Where a job that serves is opened: a route that sends the browser on to its port.
+
+        A route rather than the job's own address, because the address is this console's host as the
+        browser reached it, which only the request knows and a page may not ask.
+        """
+        return url_for(self.job, {"session": session, "entry": entry})
+
+    def to_stop_job(self, session: str, entry: str) -> str:
+        """Where the press that stops a job goes, a plain form post answered with a redirect."""
+        return url_for(self.stop_job, {"session": session, "entry": entry})
+
+    def to_job_output(self, session: str, entry: str) -> str:
+        """What a running job has printed so far, as plain text."""
+        return url_for(self.job_output, {"session": session, "entry": entry})
+
     def to_artifacts(self, before: int | None = None) -> str:
         """Every artifact, newest first; `before` continues a listing from the last one it held."""
         return url_for(self.artifacts) + ("" if before is None else f"?{urlencode({BEFORE_FIELD: before})}")
@@ -314,6 +339,19 @@ class Links:
     def to_artifact_download(self, artifact: str, version: int) -> str:
         """The same bytes as `to_artifact_content`, served to be saved rather than shown."""
         return f"{url_for(self.artifact_download, {'artifact': artifact})}?{urlencode({VERSION_FIELD: version})}"
+
+    def to_picture(self, session: str, turn: int, call: str, index: int) -> str:
+        """
+        One image a call handed the model, named by the record it is in and its place there.
+
+        Path segments rather than a query, because each one narrows to a single thing that exists
+        independently: a record is a turn's and a call's, and the image is one of that record's.
+
+        **The call id is quoted, because a wire mints it and nothing promises it is a path segment.**
+        `url_for` puts a value in as it is, which is right for this console's own hex ids and wrong
+        for a string a provider chose: a space or a `|` in one is a request line no client will send.
+        """
+        return url_for(self.picture, {"session": session, "turn": turn, "call": quote(call, safe=""), "index": index})
 
     def to_asset(self, name: str) -> str:
         return f"{self.assets}/{name}"
@@ -349,8 +387,9 @@ def stream_element(links: Links, session: str | None, shape: Shape | None = None
 
     On every page that draws the session list, the start page included, because the list is a region
     of every one of them and it moves when any session does: a session answered while somebody was
-    choosing what to start next is the case. A page with no list, which is a refusal, holds none, since
-    a connection with nothing to report on would be a held socket and a heartbeat.
+    choosing what to start next is the case. A page with no list, which is a refusal or an artifact's
+    page, holds none, since a connection with nothing to report on would be a held socket and a
+    heartbeat.
 
     The connection is let go while the page's tab is hidden and taken up again when it is shown, which
     is htmx's own `pauseOnBackground` and not anything this console does: a hidden page is not being
@@ -405,7 +444,7 @@ def document(
     `shape` is which shape the page was drawn in where the stream has to know it, and it goes on the
     stream element; see `Links.to_stream`. `live` is whether the page
     holds that connection at all, which every page with the session list on it does and a refusal
-    does not; see `stream_element`.
+    and an artifact's page do not; see `stream_element`.
 
     `session` is on the body because what the reader has decided about a conversation, which is
     which kinds they set aside and what they have kept unsent, belongs to that conversation and
@@ -553,6 +592,35 @@ def working(*, saying: str = "working", extra: str | None = None, identified: st
 
 type Placed = Element | VoidElement | None
 """One thing a caller hands the composer to put above or below the box, or nothing at all."""
+
+
+def home(links: Links) -> Element:
+    """
+    The console's mark and name, as the way back to the dashboard from wherever a page is.
+
+    **This is the one piece of navigation every page owes a reader**, rather than the session list:
+    the dashboard is where every other place is reached from, so a page with this on it is never a
+    dead end, and a page whose subject is not a conversation can leave the list off without leaving
+    somebody stranded. The session list draws it at its head and an artifact's bar draws it at its
+    left, as one element, so the way home looks the same from both.
+
+    A link that reads as where you are rather than a button that reads as something to do, since
+    the presses that start something are on the dashboard's cards. The mark is drawn by reference
+    rather than as an `<img>`, so the stylesheet can hand the plate the theme's colours: an image
+    only ever sees the OS's.
+    """
+    return a(
+        cls="home",
+        attrs={"href": links.to_home()},
+        children=[
+            svg(
+                cls="home__mark",
+                attrs={"viewBox": "0 0 512 512", "aria-hidden": "true"},
+                children=element("use", attrs={"href": f"{links.to_asset('icon.svg')}#plate"}),
+            ),
+            span(cls="home__name", children=DASHBOARD),
+        ],
+    )
 
 
 def refusal_page(links: Links, status: int, why: str) -> str:

@@ -2,9 +2,14 @@
 # How a mainplate session gets this repository ready to work in.
 #
 # A repository-tier plugin, run once per session at `setup`, behind the sandbox and with a network.
-# It is a plugin that **prints nothing**: it names no events, so it is asked nothing again, and it
-# never parses the payload it is handed. Nothing here imports mainplate or reads the protocol; what
-# this knows is the toolchain, and what the console knows is when and where to run it.
+# It names no events, so it is asked nothing again, and it never parses the payload it is handed.
+# Nothing here imports mainplate; what this knows is the toolchain and the one job a session on this
+# repository wants running, and what the console knows is when and where to run them.
+#
+# **Its whole answer is one job, the demo console**, `.mainplate/demo`, which every session on this
+# repository then has running beside it to look at as it changes the console. Declared rather than
+# started here, because this runs once and is gone: the console keeps the job running, starts it
+# again after a restart, and shows the person a link to it.
 #
 # **It installs into `$MAINPLATE_SCRATCH` and not into its own `$HOME`.** That directory is the
 # session's own scratch, bound read-write at this one event, and it is what every command in the
@@ -28,11 +33,11 @@
 
 set -euo pipefail
 
-# **Everything below prints to stderr.** stdout is where a plugin's answer goes, and this one answers
-# nothing, so a line of progress from `curl`, `mise` or `just` on the way past would be a plugin that
-# printed something the console cannot read. Sent the other way it is diagnostics, which is what it
+# **Everything below prints to stderr, and the answer goes to the stdout kept aside here.** stdout is
+# where a plugin's answer goes, so a line of progress from `curl`, `mise` or `just` on the way past
+# would be an answer the console cannot read. Sent the other way it is diagnostics, which is what it
 # is, and the console logs it.
-exec 1>&2
+exec 3>&1 1>&2
 
 # Everything below fetches, and everything that fetches keeps what it fetched under `$HOME`. Pointed
 # at the session's scratch so that is where all of it lands, which is the one line in here that knows
@@ -57,3 +62,7 @@ export PATH="$SHIMS:$PATH"
 just setup
 
 echo "PATH=$PATH" >> "$MAINPLATE_ENV"
+
+# The port the demo listens on inside its sandbox, which is `just demo`'s own; the console listens on
+# that number outside too wherever it is free, and on another where it is not.
+echo '{"jobs": [{"command": ".mainplate/demo", "port": 8101}]}' >&3

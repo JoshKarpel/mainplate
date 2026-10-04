@@ -87,7 +87,7 @@ async def watching(
     What one page is showing, sent whenever any of it has recorded anything new.
 
     `session` is the conversation the page is looking at, or nothing for the start page, which looks at
-    none; the session list is on every page and is sent to every one.
+    none; the session list is on every page that holds a stream and is sent to every one.
 
     `reader` is what the page it is talking to was drawn against, taken from that page's own
     connecting request rather than from this process: every region here is rendered by the same

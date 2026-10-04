@@ -39,6 +39,7 @@ from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import ToolReturn
+from pydantic_ai.messages import ToolReturnPart
 from pydantic_ai.models import Model
 from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
@@ -137,6 +138,27 @@ def unwrapped(came_back: object) -> tuple[object, object]:
     if came_back.content is not None or came_back.tools is not None:
         raise TypeError("a ToolReturn here may carry a return_value and metadata, and nothing else")
     return came_back.return_value, came_back.metadata
+
+
+ToolReturnPartTypeAdapter: TypeAdapter[ToolReturnPart] = TypeAdapter(ToolReturnPart)
+
+
+def told(returned: object) -> object:
+    """
+    A recorded return as the content Pydantic AI sends, with any image in it an image again.
+
+    What a tool returned is recorded as JSON, and an image goes in as a mapping holding its bytes in
+    base64. Handed back as that mapping, the model would be sent the base64 as text: a replayed
+    `read` of a screenshot would be thousands of characters of noise where the first pass sent a
+    picture, and the two passes would no longer agree about what the model saw.
+
+    **Read back the way a settled turn's messages are**, by validating a tool result, because that
+    is the one reading that turns the mapping back into a `BinaryImage`; `tool_return_ta` alone
+    leaves it a mapping, in both of its modes. Using the same reading as `turn:{n}:messages` is what
+    keeps a call read from its record and from the settled turn the same call. A return that holds
+    no image comes back exactly as it went in, a mapping that merely has a `kind` included.
+    """
+    return ToolReturnPartTypeAdapter.validate_python({"tool_name": "", "content": returned}).content
 
 
 def parse_returned(recorded: object) -> records.Returned:

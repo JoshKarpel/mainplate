@@ -52,6 +52,14 @@ which is no session's. `list_artifacts` is in every session, and the two that mo
 a file and an artifact wherever there are files to move it between. See
 [Artifacts](artifacts.md#which-tools-a-session-gets).
 
+**The job tools go where `bash` goes**, `start_job`, `list_jobs`, `read_job`, `wait_job` and
+`stop_job`, because a job runs in the sandbox a command runs in. They run nothing themselves:
+`start_job` records that a job should be running and the console makes it so, which is what keeps a
+replayed call from starting a second one. `start_job`'s description is long on purpose, since a job
+here differs from a background process in a terminal in exactly the ways a model would otherwise get
+wrong, and it is where the model is told a job must be idempotent. See
+[Jobs](jobs.md#what-the-model-is-told).
+
 **Bundled and user skills add read-only roots** wherever the session has file
 tools. `read` opens an advertised `SKILL.md` or its supporting files under
 `bundled_skills` or `user_skills`; `edit` and `create` refuse there. Repository
@@ -134,6 +142,49 @@ search interface beside the shell. That is bought for the observed common sequen
 the per-path locks, so sharing it prevents an edit from writing while grep is reading. Once the lock
 is released the result is only a value; anchors make later staleness fail loudly without keeping any
 search state.
+
+## Reading an image
+
+**`read` of a PNG, JPEG, GIF or WebP file hands the model the picture**, with a line in front saying
+which file and what kind. It is how a session looks at what it changed: `just shots` writes a
+screenshot, and `read` of the screenshot shows it to the model. Not a tool of its own, because a
+file is what the model names in both cases and which kind of file it turned out to be is the tool's
+to find out; a `view` beside `read` would be a second tool definition in every request to answer a
+question the file's first bytes already answer.
+
+**Which kind is decided by the bytes it opens with, never by its name.** Those four because they are
+what every wire this console speaks accepts inside a tool result, Anthropic's and OpenAI's Responses
+both sending the image in the result itself, and what every browser draws in an `<img>`, so the page
+shows what the model saw. SVG is text and is read with anchors as it always was; no provider takes
+it as a picture. Anything else that is not UTF-8 is refused with a sentence naming the four, which is
+what a model needs to go and convert it. The 2 MiB bound on a read applies to an image as to text, and
+nothing resizes one, since that would be a dependency for the case the bound already turns down.
+
+**A model is sent one only where the reference database says it sees images.** Unknown is not yes,
+and the asymmetry is the reason: a model that could have seen a screenshot and is refused one is told
+why and carries on, where a model sent an image it cannot take has the request refused by the
+provider, and every request after it carries the image too, so the session can never be answered
+again. Read per turn off the same record as the output cap, by `Prices.sees`; the tool's description
+does not change with it, because a tool definition sits above the cached prefix. **The cost, stated:**
+on a console with no reference configured, or for a model the database has never heard of, no model
+is ever shown an image.
+
+**The bytes are in the call's record and nowhere else.** A replay has to send the model the same
+picture, so they are in `turn:{n}:tool:{id}` as base64, and `durability.told` reads them back into an
+image for the loop and for the page alike; see [what a checkpoint value
+is](checkpoints.md#what-a-checkpoint-value-is). That costs the checkpoint a third more than the file,
+and every later request carries the image in its prefix, where a cache holds it like any other part.
+
+**The page asks for an image by address rather than carrying it.** A call's panel draws an `<img>`
+pointing at `/sessions/{id}/turns/{n}/calls/{call}/pictures/{index}`, which reads the one record and
+serves its bytes. Inlined as a `data:` URL instead, a screenshot would be in every render of the
+transcript and in every message the live connection sends while a turn runs, which is megabytes per
+message. The route serves an image under its own type, `nosniff`, and a policy of `sandbox` with
+nothing allowed, so a file that only claims to be an image runs nothing even opened alone, and marks
+it `immutable`, since the record is written once. `lazy` is not what keeps a shut call cheap:
+Chromium fetches an image near the viewport even inside a closed `<details>`, so the first render
+pays for it once and the cache answers every render after. The gallery writes each fixture's image
+at the same address beside its pages, so a static server answers it the way the route does.
 
 ## A line is addressed by a hash of its own content
 
