@@ -116,6 +116,34 @@ descriptions, paths and available leaders for the session. A file appearing
 mid-session cannot add a leader or change the index in cached instructions.
 A fork rediscovers them.
 
+A description ends its row in the index, after where to read the skill, so it
+is printed exactly as its author wrote it. With the path after it, the two
+needed a full stop between them, which doubled the punctuation of any
+description that brought its own.
+
+## A bundled skill carries what it needs, generated
+
+A bundled skill is read in somebody else's repository, where nothing of this
+one is visible, so what it says about the console has to be in its own
+directory. The facts that move with the source (a limit, a name pattern, the
+artifact policy, the plugin protocol's schemas, a script held up as an
+example) are written into a `generated/` directory beside the skill by
+`scripts/skills.py`, from the values the console itself uses, and the
+pre-commit hook fails a commit whose sources and generated files disagree. The
+`SKILL.md` keeps what does not move: what a mechanism is for, the procedure,
+the mistakes to avoid. It says the generated file wins where the two disagree.
+
+The cost, stated: the package carries copies of a few scripts and design
+notes, and a `SKILL.md` can still say something a generated file contradicts.
+Writing the whole skill from a template would close that, at the price of a
+template beside every skill and a `SKILL.md` nobody may edit; the line is
+drawn at facts, since the prose is what a person reviews.
+
+There is no bundled skill about the console in general. Most of what a model
+should know about where it is changes what it does on an ordinary turn, which
+is what tool descriptions and the instructions are for; a skill would be read
+only once the model already suspected it mattered.
+
 Do not copy every skill body into that index. A model's `read` sees the file
 when called, and the resulting tool return is recorded. A manual invocation
 records its expanded message instead. An edit to an unread skill can therefore

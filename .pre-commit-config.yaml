@@ -123,6 +123,21 @@ repos:
         types_or: [python, pyi, jupyter]
         require_serial: true
 
+  # The `generated/` directories beside the bundled skills are this repository's own derivation of
+  # its source: a limit, the plugin protocol's schemas, the scripts a skill holds up as examples. The
+  # hook rewrites them, so a commit that moved a source fails until the regenerated files are staged
+  # with it. It runs on every commit rather than on a list of source paths, because that list would
+  # be a second copy of `scripts/skills.py`'s table to keep in step; reading the sources costs well
+  # under a second, since nothing it imports reaches a provider SDK.
+  - repo: local
+    hooks:
+      - id: bundled-skills
+        name: generate the bundled skills' references
+        entry: uv run --frozen python -m scripts.skills
+        language: unsupported
+        pass_filenames: false
+        always_run: true
+
   # astral-sh/uv-pre-commit 0.12.3. `uv` itself is whichever is on `PATH` rather than a package in
   # the lock it is checking.
   - repo: local

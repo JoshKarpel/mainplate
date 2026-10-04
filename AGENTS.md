@@ -226,10 +226,11 @@ The toolchain around the source rather than any part of the console is
 [`docs/maintaining.md`](docs/maintaining.md): the dependency choices, the checks, the documentation
 site, and where the prose in this repository goes.
 
-Seven directories carry an `AGENTS.md` of their own, which you are handed on reaching into one rather
+Eight directories carry an `AGENTS.md` of their own, which you are handed on reaching into one rather
 than having to go and find: `src/mainplate/` for the stylesheet, the script and everything else
 under `assets/`, which cannot carry one of its own because every file there is served;
-`src/mainplate/pages/` for where markup is written and what a page may ask;
+`src/mainplate/bundled-context/` for the skills and commands every session is offered, and which of
+their files are generated; `src/mainplate/pages/` for where markup is written and what a page may ask;
 `src/mainplate/tools/` and `src/mainplate/tools/files/` for what a change to a tool must not break,
 `src/mainplate/plugins/` for what a change to the protocol or a bundled plugin must not break,
 `tests/` for how the suite is driven and what has to be a browser, and `scripts/` for the gallery

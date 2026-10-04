@@ -131,18 +131,30 @@ def skill_roots(entries: tuple[Entry, ...]) -> tuple[tuple[Tier, Path], ...]:
 
 
 def index(entries: tuple[Entry, ...]) -> str:
-    """Advertise skills but not commands; a skill's contents stay on demand."""
+    """
+    Advertise skills but not commands; a skill's contents stay on demand.
+
+    Where to read comes before the description and the description ends the row, so it is printed
+    exactly as its author wrote it: nothing follows it that would need a full stop between them, which
+    is what doubled a description's own punctuation when the path came after it.
+    """
     rows = [
-        f"- `{entry.qualified}`: {entry.description}. "
+        f"- `{entry.qualified}` ("
         + (
-            f"Read `{entry.path}` when relevant."
+            f"`{entry.path}`"
             if entry.tier == "repository"
-            else f"Read `{entry.name}/SKILL.md` with root `{entry.tier}_skills` when relevant."
+            else f"`{entry.name}/SKILL.md` with root `{entry.tier}_skills`"
         )
+        + f"): {entry.description}"
         for entry in entries
         if entry.kind == "skill"
     ]
-    return "Skills (read SKILL.md on demand; read its supporting files as needed):\n" + "\n".join(rows) if rows else ""
+    return (
+        "Skills (read a skill's file when its description is relevant, then its supporting files as needed):\n"
+        + "\n".join(rows)
+        if rows
+        else ""
+    )
 
 
 def leaders(entries: tuple[Entry, ...], reserved: frozenset[str]) -> dict[str, Entry]:
