@@ -10,6 +10,7 @@ from pathlib import Path
 import brotli  # type: ignore[import-untyped]  # the bindings ship no types
 import pytest
 from without_asgi.assets import Inventory
+from without_asgi.compression import MAX_ZSTD_WINDOW_LOG
 
 from scripts.vendor import ASSETS
 from scripts.vendor import SIDECARS
@@ -28,10 +29,22 @@ VENDORED = manifest()
 # `test_the_recipe_encodes_exactly_what_the_server_does` passes.
 ENCODED = tuple(entry for entry in VENDORED if encodable(entry.name))
 
+
+def zstd_as_a_browser_reads_it(frame: bytes) -> bytes:
+    """
+    A zstd frame decoded with the 8 MiB window RFC 9659 caps HTTP at, so a frame needing more is
+    refused here as a conforming browser may refuse it.
+
+    The stdlib's own decoder reads windows far wider than that, so decoding with it proves only that
+    Python can read a sidecar, not that anything the server sends it to has to.
+    """
+    return zstd.decompress(frame, options={zstd.DecompressionParameter.window_log_max: MAX_ZSTD_WINDOW_LOG})
+
+
 # How each sidecar is read back, and the coding the inventory serves it as.
 DECODED: dict[str, tuple[Callable[[bytes], bytes], bytes]] = {
     ".br": (brotli.decompress, b"br"),
-    ".zst": (zstd.decompress, b"zstd"),
+    ".zst": (zstd_as_a_browser_reads_it, b"zstd"),
     ".gz": (gzip.decompress, b"gzip"),
 }
 

@@ -93,6 +93,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   after a send.
 
 ### Changed
+- **Pages and the live connection are compressed**, in zstd where the browser takes it, then brotli,
+  then gzip. The live connection is compressed as one stream with
+  the widest window a browser takes, so a message redrawing a long transcript costs about what
+  changed rather than the whole transcript again: a 5.9 MB render sent twice costs under a kilobyte
+  the second time.
 - **A session's checkout is a repository of its own, and git works in it.** It has its own `.git`, so
   `add`, `commit`, `rebase`, `stash` and the rest work from `bash` against that session's refs and
   nobody else's, and `git fetch`, by name or not, brings the repository's current branches with no

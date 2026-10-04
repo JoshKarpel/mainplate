@@ -52,6 +52,11 @@ class Answer:
     def location(self) -> str:
         return self.headers["location"]
 
+    @property
+    def varies_by(self) -> frozenset[str]:
+        """The request fields this response says it depends on, lowercased, whichever `Vary` line named each."""
+        return frozenset(field.strip().lower() for field in self.headers.get("vary", "").split(",") if field.strip())
+
 
 @dataclass(frozen=True, slots=True)
 class Caller:
@@ -104,9 +109,23 @@ class Caller:
         async with request(self.client, method, f"{BASE}{path}", headers=sent, body=body) as response:
             return Answer(
                 status=response.head.status,
-                headers={name.decode().lower(): value.decode() for name, value in response.head.headers},
+                headers=joined(response.head.headers),
                 body=await response.body.read(),
             )
+
+
+def joined(raw: RawHeaders) -> dict[str, str]:
+    """
+    A response's fields by lowercased name, a field sent on several lines joined with commas.
+
+    Joined rather than keyed, because that is what several lines of one field mean (RFC 9110 §5.2):
+    a page says `Vary: cookie` and compression adds `Vary: accept-encoding` on a line of its own, and
+    a mapping that kept the last line would report a page that no longer varies by its cookie.
+    """
+    fields: dict[str, list[str]] = {}
+    for name, value in raw:
+        fields.setdefault(name.decode().lower(), []).append(value.decode())
+    return {name: ", ".join(values) for name, values in fields.items()}
 
 
 @asynccontextmanager

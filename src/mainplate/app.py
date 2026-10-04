@@ -68,6 +68,7 @@ from mainplate.catalogue import discover
 from mainplate.catalogue import refreshing
 from mainplate.catalogue import summarise
 from mainplate.commands import Commands
+from mainplate.compressing import compressing
 from mainplate.config import Config
 from mainplate.config import config_path
 from mainplate.config import read_config
@@ -200,11 +201,15 @@ def build_router(assets: Inventory) -> Router[Service]:
 
     A crossing write is refused before anything else runs, the fallback included, so a post to a
     path nothing matches from a page on another port learns no more than one to a path that does.
+
+    Compression is outermost, so every response is negotiated the same way whichever layer wrote
+    it, a refusal and a recovered failure included. An asset the inventory already answered in a
+    coding carries its `content-encoding` and is passed through untouched.
     """
     return Router(
         routes=(*CONSOLE_ROUTES, static_files(ASSETS, assets)),
         fallback=handle(http_scope(), fn=missing),
-        middleware=stack(refusing_crossings(CROSSING), catching(recover)),
+        middleware=stack(compressing(), refusing_crossings(CROSSING), catching(recover)),
     )
 
 

@@ -80,6 +80,17 @@ Three things about that connection are decided rather than incidental:
   cursor, a dropped frame costs nothing, and a duplicate morphs to a no-op. It is also why the first
   thing a stream sends is the current state: what a page that has just connected needs and what one
   connected for an hour needs are the same thing.
+- **And the stream is compressed as one stream, so a whole render costs about what changed.** A long
+  session's render runs to megabytes, sent again whenever the turn in flight records anything.
+  Compressed on its own, a message is about a tenth of that; compressed with a window that reaches
+  back over the message before it, the next render is encoded as references to the last, and a
+  5.9 MB render sent twice costs under a kilobyte the second time. That is the delta this design
+  declines to compute, recovered by the codec, and it is why `compressing.py` gives zstd and brotli
+  the widest windows a browser takes, 8 MiB and 16 MiB, and prefers zstd. The cost, stated: a
+  compressor of about the window's size held for as long as each page is open, and a decoder of the
+  same size in each tab, and past 8 MiB a browser taking zstd is sent every render compressed from
+  scratch. It is also a risk accepted rather than missed, which
+  [security](security.md#what-is-deliberately-not-defended) names.
 - **The server notices by polling a change token**, not by being told. `Service.token` counts a
   session's recorded steps and reads where it stands with the worker, which is cheap because it
   decodes no value and is three rows by primary key. The two halves of the process stay joined only

@@ -30,7 +30,7 @@ dependencies = [
     # of them. Adding a provider is an extra in this list rather than a change to any code.
     "pydantic-ai-slim[anthropic,openai]>=2.33",
     "without-async>=0.0.9",
-    "without-asgi>=0.0.9",
+    "without-asgi>=0.0.10",
     "without-web>=0.0.9",
     "without-html>=0.0.9",
     "without-http>=0.0.9",

@@ -337,6 +337,18 @@ again after every console restart. What licenses it is the press on the settings
 that licenses the setup itself; the job gets the session's own sandbox and network and nothing of
 setup's grants.
 
+**How long each message down the live connection is.** The stream is compressed as one stream,
+each message against the window of every one before it, which is what makes a whole render cost
+about what changed; it is also BREACH's best case, since somebody who can put text into one message
+and read the encrypted length of the next can recover a secret beside it a guess at a time, on a
+connection they never have to re-establish. `without` leaves event streams uncompressed by default
+for exactly this, and `compressing.py` takes them back in. The console draws no secret of its own,
+having no CSRF token and a credential that rides in the request rather than in any page, so what
+could leak is something a model or a tool printed, and only to somebody who has both injected text
+into the session and is watching its traffic as it happens. If that stops being remote, the answer is
+to mask the secrets the console knows before they are drawn, as a CI log does, rather than to send
+the stream at its full size again.
+
 **The person at the console.** There is no authentication here and no authorisation model. Anybody
 who can reach the console can start a session on the whole machine, so what actually guards this is
 [who can reach it](deployment.md).

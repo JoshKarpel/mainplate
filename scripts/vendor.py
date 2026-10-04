@@ -35,6 +35,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
+from without_asgi.compression import MAX_ZSTD_WINDOW_LOG
 from without_asgi.compression import Compressor
 from without_asgi.compression import brotli_compressor
 from without_asgi.compression import gzip_compressor
@@ -49,10 +50,21 @@ TIMEOUT_SECONDS: Final = 300
 # top of its range. This runs only when somebody bumps a row, so the time a level costs is paid once
 # and never weighed against what the next release of a library makes it worth. Brotli names no
 # constant for its ceiling; 11 is it.
+#
+# zstd's top level is the one exception that has to be held back, and only in its window: left to
+# itself, level 22 writes a frame declaring a 128 MiB window, which RFC 9659 forbids in HTTP and a
+# browser is entitled to refuse. Capping the window at 8 MiB keeps the level's search and costs no
+# ratio on anything vendored, since the largest file is under half that.
+# `test_vendored.py` decodes every `.zst` with a decoder held to the same cap.
 SIDECARS: Final[Mapping[str, Callable[[], Compressor]]] = MappingProxyType(
     {
         ".br": lambda: brotli_compressor(11),
-        ".zst": lambda: zstd_compressor(CompressionParameter.compression_level.bounds()[1]),
+        ".zst": lambda: zstd_compressor(
+            options={
+                CompressionParameter.compression_level: CompressionParameter.compression_level.bounds()[1],
+                CompressionParameter.window_log: MAX_ZSTD_WINDOW_LOG,
+            }
+        ),
         ".gz": lambda: gzip_compressor(zlib.Z_BEST_COMPRESSION),
     }
 )

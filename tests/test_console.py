@@ -2148,8 +2148,8 @@ class TestTheClockAPageIsDrawnAgainst:
 
         assert page.status == 200
         assert swap.status == 200, "the control: a refusal would carry the header too"
-        assert page.headers["vary"] == "cookie"
-        assert swap.headers["vary"] == "cookie", "the swaps too, since a rule is in one"
+        assert "cookie" in page.varies_by
+        assert "cookie" in swap.varies_by, "the swaps too, since a rule is in one"
 
     def test_one_cookie_is_found_among_whatever_else_a_browser_is_holding(self) -> None:
         """
