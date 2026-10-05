@@ -60,6 +60,16 @@ def test_the_index_discloses_only_skills_and_not_their_bodies(tmp_path: Path) ->
     assert skill.read_text() == body(entries[0], None)
 
 
+def test_a_description_ends_its_row_exactly_as_written(tmp_path: Path) -> None:
+    """Nothing is appended after a description, so its own punctuation is never doubled."""
+    path = write(tmp_path, "skills", "triage", "Sort the queue")
+    path.write_text("---\ndescription: Does the queue need sorting?\n---\nSort the queue")
+
+    listed = index(discover(tmp_path, "user"))
+
+    assert listed.splitlines()[-1].endswith(": Does the queue need sorting?")
+
+
 def test_a_manual_invocation_records_the_body_it_sends(tmp_path: Path) -> None:
     """An edit after invocation does not alter the message already delivered."""
     path = write(tmp_path, "skills", "review", "Check the patch")

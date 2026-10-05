@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import shlex
+import sys
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
@@ -45,6 +48,47 @@ def scratch(tmp_path: Path) -> Path:
     a fixture that made it first would hide a tool that never did.
     """
     return tmp_path / "scratch" / "session"
+
+
+@pytest.fixture
+async def local_server() -> AsyncIterator[str]:
+    """
+    A command that reads a line from a server on the runner's own loopback, with no network beyond it.
+
+    A connected command running it is the control for the same client and the same address a
+    confined one is refused at, which proves the namespace on a runner with no routes and no DNS,
+    such as a session of this console with its own network off. A lookup of a public name would pass
+    there whether or not the namespace existed.
+    """
+    tasks: set[asyncio.Task[None]] = set()
+
+    async def respond(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        """Close each accepted connection after the line, so the client reads through to EOF."""
+        try:
+            writer.write(b"mainplate loopback control\n")
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    def accepted(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        """Hold each handler until teardown, so a passing assertion cannot leave a socket behind."""
+        tasks.add(asyncio.create_task(respond(reader, writer)))
+
+    server = await asyncio.start_server(accepted, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    script = (
+        "import socket; "
+        f"connection = socket.create_connection(('127.0.0.1', {port}), timeout=1); "
+        "print(connection.makefile().read(), end=''); connection.close()"
+    )
+    try:
+        yield f"python3 -c {shlex.quote(script)}"
+    finally:
+        server.close()
+        await server.wait_closed()
+        if tasks:
+            await asyncio.gather(*tasks)
 
 
 async def inside(checkout: Checkout, scratch: Path, bwrap: str, command: str) -> str:
@@ -196,12 +240,16 @@ class TestWhatACommandCanReach:
 
         assert "DENIED" in said
 
-    async def test_there_is_no_network(self, checkout: Checkout, scratch: Path, bwrap: str) -> None:
-        said = await inside(
-            checkout, scratch, bwrap, "getent hosts example.com >/dev/null 2>&1 && echo REACHED || echo DENIED"
-        )
+    @pytest.mark.network
+    async def test_there_is_no_network(self, checkout: Checkout, scratch: Path, bwrap: str, local_server: str) -> None:
+        """A server on the runner's loopback, reached from the host's namespace and refused from a new one."""
+        place = InACheckout(checkout=checkout, scratch=scratch)
+        connected = await ran(place, bwrap, Venue.CONNECTED, local_server, seconds=20)
+        assert "mainplate loopback control\n" in connected, "the control: the server is there to reach"
 
-        assert "DENIED" in said
+        confined = await ran(place, bwrap, Venue.CONFINED, local_server, seconds=20)
+
+        assert "ConnectionRefusedError" in confined
 
     async def test_nothing_persists_between_two_calls(self, checkout: Checkout, scratch: Path, bwrap: str) -> None:
         """
@@ -497,13 +545,48 @@ class TestReachingTheWholeMachine:
 
         assert "VISIBLE" in said
 
-    async def test_the_network_is_still_off_unless_the_session_asked(self, bwrap: str) -> None:
+    @pytest.mark.network
+    async def test_the_network_is_still_off_unless_the_session_asked(self, bwrap: str, local_server: str) -> None:
         """
         The reason `EVERYTHING` is still a sandbox rather than no sandbox.
 
         Dropping it for this arm would take the network switch with it, so the whole machine would
         silently imply the whole internet and one of the two axes would stop being expressible.
         """
-        reaching = "getent hosts example.com >/dev/null 2>&1 && echo REACHED || echo DENIED"
+        connected = await ran(OverEverything(), bwrap, Venue.CONNECTED, local_server, seconds=20)
+        assert "mainplate loopback control\n" in connected, "the control: the server is there to reach"
 
-        assert "DENIED" in await ran(OverEverything(), bwrap, Venue.CONFINED, reaching, seconds=20)
+        confined = await ran(OverEverything(), bwrap, Venue.CONFINED, local_server, seconds=20)
+
+        assert "ConnectionRefusedError" in confined
+
+
+class TestOnARunnerWithNoNetwork:
+    """
+    Every `network` claim again, with the suite itself in a namespace that has no network.
+
+    The suite runs here on whatever runner it is given, and a claim about the network that holds on
+    a laptop can still fail where there is none, which is a session of this console developing this
+    console with its own network off: counting routes and looking up a public name both did. So the
+    second runner is made rather than waited for. A child `pytest` rather than an arm of a fixture,
+    because the runner's namespace is the process's: moving a thread into another needs
+    `CAP_SYS_ADMIN`, and entering a user namespace is refused to a process with threads.
+
+    The cost, stated: a second interpreter collecting the whole suite to pick the claims out, which
+    is seconds. The marker rather than a list of names, so a new claim about the network is picked up
+    by being marked, and the other runner is the ordinary run, which already happens.
+    """
+
+    @pytest.mark.timeout(120)
+    async def test_every_network_claim_holds(self, bwrap: str) -> None:
+        offline = (bwrap, "--dev-bind", "/", "/", "--unshare-net", "--")
+        root = Path(__file__).parents[1]
+        routes = await run(*offline, "sh", "-c", "tail -n +2 /proc/net/route | wc -l", cwd=root)
+        assert routes == "0", "the control: the runner really has no network"
+
+        # `no:cacheprovider` so the child's results never become the `--lf` of whoever ran the suite.
+        said = await run(
+            *offline, sys.executable, "-m", "pytest", "-m", "network", "-n0", "-p", "no:cacheprovider", cwd=root
+        )
+
+        assert "passed" in said

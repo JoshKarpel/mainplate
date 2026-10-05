@@ -118,6 +118,19 @@ class TestReadingWhatTheWorkerIsDoing:
     def test_a_delivery_already_due_is_queued(self) -> None:
         assert attention_of(claimed_until=None, due_at=NOW, asked_at=NOW) == Queued()
 
+    def test_a_delivery_stamped_inside_the_stores_millisecond_is_queued(self) -> None:
+        """
+        The delivery is stamped to the microsecond and `asked_at` only to the millisecond, so a
+        session queued in the millisecond the store read its clock in is due, not held back.
+        """
+        assert attention_of(claimed_until=None, due_at=NOW + 0.000_37, asked_at=NOW) == Queued()
+
+    def test_a_delivery_a_whole_millisecond_ahead_is_held_back(self) -> None:
+        """The other side of the store's resolution, so the tolerance cannot widen unnoticed."""
+        assert attention_of(claimed_until=None, due_at=NOW + 0.002, asked_at=NOW) == Delayed(
+            until=timedelta(seconds=0.002)
+        )
+
     def test_a_delivery_held_back_says_how_long_for(self) -> None:
         """
         Which is what the worker leaving a failed pass's delivery unanswered produces, and the one arm

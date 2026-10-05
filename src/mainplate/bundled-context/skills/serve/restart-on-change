@@ -1,0 +1,40 @@
+#!/bin/sh
+# Run a command, and restart it whenever a file in the repository changes.
+#
+#     restart-on-change python -m myapp
+#
+# For a sandbox with no watcher installed and no network to fetch one: it needs only `sh`, `git`,
+# GNU `stat` and `md5sum`. It polls once a second rather than being told of changes, which costs a
+# `stat` of every file each second and a second of delay; in a repository of tens of thousands of
+# files, use a real watcher instead.
+#
+# What it watches is what git would show: tracked files and untracked ones that are not ignored, so a
+# build directory, `node_modules` or a log the `.gitignore` names never restarts it. A command that
+# exits on its own is not restarted until something changes, so a crash stays on screen rather than
+# looping.
+#
+# The command should be the server itself (`exec` it from any wrapper script), so stopping it frees
+# the port before the next one starts.
+
+set -u
+
+fingerprint() {
+  git ls-files -z --cached --others --exclude-standard |
+    xargs -0 stat -c '%n %Y %s' 2>/dev/null |
+    md5sum
+}
+
+pid=
+trap 'kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; exit 0' INT TERM
+
+while :; do
+  last=$(fingerprint)
+  "$@" &
+  pid=$!
+  while [ "$(fingerprint)" = "$last" ]; do
+    sleep 1
+  done
+  echo "restart-on-change: a file changed, restarting" >&2
+  kill "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+done

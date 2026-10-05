@@ -1,0 +1,127 @@
+{
+  "$comment": "What a plugin prints in answer to any event but setup.",
+  "$defs": {
+    "Delivery": {
+      "additionalProperties": false,
+      "description": "One message a plugin asks to be put in the session's inbox, and how its panel is drawn.",
+      "properties": {
+        "said": {
+          "title": "Said",
+          "type": "string"
+        },
+        "forget": {
+          "default": false,
+          "title": "Forget",
+          "type": "boolean"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "tone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tone"
+        }
+      },
+      "required": [
+        "said"
+      ],
+      "title": "Delivery",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "What a plugin wants done, which the console performs and the plugin never does.",
+  "properties": {
+    "return": {
+      "anyOf": [
+        {},
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Return"
+    },
+    "retry": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Retry"
+    },
+    "refuse": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Refuse"
+    },
+    "deliver": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Delivery"
+      },
+      "title": "Deliver",
+      "type": "array"
+    },
+    "inject": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Inject",
+      "type": "array"
+    },
+    "end": {
+      "default": false,
+      "title": "End",
+      "type": "boolean"
+    },
+    "set": {
+      "additionalProperties": true,
+      "title": "Set",
+      "type": "object"
+    }
+  },
+  "title": "Answered",
+  "type": "object"
+}

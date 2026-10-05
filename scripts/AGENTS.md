@@ -4,8 +4,9 @@ description: The gallery, the seeder, the screenshot driver and the replay bench
 
 # The scripts
 
-Five of them. Four exist so that a change can be looked at or measured without a provider ever
-being asked anything, and the fifth is how anything somebody else wrote gets into `assets/`.
+Six of them. Four exist so that a change can be looked at or measured without a provider ever
+being asked anything, the fifth is how anything somebody else wrote gets into `assets/`, and the
+sixth writes what the bundled skills cannot be trusted to restate.
 
 **A real turn costs real money, so do not spend one to see something a fixture already shows.** That
 is the right tool for a rendering, a stylesheet, a control, or anything downstream of a checkpoint,
@@ -137,6 +138,24 @@ needed; a tarball is a second reader, added deliberately.
 The pre-commit hooks and `.gitattributes` both step around the vendored files, and that is this
 script's doing rather than theirs: a newline a hook appends, or a line ending git normalises on the
 way into the index, is a digest the test then refuses on every other machine.
+
+## `skills.py`
+
+Writes every `generated/` directory beside the bundled skills: the limits, names and timeouts a skill
+needs, the plugin protocol's JSON Schemas, a section and two whole design notes, and the scripts a
+skill holds up as examples. **The pre-commit hook runs it on every commit**, which fails the commit
+when it rewrites anything, so a change to a source and to what is derived from it land together.
+What each skill should say, and why the facts that move are derived rather than written, is
+`src/mainplate/bundled-context/AGENTS.md`.
+
+**It imports nothing slow, and that is what lets the hook run unconditionally.** A literal in
+`console.py`, which reaches every provider SDK on import, or in a bundled plugin, which is a script
+rather than a module, is read with `ast` instead; a value somebody computes there is refused rather
+than guessed at, which is the failure wanted. The alternative was a `files:` pattern naming the
+sources, which is a second copy of the table in `generated()` to keep in step.
+
+`tests/test_skills.py` holds the other direction: every `generated/` file a `SKILL.md` names is one
+this writes, and every file beside a skill is named by it.
 
 ## `shoot.py`
 

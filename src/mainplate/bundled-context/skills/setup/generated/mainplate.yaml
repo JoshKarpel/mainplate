@@ -1,0 +1,9 @@
+# What this repository asks a mainplate session working on it to run.
+#
+# The path is relative to the checkout root. Nothing here can name an endpoint, a credential or an
+# isolation level, because the type this is read into has no field for one.
+#
+# `setup` fetches the toolchain the session's own commands need and asks for one job, the demo
+# console, to be kept running beside the session; it is asked nothing after that.
+plugins:
+  setup: .mainplate/setup
