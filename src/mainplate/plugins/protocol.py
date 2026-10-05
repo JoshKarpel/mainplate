@@ -30,6 +30,9 @@ from pydantic import Field
 from pydantic import TypeAdapter
 from pydantic import ValidationError
 from pydantic import model_validator
+from pydantic.json_schema import GenerateJsonSchema
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import core_schema
 
 type Event = Literal[
     "setup", "tool", "before_tool", "before_request", "before_turn_end", "after_turn", "compose", "action"
@@ -192,6 +195,48 @@ class Speech(BaseModel):
         at each call site so that every value crosses the boundary spelled the same way.
         """
         return self.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
+class SpokenSchema(GenerateJsonSchema):
+    """
+    The JSON Schema of what `spoken` writes, which Pydantic's own serialization mode does not draw.
+
+    Pydantic marks a field with a default as optional, but a field with a default is always written:
+    only `exclude_none` leaves one out, and only when it holds `None`. So in serialization mode a
+    field is required unless its type admits `None`, `null` is never drawn because it is never sent,
+    and a default is dropped because a reader is never asked to fill one in. Pydantic's own
+    `json_schema_serialization_defaults_required` gets the first half and not the second: it would
+    mark `checkout` required, which a session with no files does not send.
+
+    Validation mode is left as Pydantic draws it, since what a plugin answers is parsed with exactly
+    those defaults. The cost, stated: this is the one fact here written in two places, `exclude_none`
+    above and this generator, and the test beside the vocabulary holds them together.
+    """
+
+    def field_is_required(
+        self,
+        field: core_schema.ModelField | core_schema.DataclassField | core_schema.TypedDictField,
+        total: bool,
+    ) -> bool:
+        """Whether `spoken` always writes the field, which is whenever it cannot hold `None`."""
+        if self.mode != "serialization":
+            return super().field_is_required(field, total)
+        inner = field["schema"]
+        if inner["type"] == "default":
+            inner = inner["schema"]
+        return inner["type"] != "nullable"
+
+    def nullable_schema(self, schema: core_schema.NullableSchema) -> JsonSchemaValue:
+        """The type without its `null`, since a field holding `None` is left out rather than sent."""
+        if self.mode != "serialization":
+            return super().nullable_schema(schema)
+        return self.generate_inner(schema["schema"])
+
+    def default_schema(self, schema: core_schema.WithDefaultSchema) -> JsonSchemaValue:
+        """The type without its default, since a default is for whoever fills a field in and a payload arrives filled."""
+        if self.mode != "serialization":
+            return super().default_schema(schema)
+        return self.generate_inner(schema["schema"])
 
 
 class Switch(Speech):

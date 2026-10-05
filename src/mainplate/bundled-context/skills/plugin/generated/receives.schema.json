@@ -7,7 +7,6 @@
       "properties": {
         "event": {
           "const": "action",
-          "default": "action",
           "title": "Event",
           "type": "string"
         },
@@ -27,28 +26,12 @@
           "type": "object"
         },
         "checkout": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Checkout"
+          "title": "Checkout",
+          "type": "string"
         },
         "scratch": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Scratch"
+          "title": "Scratch",
+          "type": "string"
         },
         "state": {
           "additionalProperties": true,
@@ -64,8 +47,11 @@
         }
       },
       "required": [
+        "event",
         "session",
         "plugin",
+        "settings",
+        "state",
         "control",
         "value"
       ],
@@ -78,7 +64,6 @@
       "properties": {
         "event": {
           "const": "tool",
-          "default": "tool",
           "title": "Event",
           "type": "string"
         },
@@ -98,28 +83,12 @@
           "type": "object"
         },
         "checkout": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Checkout"
+          "title": "Checkout",
+          "type": "string"
         },
         "scratch": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Scratch"
+          "title": "Scratch",
+          "type": "string"
         },
         "state": {
           "additionalProperties": true,
@@ -137,9 +106,13 @@
         }
       },
       "required": [
+        "event",
         "session",
         "plugin",
-        "tool"
+        "settings",
+        "state",
+        "tool",
+        "args"
       ],
       "title": "Calling",
       "type": "object"
@@ -150,7 +123,6 @@
       "properties": {
         "event": {
           "const": "compose",
-          "default": "compose",
           "title": "Event",
           "type": "string"
         },
@@ -170,28 +142,12 @@
           "type": "object"
         },
         "checkout": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Checkout"
+          "title": "Checkout",
+          "type": "string"
         },
         "scratch": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Scratch"
+          "title": "Scratch",
+          "type": "string"
         },
         "state": {
           "additionalProperties": true,
@@ -203,15 +159,18 @@
           "type": "string"
         },
         "said": {
-          "default": "",
           "title": "Said",
           "type": "string"
         }
       },
       "required": [
+        "event",
         "session",
         "plugin",
-        "leader"
+        "settings",
+        "state",
+        "leader",
+        "said"
       ],
       "title": "Composing",
       "type": "object"
@@ -222,7 +181,6 @@
       "properties": {
         "event": {
           "const": "after_turn",
-          "default": "after_turn",
           "title": "Event",
           "type": "string"
         },
@@ -242,28 +200,12 @@
           "type": "object"
         },
         "checkout": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Checkout"
+          "title": "Checkout",
+          "type": "string"
         },
         "scratch": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Scratch"
+          "title": "Scratch",
+          "type": "string"
         },
         "state": {
           "additionalProperties": true,
@@ -278,28 +220,23 @@
           "$ref": "#/$defs/Opening"
         },
         "context": {
-          "default": 0,
           "title": "Context",
           "type": "integer"
         },
         "window": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Window"
+          "title": "Window",
+          "type": "integer"
         }
       },
       "required": [
+        "event",
         "session",
         "plugin",
+        "settings",
+        "state",
         "turn",
-        "opened_on"
+        "opened_on",
+        "context"
       ],
       "title": "Ending",
       "type": "object"
@@ -310,7 +247,6 @@
       "properties": {
         "event": {
           "const": "before_tool",
-          "default": "before_tool",
           "title": "Event",
           "type": "string"
         },
@@ -330,28 +266,12 @@
           "type": "object"
         },
         "checkout": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Checkout"
+          "title": "Checkout",
+          "type": "string"
         },
         "scratch": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Scratch"
+          "title": "Scratch",
+          "type": "string"
         },
         "state": {
           "additionalProperties": true,
@@ -369,9 +289,13 @@
         }
       },
       "required": [
+        "event",
         "session",
         "plugin",
-        "tool"
+        "settings",
+        "state",
+        "tool",
+        "args"
       ],
       "title": "Gating",
       "type": "object"
@@ -385,16 +309,8 @@
           "type": "string"
         },
         "plugin": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Plugin"
+          "title": "Plugin",
+          "type": "string"
         }
       },
       "required": [
@@ -409,7 +325,6 @@
       "properties": {
         "event": {
           "const": "before_request",
-          "default": "before_request",
           "title": "Event",
           "type": "string"
         },
@@ -429,28 +344,12 @@
           "type": "object"
         },
         "checkout": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Checkout"
+          "title": "Checkout",
+          "type": "string"
         },
         "scratch": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Scratch"
+          "title": "Scratch",
+          "type": "string"
         },
         "state": {
           "additionalProperties": true,
@@ -458,15 +357,18 @@
           "type": "object"
         },
         "messages": {
-          "default": [],
           "items": {},
           "title": "Messages",
           "type": "array"
         }
       },
       "required": [
+        "event",
         "session",
-        "plugin"
+        "plugin",
+        "settings",
+        "state",
+        "messages"
       ],
       "title": "Requesting",
       "type": "object"
@@ -487,7 +389,6 @@
       "properties": {
         "event": {
           "const": "setup",
-          "default": "setup",
           "title": "Event",
           "type": "string"
         },
@@ -507,28 +408,12 @@
           "type": "object"
         },
         "checkout": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Checkout"
+          "title": "Checkout",
+          "type": "string"
         },
         "scratch": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Scratch"
+          "title": "Scratch",
+          "type": "string"
         },
         "state": {
           "additionalProperties": true,
@@ -537,8 +422,11 @@
         }
       },
       "required": [
+        "event",
         "session",
-        "plugin"
+        "plugin",
+        "settings",
+        "state"
       ],
       "title": "SettingUp",
       "type": "object"
@@ -549,7 +437,6 @@
       "properties": {
         "event": {
           "const": "before_turn_end",
-          "default": "before_turn_end",
           "title": "Event",
           "type": "string"
         },
@@ -569,28 +456,12 @@
           "type": "object"
         },
         "checkout": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Checkout"
+          "title": "Checkout",
+          "type": "string"
         },
         "scratch": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Scratch"
+          "title": "Scratch",
+          "type": "string"
         },
         "state": {
           "additionalProperties": true,
@@ -605,16 +476,19 @@
           "$ref": "#/$defs/Opening"
         },
         "attempt": {
-          "default": 0,
           "title": "Attempt",
           "type": "integer"
         }
       },
       "required": [
+        "event",
         "session",
         "plugin",
+        "settings",
+        "state",
         "turn",
-        "opened_on"
+        "opened_on",
+        "attempt"
       ],
       "title": "Stopping",
       "type": "object"

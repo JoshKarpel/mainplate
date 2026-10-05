@@ -25,6 +25,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
@@ -66,10 +67,31 @@ PAYLOADS: Final = (
 
 @dataclass(frozen=True, slots=True)
 class Written:
-    """One generated file: where under `SKILLS` it goes, and every byte of it."""
+    """
+    One generated file: where under `SKILLS` it goes, every byte of it, and whether it runs.
+
+    `executable` because a script held up as an example is copied by a model as it is, and a copy of
+    a plugin or a job that the console then cannot execute is an example that teaches the wrong
+    thing. It is the source's own bit, carried by `copied`, rather than a column somebody keeps.
+    """
 
     path: Path
     text: str
+    executable: bool = False
+
+    @classmethod
+    def copied(cls, path: Path, source: Path) -> Written:
+        """
+        A file as it is, since an example a model is told to copy is worth most unedited.
+
+        No header, unlike a note: a script's first line is its interpreter.
+        """
+        return cls(path=path, text=source.read_text(encoding="utf-8"), executable=is_executable(source))
+
+
+def is_executable(path: Path) -> bool:
+    """Whether the file's owner may run it, which is the one bit of a mode git records."""
+    return bool(path.stat().st_mode & stat.S_IXUSR)
 
 
 def relative(path: Path) -> str:
@@ -145,18 +167,34 @@ def schema_of[T](adapter: TypeAdapter[T], comment: str, mode: JsonSchemaMode) ->
 
     `by_alias` because the wire names are the aliases: `return` and `set`, where the fields are
     `returned` and `setting`. What a plugin receives is drawn in serialization mode and what it
-    answers in validation mode, since those are the two directions the console reads them in.
+    answers in validation mode, since those are the two directions the console reads them in, and
+    both by `protocol.SpokenSchema`, which draws what `spoken` actually sends and leaves validation
+    as Pydantic draws it.
     """
-    drawn = adapter.json_schema(by_alias=True, mode=mode)
+    drawn = adapter.json_schema(by_alias=True, mode=mode, schema_generator=protocol.SpokenSchema)
     return json.dumps(summarised({"$comment": comment, **drawn}), indent=2) + "\n"
 
 
 def worded(span: timedelta) -> str:
+    """
+    A timeout as the sentence around it reads it: whole minutes where it is some, else seconds.
+
+    Whole seconds only, since every timeout it words is set in minutes or seconds; a fraction would
+    be truncated rather than printed, and `test_skills.py` holds the singular.
+    """
     minutes, seconds = divmod(int(span.total_seconds()), 60)
-    return f"{minutes} minutes" if not seconds else f"{int(span.total_seconds())} seconds"
+    if seconds or not minutes:
+        return f"{int(span.total_seconds())} seconds"
+    return "1 minute" if minutes == 1 else f"{minutes} minutes"
 
 
 def artifact_limits() -> str:
+    """
+    What `file_to_artifact` accepts and the policy every version is served under.
+
+    The policy is read out of `console.py` with `literal` rather than imported, since that module
+    reaches every provider SDK; split on `;` so a reader sees one directive per line.
+    """
     policy = literal(SOURCE / "console.py", "ARTIFACT_POLICY")
     if not isinstance(policy, bytes):
         raise TypeError(f"ARTIFACT_POLICY is a header's bytes, not {policy!r}")
@@ -181,6 +219,12 @@ Every version is served with this `Content-Security-Policy`, one directive per l
 
 
 def guidance_limits() -> str:
+    """
+    Which file names count as guidance, what a skill or command may be called, and how large one is.
+
+    The names are the bundled guidance plugin's, read with `literal` because a plugin is a script and
+    not a module, so what a skill says is what that plugin actually looks for.
+    """
     names = literal(SOURCE / "plugins" / "bundled" / "guidance", "GUIDANCE_NAMES")
     if not isinstance(names, tuple):
         raise TypeError(f"GUIDANCE_NAMES is a tuple of file names, not {names!r}")
@@ -200,6 +244,12 @@ def guidance_limits() -> str:
 
 
 def plugin_limits() -> str:
+    """
+    Where a plugin is declared, what it may be called, how long it has, and which effects each event allows.
+
+    The table is drawn from `protocol.ALLOWED` rather than written out, since it is the one fact here
+    a plugin's author is most likely to get wrong and the protocol is most likely to move.
+    """
     effects = sorted({effect for allowed in protocol.ALLOWED.values() for effect in allowed})
     rows = "\n".join(
         f"| `{event}` | " + " | ".join("yes" if effect in protocol.ALLOWED[event] else "" for effect in effects) + " |"
@@ -263,20 +313,11 @@ def generated() -> tuple[Written, ...]:
             Path("plugin", GENERATED, "answers.schema.json"),
             schema_of(protocol.ANSWERED, "What a plugin prints in answer to any event but setup.", "validation"),
         ),
-        Written(Path("plugin", GENERATED, "handoff"), copied(SOURCE / "plugins" / "bundled" / "handoff")),
-        Written(Path("setup", GENERATED, "setup"), copied(ROOT / ".mainplate" / "setup")),
-        Written(Path("setup", GENERATED, "mainplate.yaml"), copied(ROOT / ".mainplate" / "mainplate.yaml")),
-        Written(Path("serve", GENERATED, "demo"), copied(ROOT / ".mainplate" / "demo")),
+        Written.copied(Path("plugin", GENERATED, "handoff"), SOURCE / "plugins" / "bundled" / "handoff"),
+        Written.copied(Path("setup", GENERATED, "setup"), ROOT / ".mainplate" / "setup"),
+        Written.copied(Path("setup", GENERATED, "mainplate.yaml"), ROOT / ".mainplate" / "mainplate.yaml"),
+        Written.copied(Path("serve", GENERATED, "demo"), ROOT / ".mainplate" / "demo"),
     )
-
-
-def copied(path: Path) -> str:
-    """
-    A file as it is, since an example a model is told to copy is worth most unedited.
-
-    No header, unlike a note: a script's first line is its interpreter.
-    """
-    return path.read_text(encoding="utf-8")
 
 
 def note(path: Path) -> str:
@@ -294,7 +335,7 @@ def whole(pattern: re.Pattern[str]) -> str:
     return pattern.pattern.removesuffix(r"\Z")
 
 
-def stale(written: Mapping[Path, str], present: tuple[Path, ...]) -> tuple[Path, ...]:
+def stale(written: Mapping[Path, Written], present: tuple[Path, ...]) -> tuple[Path, ...]:
     """What is in a `generated/` directory that this script no longer writes."""
     return tuple(path for path in present if path not in written)
 
@@ -306,19 +347,25 @@ def main() -> int:
     The exit is what fails the hook. pre-commit also fails a hook that modifies a tracked file, but a
     generated file nobody has added yet is not tracked, and a stale one would pass.
     """
-    written = {each.path: each.text for each in generated()}
+    written = {each.path: each for each in generated()}
     present = tuple(path.relative_to(SKILLS) for path in SKILLS.glob(f"*/{GENERATED}/**/*") if path.is_file())
     changed = False
     for path in stale(written, present):
         (SKILLS / path).unlink()
         print(f"removed {path}")
         changed = True
-    for path, text in written.items():
+    for path, each in written.items():
         target = SKILLS / path
-        if target.exists() and target.read_text(encoding="utf-8") == text:
+        if (
+            target.exists()
+            and target.read_text(encoding="utf-8") == each.text
+            and is_executable(target) == each.executable
+        ):
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text, encoding="utf-8")
+        target.write_text(each.text, encoding="utf-8")
+        mode = target.stat().st_mode
+        target.chmod(mode | 0o111 if each.executable else mode & ~0o111)
         print(f"wrote {path}")
         changed = True
     return 1 if changed else 0

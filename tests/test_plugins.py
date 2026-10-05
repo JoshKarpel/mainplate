@@ -22,6 +22,7 @@ from conftest import Provider
 from conftest import Scripted
 from conftest import passing
 from conftest import run
+from pydantic import TypeAdapter
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import TextPart
 from pydantic_ai.messages import ToolCallPart
@@ -84,6 +85,7 @@ from mainplate.plugins.protocol import Payload
 from mainplate.plugins.protocol import Refused
 from mainplate.plugins.protocol import Requesting
 from mainplate.plugins.protocol import SettingUp
+from mainplate.plugins.protocol import SpokenSchema
 from mainplate.plugins.protocol import Stopping
 from mainplate.plugins.protocol import number_of
 from mainplate.plugins.protocol import parse_answer
@@ -130,6 +132,18 @@ SHAPES: Final[Mapping[str, type[Payload]]] = {
 def spoken(event: str = "setup", **fields: object) -> Payload:
     """One event payload of the shape that event carries, with the envelope filled in."""
     return SHAPES[event](session="a-session", plugin="user:probe", **fields)
+
+
+# What each event carries past the envelope and has no default for, so the smallest payload of every
+# shape can be composed. The values are immaterial to every test reading this.
+ENOUGH: Final[Mapping[str, Mapping[str, object]]] = {
+    "tool": {"tool": "check"},
+    "before_tool": {"tool": "bash"},
+    "before_turn_end": {"turn": 0, "opened_on": Opening(kind="prompt")},
+    "after_turn": {"turn": 0, "opened_on": Opening(kind="prompt")},
+    "compose": {"leader": "checks"},
+    "action": {"control": "strict", "value": True},
+}
 
 
 # The smallest answer that asks for one effect and nothing else, as a plugin would write it. Written
@@ -263,6 +277,21 @@ class TestTheVocabulary:
         answered = parse_answer("user:probe", {"return": "recorded", "set": {"seen": 3}})
         assert answered.returned == "recorded"
         assert answered.setting == {"seen": 3}
+
+    @pytest.mark.parametrize("event", EVENTS)
+    def test_the_drawn_schema_requires_exactly_what_the_smallest_payload_sends(self, event: Event) -> None:
+        """
+        `spoken`'s `exclude_none` and `SpokenSchema` are one fact in two places, and this is the drift.
+
+        The smallest payload leaves every field that can hold `None` holding it, so what it sends is
+        what is always sent, which is what the schema a plugin's author reads has to call required.
+        Pydantic's own serialization schema calls `event`, `settings` and `state` optional.
+        """
+        payload = spoken(event=event, **ENOUGH.get(event, {}))
+        drawn = TypeAdapter(type(payload)).json_schema(
+            by_alias=True, mode="serialization", schema_generator=SpokenSchema
+        )
+        assert set(payload.spoken()) == set(drawn["required"])
 
     @pytest.mark.parametrize(
         ("event", "effect"), [(event, effect) for event in EVENTS for effect in get_args(Effect.__value__)]
@@ -802,20 +831,9 @@ class TestWhereARepositorysPluginRuns:
     def installed(self) -> Installed:
         return Installed(tier=Tier.REPOSITORY, name="checks", path=Path("/tree/.mainplate/checks"))
 
-    # What each event carries past the envelope, so one of every shape can be composed. The values
-    # are immaterial: what these assert on is the `bwrap` prefix, which is decided by the event and
-    # the plugin and by nothing else in the payload.
-    ENOUGH: Final[Mapping[str, Mapping[str, object]]] = {
-        "tool": {"tool": "check"},
-        "before_tool": {"tool": "bash"},
-        "before_turn_end": {"turn": 0, "opened_on": Opening(kind="prompt")},
-        "after_turn": {"turn": 0, "opened_on": Opening(kind="prompt")},
-        "compose": {"leader": "checks"},
-        "action": {"control": "strict", "value": True},
-    }
-
     async def invocation(self, spawned: Spawned, event: str, checkout: Checkout) -> tuple[str, ...]:
-        payload = spoken(event=event, checkout=str(checkout.root), **self.ENOUGH.get(event, {}))
+        """One event's `bwrap` argv, which is decided by the event and the plugin and nothing else in the payload."""
+        payload = spoken(event=event, checkout=str(checkout.root), **ENOUGH.get(event, {}))
         return (await spawned.invocation(self.installed(), payload, checkout)).argv
 
     async def test_setting_up_reaches_the_network_and_nothing_else_does(self, spawned: Spawned, checkout: Any) -> None:

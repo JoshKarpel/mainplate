@@ -10,6 +10,7 @@ fail, since it rewrites them.
 from __future__ import annotations
 
 import re
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from scripts.skills import SKILLS
 from scripts.skills import generated
 from scripts.skills import literal
 from scripts.skills import section
+from scripts.skills import worded
 
 BUNDLED = SKILLS.parent
 WRITTEN = frozenset(each.path for each in generated())
@@ -82,6 +84,19 @@ def test_a_literal_is_read_from_an_annotated_assignment(tmp_path: Path) -> None:
     module.write_text('from typing import Final\nOTHER = 1\nNAMES: Final = ("ALPHA.md", "BETA.md")\n')
 
     assert literal(module, "NAMES") == ("ALPHA.md", "BETA.md")
+
+
+@pytest.mark.parametrize(
+    ("span", "expected"),
+    [
+        (timedelta(minutes=1), "1 minute"),
+        (timedelta(minutes=20), "20 minutes"),
+        (timedelta(seconds=90), "90 seconds"),
+        (timedelta(seconds=45), "45 seconds"),
+    ],
+)
+def test_a_timeout_is_worded_as_the_sentence_reads_it(span: timedelta, expected: str) -> None:
+    assert worded(span) == expected
 
 
 def test_a_computed_value_is_refused_rather_than_guessed(tmp_path: Path) -> None:

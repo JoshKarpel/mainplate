@@ -202,6 +202,8 @@ def waiting_out(deferred: records.Deferred | None, now: datetime) -> records.Def
 # carries rather than a `timedelta`, since the only thing done with it is comparing two of the
 # store's own numbers. A millisecond, and not a guess: SQLite keeps `now` as a whole number of
 # milliseconds. See `attention_of` for why a reading needs it.
+# TODO: remove once https://github.com/JoshKarpel/without/issues/102 stamps `visible_at` off SQLite's
+# clock, which fixes the store's own dequeue as well as this reading of it.
 STORE_CLOCK_RESOLUTION = 0.001
 
 

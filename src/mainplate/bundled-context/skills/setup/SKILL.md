@@ -13,11 +13,15 @@ running.
 This is the commonest plugin a repository wants. For anything a plugin does
 after setup (tools, cards, reacting to a turn), read the `plugin` skill as well.
 
-Beside this file, generated from the console's own repository:
+Generated from the console's own repository, beside this file:
 
 - `generated/setup` and `generated/mainplate.yaml` are a working setup plugin
   and its declaration: fetch mise, install the pinned tools, run the
   repository's own setup recipe, and ask for one job.
+
+And in the other skills' directories, under the same root as this skill's
+(so these paths start at that root, not at this directory):
+
 - `serve/generated/demo` is the job it asks for.
 - `plugin/generated/environment.md` is every environment variable a plugin and
   a session's commands see, and `plugin/generated/limits.md` the timeouts.

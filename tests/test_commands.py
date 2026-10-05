@@ -571,8 +571,10 @@ class TestRunningOneOnline:
     ) -> None:
         session = await planted(running, workspaces, on_fixture)
         console = str(Path("/proc/self/ns/net").readlink())
-        confined = await ran(running, session, NETWORK_NAMESPACE)
-        assert confined.output.strip() != console, "the control: a session's own command has a namespace of its own"
+        confined = (await ran(running, session, NETWORK_NAMESPACE)).output.strip()
+        # The shape first, so a probe that failed to run (its error text is not `console` either) fails here.
+        assert confined.startswith("net:["), "the control: the probe ran and named a namespace"
+        assert confined != console, "the control: a session's own command has a namespace of its own"
 
         entry = await running.run(session, NETWORK_NAMESPACE, online=True)
 
