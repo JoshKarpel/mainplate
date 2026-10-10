@@ -23,6 +23,7 @@ from without_html import code
 from without_html import details
 from without_html import div
 from without_html import form
+from without_html import img
 from without_html import p
 from without_html import pre
 from without_html import span
@@ -733,6 +734,24 @@ def block_element(links: Links, session: str, block: Block, panel: Panel, at: in
     so a reader wanting one read out of three needs a fold per call and not only a fold per panel.
     """
     match block:
+        case Prose(text=text, pictures=pictures) | Steering(text=text, pictures=pictures) if pictures:
+            return div(
+                cls=("block", "block--text"),
+                children=[
+                    written_block("block--text", text) if text else None,
+                    *(
+                        img(
+                            cls="attachment",
+                            attrs={
+                                "src": links.to_attachment(session, identifier),
+                                "alt": name,
+                                "loading": "lazy",
+                            },
+                        )
+                        for identifier, name in pictures
+                    ),
+                ],
+            )
         case Prose(text=text):
             return written_block("block--text", text)
         case Steering(text=text):

@@ -40,6 +40,7 @@ from pydantic_ai.messages import TextPart
 from pydantic_ai.messages import ThinkingPart
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import ToolReturnPart
+from pydantic_ai.messages import UserContent
 from pydantic_ai.messages import UserPromptPart
 from pydantic_ai.models import Model
 from pydantic_ai.models import ModelRequestParameters
@@ -210,7 +211,7 @@ class Agent:
 
     async def run(
         self,
-        asked: str,
+        asked: str | Sequence[UserContent],
         history: Sequence[ModelMessage],
         scope: Stepping,
         keeping: Keeping | None = None,

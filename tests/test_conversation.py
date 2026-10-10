@@ -10,6 +10,7 @@ from datetime import datetime
 from datetime import timedelta
 from decimal import Decimal
 from itertools import pairwise
+from pathlib import Path
 from typing import get_args
 
 import pytest
@@ -122,6 +123,8 @@ from mainplate.durability import parse_snapshot
 from mainplate.durability import stepping
 from mainplate.durability import terminally
 from mainplate.forge import Workspaces
+from mainplate.images import Image
+from mainplate.images import user_content
 from mainplate.sandbox import Filesystem
 from mainplate.service import Service
 from mainplate.snapshots import Store
@@ -1333,6 +1336,31 @@ class TestAnsweringASession:
         await service.say(SESSION, "again")
         await pass_at(service, body)
         assert provider.carried == [1, 3]
+
+    async def test_attached_images_reach_the_model_when_steered_and_survive_replay(
+        self, service: Service, provider: Provider
+    ) -> None:
+        """A cursor takes an image and its text together, not just the part that is printable."""
+        image = Image.parse("steered.png", Path("src/mainplate/assets/icon-192.png").read_bytes())
+        await waiting(service, said="Inspect the picture coming next")
+        await service.send(SESSION, "Here it is", images=(image,))
+        await pass_at(service, provider.body())
+        recorded = await service.checkpointer.load(SESSION)
+        messages = parse_messages(recorded[messages_key(0)])
+        steers = [
+            part
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+            if isinstance(part, UserPromptPart) and not isinstance(part.content, str)
+        ]
+        assert len(steers) == 1
+        assert steers[0].content == user_content("Here it is", (image,))
+        panels = [panel for panel in transcript(recorded).panels if panel.kind == "steer"]
+        assert panels[0].blocks == (Steering(text="Here it is", pictures=((image.identifier, image.name),)),)
+        asked = provider.asked
+        await pass_at(service, provider.body())
+        assert provider.asked == asked
 
     async def test_a_steer_written_before_the_pass_reaches_the_model_and_the_transcript(
         self, service: Service, provider: Provider

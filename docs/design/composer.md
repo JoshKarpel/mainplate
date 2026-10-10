@@ -15,6 +15,34 @@ each one writes, which is also the order of how much they can break:
 
 Sorting them this way is what keeps the cheap ones cheap. Three of the four need no new mechanism.
 
+## Images
+
+**Upload is a native multipart file field**, enhanced with an Upload button, clipboard-image
+paste and file drag-and-drop. All three write the same `FileList`, so the next send carries the
+whole question in one request; no upload endpoint can leave an image delivered without its text.
+The picker works without the script. Previews and removal are enhancements, and unsent images
+belong to the visit rather than the shelf: keeping them across reloads would require a second
+store of editable attachments, which this composer does not keep.
+
+**The inbox owns the bytes**, as base64 on the `Prompt` or `Steer`, not as paths in a checkout.
+That costs the checkpoint the image and base64's expansion, and buys a question that survives
+replay, a fork and archiving without any file to keep in step. Provider requests reconstruct
+`BinaryImage` values from that record; a turn's settled messages carry them through the same
+codec as images returned by tools. A page carries only an image's digest and asks a route for
+its bytes, so every live transcript update need not resend a screenshot.
+
+**A message may be text, images, or both.** PNG, JPEG, GIF and WebP share the file reader's
+byte recognition, not the browser's MIME claim. The native form is bounded at the HTTP boundary;
+the enhancement reads the same count and byte bounds from its form attributes and refuses an
+oversized selection before sending. A refused request leaves the text and images in place.
+
+**An image goes only to a model known to see one**, using the same catalogue trait as `read`.
+For Parent this is the parent's model, not the one on the page. Commands and plugin input are
+text contracts, so images beside those answers are refused rather than discarded; the shelf
+likewise refuses to keep a selection containing images. A fork re-asks the opening message's
+images with the text in its editable box, including when that box is empty for an image-only
+question. This costs a separate check of the fork's selected model before delivering that question.
+
 ## The disposition
 
 **One field on the composer's form, not one button per endpoint**, because every disposition takes
@@ -337,11 +365,10 @@ empty. It is [a bundled plugin](../plugins/handoff.md), so what a handoff is, wh
 own, and what its card in the rail holds are that page's; what is the composer's is that `/handoff`
 is a leader like any other, and that its row carries `formnovalidate`.
 
-**The box may be empty for this answer.** The box is `required`, which is right for a
-message and would refuse the ordinary handoff, so the button says it does not need the form's
-required fields and the boundary allows an empty message for this disposition alone. That is the
-browser's own mechanism rather than the script toggling an attribute under a reader, which is the
-same reason every mode's button is drawn by the server.
+**The box may be empty for this answer.** `Answer.input` carries that contract, and the boundary
+checks it against the plugin's declaration. The script refuses an empty ordinary message before
+posting, but lets an optional answer through; the server makes the same distinction when the
+script is absent. Images are refused beside plugin input, since that contract is text.
 
 `Answer.input` is where an answer says so, and it is read by *both* renderings: a menu row is a
 submit button exactly as a mode's own button is, so `optional` and `none` both carry

@@ -57,9 +57,11 @@ from mainplate.conversation import deferred_in
 from mainplate.conversation import failure_in
 from mainplate.conversation import fork_branch
 from mainplate.conversation import fork_point
+from mainplate.conversation import opening
 from mainplate.conversation import opening_tree_key
 from mainplate.conversation import picture_in
 from mainplate.conversation import plugins_refused_in
+from mainplate.conversation import posted_in
 from mainplate.conversation import recorded_choice
 from mainplate.conversation import recorded_prompt
 from mainplate.conversation import recorded_push
@@ -77,6 +79,7 @@ from mainplate.footprint import Footprints
 from mainplate.forge import Fetched
 from mainplate.forge import Reachable
 from mainplate.forge import Workspaces
+from mainplate.images import Image
 from mainplate.jobs import Jobs
 from mainplate.plugins.asking import Declaring
 from mainplate.plugins.asking import Live
@@ -92,6 +95,7 @@ from mainplate.reference import References
 from mainplate.reference import Resending
 from mainplate.reference import facts_of
 from mainplate.reference import resending
+from mainplate.reference import said as trait_said
 from mainplate.sessions import LISTING
 from mainplate.sessions import Attention
 from mainplate.sessions import Claimed
@@ -652,6 +656,23 @@ class Service:
             return None
         return await self.conversation(found, await self.checkpointer.load(session))
 
+    async def attachment(self, session: str, identifier: str) -> Image | None:
+        """Serve bytes from their inbox record, including after a fork or archive."""
+        if await read_session(self.database, session) is None:
+            return None
+        recorded = await self.checkpointer.load(session)
+        for at in posted_in(recorded):
+            if isinstance(at.what, (records.Prompt, records.Steer)):
+                for image in at.what.images:
+                    if image.identifier == identifier:
+                        return image
+        return None
+
+    def sees(self, chosen: Choice | None) -> bool:
+        """Only a catalogue record affirming vision permits an image into the inbox."""
+        facts = facts_of(self.catalogues.current, self.references.current, chosen) if chosen is not None else None
+        return facts is not None and trait_said(facts.traits, "vision") is True
+
     async def picture(self, session: str, turn: int, call: str, index: int) -> BinaryContent | None:
         """
         One image a call handed the model, or nothing where the session, the call or the image is not there.
@@ -960,6 +981,8 @@ class Service:
         if parent is None:
             return None
         recorded = await self.checkpointer.load(session)
+        original = opening(recorded, at)
+        images = original.images if isinstance(original, (records.Prompt, records.Steer)) else ()
         carried = before(recorded, at)
         # **A fork works in what its parent worked in**: the same repository, or the same reach where
         # there was none, whatever the caller said. The turns it carries were asked against those
@@ -1054,8 +1077,8 @@ class Service:
         # switches in the branch, which is the same confirmation every new session gives, asked for in
         # the same place and drawn from the parent's switches as defaults.
         await self.checkpointer.supply(forked.id, CHOICE_KEY, recorded_choice(chosen))
-        if said:
-            await self.say(forked.id, said)
+        if said is not None or images:
+            await self.say(forked.id, said or "", images=images)
         else:
             # A fork with nothing to re-ask is queued all the same, because its first pass is what
             # plants its checkout and registers its plugins. Without this it would sit un-set-up
@@ -1336,7 +1359,7 @@ class Service:
         await self.checkpointer.supply(session, setup_key(attempt), records.Confirmed().recorded())
         await self.durable.scheduler.make_ready(session)
 
-    async def say(self, session: str, said: str, *, forget: bool = False) -> None:
+    async def say(self, session: str, said: str, *, forget: bool = False, images: tuple[Image, ...] = ()) -> None:
         """
         Put a message into a session that must be answered on its own, and ask for a look at it.
 
@@ -1357,7 +1380,7 @@ class Service:
         the two and answer it on a history the record was about to contradict.
         """
         await self.naming(session, said)
-        await self.durable.deliver(session, recorded_prompt(said, forget=forget))
+        await self.durable.deliver(session, recorded_prompt(said, forget=forget, images=images))
 
     async def naming(self, session: str, said: str) -> None:
         """
@@ -1387,7 +1410,7 @@ class Service:
         await rename(self.database, session, named)
         return named
 
-    async def send(self, session: str, said: str) -> None:
+    async def send(self, session: str, said: str, *, images: tuple[Image, ...] = ()) -> None:
         """
         Put a message into a session at whichever moment it is actually in, which the pass decides.
 
@@ -1405,4 +1428,4 @@ class Service:
         where it used to have to say which turn had taken the message.
         """
         await self.naming(session, said)
-        await self.durable.deliver(session, recorded_steer(said))
+        await self.durable.deliver(session, recorded_steer(said, images=images))

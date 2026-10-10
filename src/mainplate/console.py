@@ -12,6 +12,8 @@ import os
 from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass
+from email import policy
+from email.parser import BytesParser
 from pathlib import Path
 from typing import Final
 from typing import assert_never
@@ -30,7 +32,9 @@ from without_asgi.sse import event_stream
 from without_asgi.sse import with_heartbeat
 from without_web import INT
 from without_web import STR
+from without_web import BufferedRequest
 from without_web import ExtractionError
+from without_web import Extractor
 from without_web import Reply
 from without_web import Route
 from without_web import body
@@ -44,6 +48,7 @@ from without_web import post
 from without_web import query_param
 
 from mainplate import artifacts
+from mainplate import records
 from mainplate.agent import Choice
 from mainplate.context import BadContext
 from mainplate.conversation import BASE_FIELD
@@ -55,7 +60,13 @@ from mainplate.conversation import THINKING_FIELD
 from mainplate.conversation import TRUSTED_FIELD
 from mainplate.conversation import Disposition
 from mainplate.conversation import commit_command
+from mainplate.conversation import opening
 from mainplate.conversation import parse_disposition
+from mainplate.images import IMAGE_FIELD
+from mainplate.images import MAX_IMAGE_BYTES
+from mainplate.images import MAX_IMAGES
+from mainplate.images import MAX_UPLOAD_BYTES
+from mainplate.images import Image
 from mainplate.pages.artifacts import RECENT
 from mainplate.pages.artifacts import artifact_page
 from mainplate.pages.artifacts import catalogue_page
@@ -434,9 +445,10 @@ class Sending:
 
     said: str
     where: Disposition | ToPlugin | ToContext
+    images: tuple[Image, ...] = ()
 
 
-def parse_form_send(raw: bytes) -> Sending:
+def parse_form_send(raw: bytes, content_type: str = "application/x-www-form-urlencoded") -> Sending:
     """
     The message the composer carried and the disposition it was sent under.
 
@@ -451,7 +463,7 @@ def parse_form_send(raw: bytes) -> Sending:
     A plugin's declaration chooses required, optional or no input, but the parser has no session
     to read that declaration from: the handler checks it rather than trusting the browser.
     """
-    fields = fields_in(raw)
+    fields, images = message_fields(raw, content_type)
     named = fields.get(DISPOSITION_FIELD, [""])[0].strip()
     where: Disposition | ToPlugin | ToContext | None
     if named.startswith(PLUGIN_LEADER):
@@ -467,12 +479,74 @@ def parse_form_send(raw: bytes) -> Sending:
         raise NotAMessage(f"{named!r} is not somewhere a message can be sent")
     said = said_in(fields)
     # Plugin input policy needs the session's declaration; context invocations always need text.
-    if not said and not isinstance(where, ToPlugin) and where is not Disposition.PUSH:
+    if not said and not images and not isinstance(where, ToPlugin) and where is not Disposition.PUSH:
         raise NotAMessage("a message cannot be empty")
-    return Sending(said=said, where=where)
+    return Sending(said=said, where=where, images=images)
 
 
-sending = body(parse_form_send, schema={"type": "object"}, media_type="application/x-www-form-urlencoded")
+def message_fields(raw: bytes, content_type: str) -> tuple[Mapping[str, list[str]], tuple[Image, ...]]:
+    """
+    Bound and parse a native multipart form, without giving an upload a filesystem path.
+
+    The stdlib MIME parser owns boundary and disposition quoting. Its defects are refusals, not a
+    reason to deliver a truncated question; formats are decided by bytes rather than posted MIME.
+    Text-only clients keep the URL-encoded contract alongside the browser's multipart one.
+    """
+    if content_type.split(";", 1)[0].strip().lower() != "multipart/form-data":
+        return fields_in(raw), ()
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise NotAMessage(f"an upload may be at most {MAX_UPLOAD_BYTES} bytes")
+    message = BytesParser(policy=policy.default).parsebytes(
+        b"Content-Type: " + content_type.encode("ascii") + b"\r\nMIME-Version: 1.0\r\n\r\n" + raw
+    )
+    if not message.is_multipart() or any(part.defects for part in message.walk()):
+        raise NotAMessage("the upload is not a complete multipart form")
+    fields: dict[str, list[str]] = {}
+    images: list[Image] = []
+    total = 0
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if not isinstance(name, str) or part.is_multipart():
+            raise NotAMessage("an upload field needs a name and a single body")
+        content = part.get_payload(decode=True)
+        if not isinstance(content, bytes):
+            raise NotAMessage("an upload field has no body")
+        filename = part.get_filename()
+        if filename is not None:
+            if not filename and not content:
+                continue
+            if name != IMAGE_FIELD:
+                raise NotAMessage(f"{name!r} is not an image field")
+            total += len(content)
+            if len(images) >= MAX_IMAGES or total > MAX_IMAGE_BYTES:
+                raise NotAMessage(f"attach at most {MAX_IMAGES} images totalling {MAX_IMAGE_BYTES} bytes")
+            try:
+                images.append(Image.parse(filename, content))
+            except ValueError as raised:
+                raise NotAMessage(str(raised)) from raised
+        else:
+            if len(content) > LONGEST_PROMPT:
+                raise NotAMessage(f"a field may be at most {LONGEST_PROMPT} bytes")
+            fields.setdefault(name, []).append(content.decode("utf-8"))
+    return fields, tuple(images)
+
+
+def sending_from(request: BufferedRequest) -> Sending:
+    """Read the body and its boundary together; a multipart body has no meaning without its header."""
+    content_type = next(
+        (value.decode("latin-1") for name, value in request.scope.headers if name.lower() == b"content-type"),
+        "application/x-www-form-urlencoded",
+    )
+    try:
+        return parse_form_send(request.body, content_type)
+    except ValueError as raised:
+        raise ExtractionError(str(raised), cause=NotAMessage(str(raised))) from raised
+
+
+sending = Extractor(
+    sending_from,
+    request_body=body(parse_form_send, schema={"type": "object"}, media_type="multipart/form-data").request_body,
+)
 
 
 def parse_form_start(raw: bytes) -> Started:
@@ -905,6 +979,12 @@ async def fork(service: Service, session: str, branch: Forking) -> Response:
     """
     if not service.catalogues.current.offers(branch.chosen.endpoint, branch.chosen.model):
         return page_response(422, refusal_page(LINKS, 422, f"no endpoint on offer serves {branch.chosen.model}"))
+    recorded = await service.checkpointer.load(session)
+    original = opening(recorded, branch.at)
+    if isinstance(original, (records.Prompt, records.Steer)) and original.images and not service.sees(branch.chosen):
+        return page_response(
+            422, refusal_page(LINKS, 422, "the selected model is not known to see the images this fork re-asks")
+        )
     forked = await service.fork(session, at=branch.at, chosen=branch.chosen, said=branch.said)
     if forked is None:
         return page_response(404, refusal_page(LINKS, 404, f"no session {session}"))
@@ -1061,6 +1141,21 @@ async def say(service: Service, session: str, sending: Sending, reader: Reader) 
     # caller that is not this page, and a message on the floor is the state the key exists to end.
     if found.session.archived is not None:
         return page_response(422, refusal_page(LINKS, 422, f"session {session} is archived; fork it instead"))
+    if sending.images:
+        if sending.where not in (Disposition.HERE, Disposition.NEXT, Disposition.FORGET, Disposition.PARENT):
+            return page_response(
+                422,
+                refusal_page(
+                    LINKS, 422, "images can only be sent as messages, not commands, shelf text or plugin input"
+                ),
+            )
+        destination = (
+            await service.read(found.session.forked.session)
+            if sending.where is Disposition.PARENT and found.session.forked is not None
+            else found
+        )
+        if destination is None or not service.sees(destination.chosen):
+            return page_response(422, refusal_page(LINKS, 422, "the destination model is not known to see images"))
     # A plugin's own answer, before the console's, because it is not a `Disposition` at all: what
     # happens to what you typed is the plugin's to decide, and the effects it asks for are performed
     # by the service exactly as they are inside a pass.
@@ -1103,13 +1198,13 @@ async def say(service: Service, session: str, sending: Sending, reader: Reader) 
             # message goes in the queue and the pass that takes it decides, because it is the only
             # thing reading at the moment the answer is true. The page this was posted from was
             # rendered from a state that has since moved, and so was any read this could make.
-            await service.send(session, sending.said)
+            await service.send(session, sending.said, images=sending.images)
             return await redrawn(service, session, reader)
         case Disposition.NEXT | Disposition.FORGET:
             # One arm and a flag, the way `FORK | ASIDE` share theirs: both put the message in the
             # next free turn and differ only in what that turn opens on. A forget never reaches
             # `send`, because a boundary between turns is the only place one can be.
-            await service.say(session, sending.said, forget=sending.where is Disposition.FORGET)
+            await service.say(session, sending.said, forget=sending.where is Disposition.FORGET, images=sending.images)
             return await redrawn(service, session, reader)
         case Disposition.RUN | Disposition.ONLINE:
             # Not a message at all: the text is run in this session's sandbox, typed by the person,
@@ -1147,7 +1242,7 @@ async def say(service: Service, session: str, sending: Sending, reader: Reader) 
                 return page_response(422, refusal_page(LINKS, 422, f"session {session} was not forked from anything"))
             if await service.read(origin.session) is None:
                 return page_response(404, refusal_page(LINKS, 404, f"no session {origin.session}"))
-            await service.say(origin.session, sending.said)
+            await service.say(origin.session, sending.said, images=sending.images)
             return navigating(LINKS.to_session(origin.session))
         case _ as unreachable:
             assert_never(unreachable)
@@ -1467,6 +1562,32 @@ async def picture(service: Service, session: str, turn: int, call: str, index: i
     )
 
 
+attachment_id = path_param("identifier", STR)
+
+
+@get(
+    t"/sessions/{session_id}/images/{attachment_id}",
+    session_id,
+    attachment_id,
+    summary="An image attached to a message",
+)
+async def attachment(service: Service, session: str, identifier: str) -> Response:
+    """Serve an immutable inbox image under the same confinement as a tool-result image."""
+    found = await service.attachment(session, identifier)
+    if found is None:
+        return Response(status=404)
+    return Response(
+        status=200,
+        body=found.content,
+        headers=(
+            (b"content-type", found.media_type.encode()),
+            (b"content-security-policy", PICTURE_POLICY),
+            (b"x-content-type-options", b"nosniff"),
+            (b"cache-control", b"private, max-age=31536000, immutable"),
+        ),
+    )
+
+
 CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     start_here,
     new_session,
@@ -1491,6 +1612,7 @@ CONSOLE_ROUTES: tuple[Route[Service], ...] = (
     artifact_content,
     artifact_download,
     picture,
+    attachment,
 )
 
 LINKS = Links(
@@ -1517,5 +1639,6 @@ LINKS = Links(
     artifact_content=artifact_content,
     artifact_download=artifact_download,
     picture=picture,
+    attachment=attachment,
     assets=ASSETS,
 )

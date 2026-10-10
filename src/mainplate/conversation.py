@@ -118,6 +118,7 @@ from pydantic_ai.messages import TextPart
 from pydantic_ai.messages import ThinkingPart
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import ToolReturnPart
+from pydantic_ai.messages import UserContent
 from pydantic_ai.messages import UserPromptPart
 from pydantic_ai.settings import ThinkingLevel
 from without_durability.interfaces import INBOX
@@ -159,6 +160,8 @@ from mainplate.durability import parse_wrote
 from mainplate.durability import stepping
 from mainplate.durability import told
 from mainplate.forge import Workspaces
+from mainplate.images import Image
+from mainplate.images import user_content
 from mainplate.loop import Agent
 from mainplate.loop import CannotGoOn
 from mainplate.loop import Keeping
@@ -999,17 +1002,17 @@ def opening_tree_key(turn: int) -> StepKey:
     return tree_key(turn, 0)
 
 
-def recorded_prompt(said: str, forget: bool = False) -> dict[str, object]:
+def recorded_prompt(said: str, forget: bool = False, images: tuple[Image, ...] = ()) -> dict[str, object]:
     """
     What opens a turn, as the JSON-native value the store's codec will take.
 
     `forget` is what makes this turn the start of the model's history; see `records.Prompt.forget`
     for why it rides here rather than in a key of its own.
     """
-    return records.Prompt(said=said, forget=forget).recorded()
+    return records.Prompt(said=said, forget=forget, images=images).recorded()
 
 
-def recorded_steer(said: str) -> dict[str, object]:
+def recorded_steer(said: str, images: tuple[Image, ...] = ()) -> dict[str, object]:
     """
     A message that may join the turn already running, as the value the store's codec will take.
 
@@ -1017,7 +1020,7 @@ def recorded_steer(said: str) -> dict[str, object]:
     read differently by the pass that takes them and a caller that could pass the wrong word would
     be a way to have a message answered on its own that somebody meant as a steer.
     """
-    return records.Steer(said=said).recorded()
+    return records.Steer(said=said, images=images).recorded()
 
 
 def parse_delivered(recorded: object) -> records.Delivered:
@@ -1433,6 +1436,8 @@ class Prose:
     """Something said in words: the person's message, or the model's own answer."""
 
     text: str
+    pictures: tuple[tuple[str, str], ...] = ()
+    """Stable image addresses and names; the checkpoint, not each live render, holds the bytes."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1446,6 +1451,8 @@ class Steering:
     """
 
     text: str
+    pictures: tuple[tuple[str, str], ...] = ()
+    """The same images in both the inbox reading and the settled provider-history reading."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -2128,8 +2135,22 @@ def interjected(message: ModelRequest) -> Iterator[Block]:
     as part of the call it answers rather than on its own.
     """
     for part in message.parts:
-        if isinstance(part, UserPromptPart) and isinstance(part.content, str) and part.content.strip():
-            yield Steering(text=part.content)
+        if isinstance(part, UserPromptPart):
+            content = part.content
+            text = (
+                content if isinstance(content, str) else "\n\n".join(each for each in content if isinstance(each, str))
+            )
+            images = (
+                ()
+                if isinstance(content, str)
+                else tuple(
+                    Image.parse(str((each.vendor_metadata or {}).get("attachment_name", "Image")), each.data)
+                    for each in content
+                    if isinstance(each, BinaryContent) and each.is_image
+                )
+            )
+            if text.strip() or images:
+                yield Steering(text=text, pictures=tuple((image.identifier, image.name) for image in images))
         elif isinstance(part, SystemPromptPart) and part.content.strip():
             yield Guidance(text=part.content)
 
@@ -2485,6 +2506,11 @@ def drains_in(recorded: Mapping[str, object], turn: int) -> tuple[str, ...]:
     """
     opened, heard = opened_key(turn), f"{turn_prefix(turn)}:heard:"
     return tuple(parse_cursor(value) for key, value in recorded.items() if key == opened or key.startswith(heard))
+
+
+def steering_block(what: records.Steer) -> Steering:
+    """The inbox's words and image addresses together, without carrying bytes into a page."""
+    return Steering(text=what.said, pictures=tuple((image.identifier, image.name) for image in what.images))
 
 
 def steered(held: Sequence[Posted], since: str, upto: str) -> tuple[str, ...]:
@@ -2945,19 +2971,28 @@ def blocks_from(
     called = calls_in(recorded, turn, responses)
     returned = {call: returned_step(said) for call, said in called.items()}
     took = {call: said.took for call, said in called.items() if said.took is not None}
-    told = told_in(recorded, held, turn)
+    told = tuple(
+        tuple(steering_block(at.what) for at in held if isinstance(at.what, records.Steer) and since < at.key <= upto)
+        for since, upto in pairwise(drains_in(recorded, turn))
+    )
     ends = ends_in(recorded, turn)
-    taking, _ = unread_in(recorded, held, turn, listening=True)
+    taking = tuple(
+        steering_block(at.what)
+        for at in takewhile(
+            lambda at: not records.opens(at.what), (at for at in held if at.key > since_last(recorded, turn))
+        )
+        if isinstance(at.what, records.Steer)
+    )
     blocks: list[Sourced] = []
     for at, response in enumerate(responses):
         blocks.extend((Guidance(text=text), None) for each in ends if each.at == at for text in each.said)
-        blocks.extend((Steering(text=text), None) for text in (told[at] if at < len(told) else ()))
+        blocks.extend((text, None) for text in (told[at] if at < len(told) else ()))
         blocks.extend((block, at) for block in blocks_in(response, returned, took))
     blocks.extend((Guidance(text=text), None) for each in ends if each.at == len(responses) for text in each.said)
     # The cursors past the last answer first, then what no cursor accounts for, which is the order
     # they were said in: a steer a request has taken arrived before one nobody has read.
-    blocks.extend((Steering(text=text), None) for carried in told[len(responses) :] for text in carried)
-    blocks.extend((Steering(text=text), None) for text in taking)
+    blocks.extend((text, None) for carried in told[len(responses) :] for text in carried)
+    blocks.extend((text, None) for text in taking)
     return tuple(blocks)
 
 
@@ -3035,7 +3070,14 @@ def said_by(turn: int, said: records.Delivered) -> Panel:
         turn=turn,
         at=0,
         kind="prompt" if noted is None else "note",
-        blocks=(Prose(text=said.said),),
+        blocks=(
+            Prose(
+                text=said.said,
+                pictures=tuple((image.identifier, image.name) for image in said.images)
+                if isinstance(said, (records.Prompt, records.Steer))
+                else (),
+            ),
+        ),
         forget=records.forgets(said),
         # What the plugin said about how its panel is drawn, or nothing at all for a message somebody
         # typed. The label falls back to the plugin's own name here rather than at render time,
@@ -3193,7 +3235,7 @@ def keeping_through(run: Run, live: Live, turn: int, opened_on: Opening) -> Keep
 
 async def answering_turn(
     agent: Agent,
-    asked: str,
+    asked: str | Sequence[UserContent],
     history: Sequence[ModelMessage],
     scope: Stepping,
     keeping: Keeping | None,
@@ -3329,12 +3371,12 @@ def draining_inbox(run: Run, turn: int) -> Draining:
     the store again.
     """
 
-    async def drain(key: StepKey) -> Sequence[str]:
+    async def drain(key: StepKey) -> Sequence[str | Sequence[UserContent]]:
         since = since_last(run.recorded, turn)
         available = taken(run.delivered(since or None, None))
         wanted = len(tuple(takewhile(lambda what: not records.opens(what), available)))
         took = await run.pending(key, after=since or None, limit=wanted)
-        return tuple(what.said for what in taken(took) if isinstance(what, records.Steer))
+        return tuple(user_content(what.said, what.images) for what in taken(took) if isinstance(what, records.Steer))
 
     return drain
 
@@ -3911,7 +3953,15 @@ def conversing(
             keeping = keeping_through(run, live, at.turn, opening_of(asked))
             with stepping(run, turn_prefix(at.turn), checkout, pricer, draining, spending, injecting, gating) as scope:
                 try:
-                    answered = await answering_turn(agent, asked.said, at.history, scope, keeping)
+                    answered = await answering_turn(
+                        agent,
+                        user_content(
+                            asked.said, asked.images if isinstance(asked, (records.Prompt, records.Steer)) else ()
+                        ),
+                        at.history,
+                        scope,
+                        keeping,
+                    )
                 except AllowanceSpent:
                     # Caught out here rather than anywhere inside the agent, because what it ends is
                     # the pass and not the request: every step this turn has taken is recorded, so

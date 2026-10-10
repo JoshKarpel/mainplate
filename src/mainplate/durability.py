@@ -40,6 +40,7 @@ from pydantic_ai.messages import ModelResponse
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.messages import ToolReturn
 from pydantic_ai.messages import ToolReturnPart
+from pydantic_ai.messages import UserContent
 from pydantic_ai.models import Model
 from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.settings import ModelSettings
@@ -423,7 +424,7 @@ class Allowance:
         self.spent += 1
 
 
-type Draining = Callable[[StepKey], Awaitable[Sequence[str]]]
+type Draining = Callable[[StepKey], Awaitable[Sequence[str | Sequence[UserContent]]]]
 """
 What the person has said into this turn that no request has carried, taken under the key it records.
 
@@ -660,7 +661,7 @@ class Stepping:
         """
         await self.step(self.identified("refused", str(at)), lambda: as_recorded(refused), parse_refused)
 
-    async def steering(self) -> tuple[str, ...]:
+    async def steering(self) -> tuple[str | Sequence[UserContent], ...]:
         """
         The steers to put to the model now, taken under a key that records how far this turn has read.
 

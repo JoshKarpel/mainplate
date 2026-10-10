@@ -81,8 +81,8 @@ what a handoff *is* - and that sharing is internal to the plugin rather than a f
 have to remember to reach for, which is one thing the port made strictly better.
 
 **The box may be empty for this answer**, which is what `input: "optional"` on the declared answer
-buys. The box is `required`, which would refuse an ordinary handoff, so the submitter carries
-`formnovalidate` and the plugin receives an empty note. [The composer](
+buys. The composer permits that answer without text, and the boundary checks the plugin's
+input contract before delivering it an empty note. [The composer](
 ../design/composer.md#leaders) is where that mechanism is argued.
 
 It sits beside `Forget` in the menu because they are the same family: both end a stretch of context

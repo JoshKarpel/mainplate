@@ -13,6 +13,7 @@ from without_html import button
 from without_html import details
 from without_html import div
 from without_html import form
+from without_html import input_ as input_element
 from without_html import label
 from without_html import p
 from without_html import span
@@ -25,6 +26,9 @@ from mainplate.conversation import DISPOSITION_FIELD
 from mainplate.conversation import KEEP
 from mainplate.conversation import LEADERS
 from mainplate.conversation import Disposition
+from mainplate.images import IMAGE_FIELD
+from mainplate.images import MAX_IMAGE_BYTES
+from mainplate.images import MAX_IMAGES
 from mainplate.pages.document import Placed
 from mainplate.pages.figures import charged
 from mainplate.pages.figures import tokens
@@ -548,8 +552,13 @@ def composer(
     rather than styling: a box that still submitted would record a message into a session whose
     endpoint is gone, which is one more thing to explain and nothing gained.
 
-    The reset is on `after:swap` rather than on `after:request`, so the box empties when the
-    conversation on screen has actually taken the message rather than when the request left.
+    The reset follows an accepted swap, not merely a completed request: a refusal leaves the whole
+    question, images included, in the box for correction.
+
+    Text is not `required` on the textarea, because an image alone is a question. The boundary
+    refuses an empty message and the enhancement makes that refusal before posting. The native
+    file field remains visible until the script wires Upload, paste and drop, so losing the script
+    loses previews and removal, not the ability to send an image.
 
     `hx-indicator` names what is shown while the post is in flight, which is a different thing
     from the working dots in the transcript: this one says *your message has not landed yet*, and
@@ -591,20 +600,28 @@ def composer(
     )
     driving = {
         "hx-post": action,
+        "hx-encoding": "multipart/form-data",
         "hx-target": f"#{TRANSCRIPT_ID}",
         "hx-swap": SEND_SWAP,
         "hx-indicator": f"#{SENDING_ID}",
-        "hx-on:htmx:after:swap": "this.reset()",
+        "hx-on:htmx:after:swap": "if (event.detail.ctx.response.status < 400) this.reset()",
         "hx-disable": "find button, find textarea",
-        # A refusal is not a transcript, so it must not become one. The box is `required`, so the
-        # only way to reach this is a caller that is not this page; leaving the conversation on
-        # screen is the honest answer to that.
+        # Refusals leave the question intact. htmax still emits after:swap for swap:none, so the
+        # reset above checks the response as well rather than treating that event as acceptance.
         "hx-status:4xx": "swap:none",
         "hx-status:5xx": "swap:none",
     }
     return form(
         cls="composer",
-        attrs={"method": "post", "action": action, "id": identified, **driving},
+        attrs={
+            "method": "post",
+            "action": action,
+            "id": identified,
+            "enctype": "multipart/form-data",
+            "data-max-images": MAX_IMAGES,
+            "data-max-image-bytes": MAX_IMAGE_BYTES,
+            **driving,
+        },
         children=[
             above,
             # Shown by `display` rather than by the opacity htmx's own indicator rules toggle, so
@@ -638,6 +655,8 @@ def composer(
             div(
                 cls="composer__box",
                 children=[
+                    div(cls="attachments", attrs={"aria-label": "Attached images"}),
+                    p(cls="attachments__error", attrs={"role": "alert", "hidden": True}),
                     # `rows` is the floor only where `field-sizing` is not supported: the box sizes
                     # itself from what is typed, and a browser that can do that ignores `rows`
                     # entirely. See the growth rule in `mainplate.css`.
@@ -650,7 +669,7 @@ def composer(
                             "id": MESSAGE_ID,
                             "name": "prompt",
                             "rows": 3,
-                            "required": True,
+                            "required": False,
                             "disabled": refusing,
                             "placeholder": "Say something",
                             "aria-label": "Message",
@@ -661,10 +680,34 @@ def composer(
                     # interactive inside it, which is exactly the split wanted, and it is the
                     # browser's own rule rather than a listener. The `aria-label` above outranks a
                     # label's text in naming the box, so Send does not become the box's name.
+                    input_element(
+                        cls="image-upload",
+                        attrs={
+                            "type": "file",
+                            "name": IMAGE_FIELD,
+                            "id": "image-upload",
+                            "accept": "image/png,image/jpeg,image/gif,image/webp",
+                            "multiple": True,
+                            "disabled": refusing,
+                            "aria-label": "Upload images",
+                        },
+                    ),
                     label(
                         cls="composer__tools",
                         attrs={"for": MESSAGE_ID},
-                        children=[sending_control(refusing, answers)],
+                        children=[
+                            button(
+                                cls="upload",
+                                attrs={
+                                    "type": "button",
+                                    "data-upload": True,
+                                    "disabled": refusing,
+                                    "title": "Upload images, or paste or drop them into the message box",
+                                },
+                                children="Upload",
+                            ),
+                            sending_control(refusing, answers),
+                        ],
                     ),
                 ],
             ),

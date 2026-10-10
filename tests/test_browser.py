@@ -44,6 +44,7 @@ from without_durability.interfaces import INBOX
 from without_http import serving
 
 from mainplate import artifacts
+from mainplate import records
 from mainplate.agent import ANTHROPIC_RETENTION
 from mainplate.app import Ports
 from mainplate.app import build_app
@@ -55,6 +56,7 @@ from mainplate.conversation import Result
 from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import opened_key
+from mainplate.conversation import posted_in
 from mainplate.conversation import recorded_command
 from mainplate.conversation import recorded_job
 from mainplate.conversation import recorded_result
@@ -73,6 +75,8 @@ from mainplate.plugins.installed import Installed
 from mainplate.plugins.installed import Tier
 from mainplate.plugins.protocol import Described
 from mainplate.plugins.running import Spawned
+from mainplate.reference import Facts
+from mainplate.reference import Reference
 from mainplate.sandbox import Filesystem
 from mainplate.service import Service
 from mainplate.sessions import read_tending
@@ -357,6 +361,95 @@ async def lands_on(page: Page, *expected: str) -> None:
     await expect(landed).to_have_count(len(expected))
     for at, panel in enumerate(expected):
         await expect(landed.nth(at)).to_have_attribute("id", panel)
+
+
+class TestAttachingImages:
+    async def test_upload_posts_an_image_only_question_and_resets_after_it_lands(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """The picker, htmx multipart encoding and native reset must agree on one FileList."""
+        base, service = console
+        service.references.current = Reference(
+            qualified={DEFAULT_CHOICE.model: Facts(traits=(("vision", True),))}, upstream={}
+        )
+        session = await started(service, said="Existing question")
+        await page.goto(f"{base}/sessions/{session.id}")
+        async with page.expect_file_chooser() as picking:
+            await page.get_by_role("button", name="Upload", exact=True).click()
+        picker = await picking.value
+        await picker.set_files("src/mainplate/assets/icon-192.png")
+        await expect(page.locator(".attachments img")).to_have_count(1)
+        async with page.expect_response(
+            lambda response: response.request.method == "POST" and response.url.endswith("/messages")
+        ) as sending:
+            await page.locator(".sender__send").click()
+        assert (await sending.value).status == 200
+        await expect(page.locator(".attachments img")).to_have_count(0)
+        await expect(page.locator(".attachment")).to_have_count(1)
+        assert await page.locator(".attachment").evaluate("image => image.complete && image.naturalWidth > 0")
+        question = posted_in(await service.checkpointer.load(session.id))[-1].what
+        assert isinstance(question, records.Steer)
+        assert question.said == ""
+        assert question.images[0].content == Path("src/mainplate/assets/icon-192.png").read_bytes()
+        await page.reload()
+        await expect(page.locator(".attachment")).to_have_count(1)
+
+    @pytest.mark.parametrize("method", ["paste", "drop"])
+    async def test_clipboard_and_drop_append_to_the_picker_and_can_be_removed(
+        self, page: Page, gallery: str, method: str
+    ) -> None:
+        """A screenshot arriving from the clipboard is a file, not text inserted into the box."""
+        await page.goto(f"{gallery}/session.html")
+        await page.locator(".image-upload").set_input_files("src/mainplate/assets/icon-192.png")
+        await page.locator("textarea[name=prompt]").evaluate(
+            """(box, method) => {
+            const transfer = new DataTransfer();
+            transfer.items.add(new File([new Uint8Array([137,80,78,71,13,10,26,10])], 'clipboard.png', {type: 'image/png'}));
+            box.dispatchEvent(method === 'paste' ? new ClipboardEvent('paste', {clipboardData: transfer, bubbles: true, cancelable: true}) : new DragEvent('drop', {dataTransfer: transfer, bubbles: true, cancelable: true}));
+        }""",
+            method,
+        )
+        await expect(page.locator(".attachments img")).to_have_count(2)
+        assert await page.locator(".image-upload").evaluate("input => input.files.length") == 2
+        await page.get_by_role("button", name="Remove clipboard.png", exact=True).click()
+        await expect(page.locator(".attachments img")).to_have_count(1)
+        assert await page.locator(".image-upload").evaluate("input => input.files[0].name") == "icon-192.png"
+
+    async def test_a_refusal_keeps_text_and_images_for_correction(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """The reset is earned by acceptance, never by a request merely finishing."""
+        base, service = console
+        session = await started(service, said="Existing question")
+        await page.goto(f"{base}/sessions/{session.id}")
+        await page.locator("textarea[name=prompt]").fill("Do not lose this note")
+        await page.locator(".image-upload").set_input_files("src/mainplate/assets/icon-192.png")
+        async with page.expect_response(
+            lambda response: response.request.method == "POST" and response.url.endswith("/messages")
+        ) as sending:
+            await page.locator(".sender__send").click()
+        assert (await sending.value).status == 422
+        await expect(page.locator(".attachments img")).to_have_count(1)
+        await expect(page.locator("textarea[name=prompt]")).to_have_value("Do not lose this note")
+        await expect(page.locator(".attachments__error")).to_be_visible()
+
+    async def test_without_script_the_native_picker_still_sends_an_image(
+        self, page: Page, console: tuple[str, Service]
+    ) -> None:
+        """Upload is an enhancement over a native multipart form, not the only way into it."""
+        base, service = console
+        service.references.current = Reference(
+            qualified={DEFAULT_CHOICE.model: Facts(traits=(("vision", True),))}, upstream={}
+        )
+        session = await started(service, said="Existing question")
+        await page.route("**/mainplate.js", lambda route: route.abort())
+        await page.goto(f"{base}/sessions/{session.id}")
+        await page.locator(".image-upload").set_input_files("src/mainplate/assets/icon-192.png")
+        async with page.expect_response(
+            lambda response: response.request.method == "POST" and response.url.endswith("/messages")
+        ) as sending:
+            await page.locator(".sender__send").click()
+        assert (await sending.value).status == 200
 
 
 class TestTheInstalledConsole:
@@ -661,9 +754,8 @@ class TestSendingFromTheKeyboard:
         assert await page.input_value("textarea[name=prompt]") == "one line\n"
 
     async def test_shift_enter_in_an_empty_box_sends_nothing(self, page: Page, gallery: str) -> None:
-        # The composer's box is `required`, and `requestSubmit` honours that where `submit` would
-        # not: an empty box refuses from the keyboard exactly as it refuses from the button, rather
-        # than recording a message nobody typed.
+        # An empty question is refused from the button and keyboard alike; an image alone is a
+        # question, so this lives on submit rather than on the textarea's `required` attribute.
         await page.goto(f"{gallery}/session.html", wait_until="load")
         await page.evaluate(WATCH_SUBMITS)
         await page.press("textarea[name=prompt]", "Shift+Enter")
@@ -3360,6 +3452,7 @@ class TestNamingAModeFromTheKeyboard:
         await page.wait_for_function("window.submitted.length === 1")
         assert await page.evaluate("window.submitted[0]") == {
             "prompt": "",
+            "images": {},
             "disposition": "plugin:quality-check:check",
         }
         await expect(page.locator(".composer")).not_to_have_attribute("data-leading", "quality-check:check")

@@ -175,10 +175,15 @@ class Links:
     artifact_content: Reversible
     artifact_download: Reversible
     picture: Reversible
+    attachment: Reversible
     # A prefix rather than a route, and the one exception: the route serving the assets needs an
     # inventory that does not exist until startup, where every field above is a module-level
     # value. Both are built from one constant, so they cannot disagree about where they are.
     assets: str
+
+    def to_attachment(self, session: str, identifier: str) -> str:
+        """The inbox image's stable address, independent of which turn eventually takes it."""
+        return url_for(self.attachment, {"session": session, "identifier": identifier})
 
     def to_home(self) -> str:
         return url_for(self.home)

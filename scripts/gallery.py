@@ -70,6 +70,7 @@ from mainplate.conversation import messages_key
 from mainplate.conversation import model_key
 from mainplate.conversation import opened_key
 from mainplate.conversation import picture_in
+from mainplate.conversation import posted_in
 from mainplate.conversation import recorded_command
 from mainplate.conversation import recorded_instructions
 from mainplate.conversation import recorded_job
@@ -89,6 +90,7 @@ from mainplate.durability import ModelResponseTypeAdapter
 from mainplate.forge import Fetched
 from mainplate.forge import Reachable
 from mainplate.forge import Repository
+from mainplate.images import Image
 from mainplate.pages.artifacts import RECENT
 from mainplate.pages.artifacts import artifact_page
 from mainplate.pages.artifacts import catalogue_page
@@ -1262,7 +1264,13 @@ ICON_PATH = "src/mainplate/assets/icon-192.png"
 ICON = (ASSETS / "icon-192.png").read_bytes()
 
 TOOL_IN_FLIGHT: list[ModelMessage] = [
-    ModelRequest(parts=[UserPromptPart(content="Now check the stylesheet handles a long line.")]),
+    ModelRequest(
+        parts=[
+            UserPromptPart(
+                content=["Check the stylesheet against this icon.", BinaryImage(data=ICON, media_type="image/png")]
+            )
+        ]
+    ),
     # Two settled batches ahead of the call still out, which between them are every rendering a
     # call has: a partial read of the stylesheet, coloured by its name; then an edit addressed by
     # the anchors that read showed, drawn as the diff the tool recorded beside its reply; a create,
@@ -1405,9 +1413,24 @@ def opening(messages: Sequence[ModelMessage]) -> str:
     if not isinstance(first, ModelRequest):
         raise TypeError(f"a turn opens with a request, not {type(first).__name__}")
     asked = first.parts[0]
-    if not isinstance(asked, UserPromptPart) or not isinstance(asked.content, str):
+    if not isinstance(asked, UserPromptPart):
         raise TypeError(f"a turn opens with what somebody typed, not {asked!r}")
-    return asked.content
+    return (
+        asked.content
+        if isinstance(asked.content, str)
+        else "\n\n".join(each for each in asked.content if isinstance(each, str))
+    )
+
+
+def opening_images(messages: Sequence[ModelMessage]) -> tuple[Image, ...]:
+    """Recover attachments from the same prompt as its text, so a fixture cannot disagree with itself."""
+    first = messages[0]
+    if not isinstance(first, ModelRequest) or not isinstance(first.parts[0], UserPromptPart):
+        raise TypeError("a turn needs an opening prompt")
+    content = first.parts[0].content
+    if isinstance(content, str):
+        return ()
+    return tuple(Image.parse("Image", each.data) for each in content if isinstance(each, BinaryImage))
 
 
 def recorded(*turns: Sequence[ModelMessage]) -> dict[str, object]:
@@ -1435,7 +1458,7 @@ def recorded(*turns: Sequence[ModelMessage]) -> dict[str, object]:
         # The two records a turn opens with: the entry the message arrived as, and the cursor saying
         # this turn took it. `seed.py` and this script are the two writers that are not `Service`, so
         # what a pass would write is written by hand, both halves or neither.
-        written[inbox_key(turn)] = recorded_prompt(opening(messages))
+        written[inbox_key(turn)] = recorded_prompt(opening(messages), images=opening_images(messages))
         written[opened_key(turn)] = inbox_key(turn)
         written[heard_key(turn, 0)] = inbox_key(turn)
         written[messages_key(turn)] = recorded_messages(messages)
@@ -1693,7 +1716,7 @@ def settled_checkpoint() -> dict[str, object]:
             took=timedelta(seconds=1.32),
         )
     )
-    written[inbox_key(1)] = recorded_prompt(opening(TOOL_IN_FLIGHT), forget=True)
+    written[inbox_key(1)] = recorded_prompt(opening(TOOL_IN_FLIGHT), forget=True, images=opening_images(TOOL_IN_FLIGHT))
     written[instructions_key(1)] = recorded_instructions(INSTRUCTIONS)
     return written
 
@@ -2218,6 +2241,10 @@ def pictures(links: Links = LINKS) -> dict[str, bytes]:
     """
     found: dict[str, bytes] = {}
     for fixture in FIXTURES:
+        for at in posted_in(fixture.checkpoint):
+            if isinstance(at.what, (records.Prompt, records.Steer)):
+                for image in at.what.images:
+                    found[links.to_attachment(fixture.session.id, image.identifier)] = image.content
         for key in fixture.checkpoint:
             match key.split(":", 3):
                 case ["turn", turn, "tool", call]:

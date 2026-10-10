@@ -50,6 +50,8 @@ from pydantic import Field
 from pydantic import StrictInt
 from pydantic import TypeAdapter
 
+from mainplate.images import Image
+
 type StepKind = Literal[
     "choice",
     "instructions",
@@ -144,6 +146,8 @@ class Prompt(Record):
 
     kind: Literal["prompt"] = "prompt"
     said: str
+    images: tuple[Image, ...] = ()
+    """The question's images, carried by the same append so no worker can read half a message."""
 
     forget: bool = False
     """
@@ -275,6 +279,8 @@ class Steer(Record):
 
     kind: Literal["steer"] = "steer"
     said: str
+    images: tuple[Image, ...] = ()
+    """Images are steered with their text, or open the next turn with it."""
 
 
 class Job(Record):

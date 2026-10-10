@@ -1332,7 +1332,7 @@ class TestWhatIsNewInTheList:
         assert DEFAULT_CHOICE.endpoint in answered.text
         assert "no longer declares" in answered.text
         assert 'id="waiting"' not in answered.text, "nothing is coming, so nothing may say it is"
-        assert 'name="prompt" rows="3" required disabled' in answered.text
+        assert 'name="prompt" rows="3" disabled' in answered.text
 
     async def test_a_session_the_provider_refused_says_so_and_points_at_the_fork(
         self, app: ASGIApp, service: Service

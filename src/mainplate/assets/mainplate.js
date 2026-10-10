@@ -1264,6 +1264,9 @@
     // and a conversation that flashed itself top to bottom on being opened would be pointing at
     // everything, which is pointing at nothing.
     const repaint = (announce = true) => {
+      document.querySelectorAll('.composer').forEach((form) => {
+        if (!form.hasAttribute('data-images-ready')) paintImages(form);
+      });
       paintFresh(announce);
       paintMuted();
       paintShelf();
@@ -1921,6 +1924,126 @@
     //
     // Delegated, because the composer is rebuilt whenever a page is: this is one listener for every
     // box on every page rather than one wired per form at load.
+    // The native file input is the one posted value. Clipboard and drop both append to its FileList,
+    // so a request never waits for a separate upload and a refused send leaves its question intact.
+    const imageStates = new WeakMap();
+    const imageInput = (form) => form?.querySelector('.image-upload');
+    const imageError = (form, message) => {
+      const error = form.querySelector('.attachments__error');
+      if (!error) return;
+      error.textContent = message;
+      error.hidden = !message;
+    };
+    const paintImages = (form) => {
+      const input = imageInput(form);
+      if (!input) return;
+      form.dataset.imagesReady = '';
+      const previous = imageStates.get(input);
+      previous?.urls.forEach((url) => URL.revokeObjectURL(url));
+      const files = Array.from(input.files);
+      const urls = files.map((file) => URL.createObjectURL(file));
+      imageStates.set(input, { files, urls });
+      const tray = form.querySelector('.attachments');
+      tray.replaceChildren(...files.map((file, index) => {
+        const item = document.createElement('div');
+        item.className = 'attachments__item';
+        const picture = document.createElement('img');
+        picture.src = urls[index];
+        picture.alt = file.name;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.dataset.removeImage = String(index);
+        remove.textContent = `Remove ${file.name}`;
+        item.append(picture, remove);
+        return item;
+      }));
+    };
+    const takeImages = (form, added, append = true) => {
+      const input = imageInput(form);
+      if (!input || input.disabled) return;
+      const previous = imageStates.get(input)?.files ?? [];
+      const files = [...(append ? previous : []), ...added];
+      const allowed = input.accept.split(',');
+      const error = files.some((file) => !allowed.includes(file.type))
+        ? 'Attach PNG, JPEG, GIF or WebP images.'
+        : files.length > Number(form.dataset.maxImages) || files.reduce((sum, file) => sum + file.size, 0) > Number(form.dataset.maxImageBytes)
+          ? `Attach at most ${form.dataset.maxImages} images totalling ${Math.floor(Number(form.dataset.maxImageBytes) / 1024 / 1024)} MiB.`
+          : '';
+      const transfer = new DataTransfer();
+      (error ? previous : files).forEach((file) => transfer.items.add(file));
+      input.files = transfer.files;
+      imageError(form, error);
+      paintImages(form);
+    };
+    const wireImages = () => {
+      document.addEventListener('click', (event) => {
+        const button = event.target.closest?.('[data-shelf]');
+        const form = button?.closest('.composer');
+        if (!form || !imageInput(form)?.files.length) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        imageError(form, 'The shelf holds text only. Send or remove the images first.');
+      }, true);
+      document.addEventListener('click', (event) => {
+        const button = event.target.closest?.('[data-upload], [data-remove-image]');
+        if (!button) return;
+        const form = button.closest('.composer');
+        const input = imageInput(form);
+        if (!input) return;
+        if (button.hasAttribute('data-upload')) input.click();
+        else takeImages(form, Array.from(input.files).filter((_, index) => index !== Number(button.dataset.removeImage)), false);
+      });
+      document.addEventListener('change', (event) => {
+        if (!event.target.matches?.('.image-upload')) return;
+        takeImages(event.target.form, Array.from(event.target.files));
+      });
+      document.addEventListener('paste', (event) => {
+        const form = event.target.closest?.('.composer');
+        if (!form || !event.clipboardData) return;
+        const files = Array.from(event.clipboardData.files);
+        if (!files.length) return;
+        event.preventDefault();
+        takeImages(form, files);
+      });
+      document.addEventListener('dragover', (event) => {
+        const form = event.target.closest?.('.composer');
+        if (form && Array.from(event.dataTransfer?.types ?? []).includes('Files')) event.preventDefault();
+      });
+      document.addEventListener('drop', (event) => {
+        const form = event.target.closest?.('.composer');
+        const files = Array.from(event.dataTransfer?.files ?? []);
+        if (!form || !files.length) return;
+        event.preventDefault();
+        takeImages(form, files);
+      });
+      document.addEventListener('reset', (event) => {
+        if (!event.target.matches?.('.composer')) return;
+        const form = event.target;
+        queueMicrotask(() => { paintImages(form); imageError(form, ''); });
+      });
+      document.addEventListener('submit', (event) => {
+        const form = event.target;
+        const input = imageInput(form);
+        if (!input) return;
+        const text = form.querySelector('textarea[name="prompt"]').value.trim();
+        const submitter = event.submitter;
+        const disposition = submitter?.value || 'here';
+        if (input.files.length && !['here', 'next', 'forget', 'parent'].includes(disposition)) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          imageError(form, 'Images can only be sent as messages. Remove them before using this answer.');
+        } else if (!input.files.length && !text && !submitter?.formNoValidate) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          imageError(form, 'Write a message or attach an image.');
+        }
+      }, true);
+      document.addEventListener('htmx:after:request', (event) => {
+        const form = event.detail?.ctx?.sourceElement;
+        if (!form?.matches?.('.composer') || event.detail.ctx.response.status < 400) return;
+        imageError(form, 'Message refused. Attachments and text are still here; check the destination and image formats.');
+      });
+    };
     const wireSend = () => {
       document.addEventListener("keydown", (event) => {
         const box = event.target;
@@ -2015,7 +2138,7 @@
         if (!box || touchScreen()) return;
         setTimeout(() => {
           const holding = document.activeElement;
-          if (holding === null || holding === document.body) box.focus();
+          if (holding === null || holding === document.body || (holding instanceof HTMLButtonElement && holding.closest('.sender')?.closest('form') === box.form)) box.focus();
         }, 0);
       });
     };
@@ -2337,6 +2460,7 @@
     wireTiers();
     wireCache();
     wireDue();
+    wireImages();
     wireSend();
     wireCopy();
     wireDraw();

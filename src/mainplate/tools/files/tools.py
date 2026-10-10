@@ -53,6 +53,7 @@ from pydantic_ai.messages import BinaryImage
 from pydantic_ai.messages import ToolReturn
 from pydantic_ai.toolsets import FunctionToolset
 
+from mainplate.pictures import pictured
 from mainplate.roots import RootName
 from mainplate.snapshots import POINTER
 from mainplate.snapshots import Checkout
@@ -83,33 +84,6 @@ MAX_ROWS: Final = 400
 # Under what name an edit's diff rides beside its reply, in the metadata the loop records and the
 # page reads. Named here because the page reads it by this name and nothing else does.
 DIFF: Final = "diff"
-
-
-@dataclass(frozen=True, slots=True)
-class Format:
-    """One kind of image `read` will show a model: the bytes it opens with, and what it is called."""
-
-    signature: bytes
-    media_type: str
-    name: str
-
-
-# The images `read` hands a model, recognised by the bytes each one opens with rather than by a
-# file's name, which is whatever somebody typed. These four because they are the formats every wire
-# this console speaks accepts inside a tool's result, and the four every browser draws in an `<img>`,
-# so what the model was shown is what the page shows. WebP is the one whose signature is not a
-# prefix, since a RIFF container names its kind after its length; `pictured` reads it apart.
-#
-# SVG is deliberately absent: it is text, `read` already anchors it, and no provider takes it as a
-# picture. A format outside these is refused as neither text nor an image this can show, which is
-# the sentence a model needs to go and convert it.
-FORMATS: Final = (
-    Format(signature=b"\x89PNG\r\n\x1a\n", media_type="image/png", name="PNG"),
-    Format(signature=b"\xff\xd8\xff", media_type="image/jpeg", name="JPEG"),
-    Format(signature=b"GIF87a", media_type="image/gif", name="GIF"),
-    Format(signature=b"GIF89a", media_type="image/gif", name="GIF"),
-)
-WEBP: Final = Format(signature=b"WEBP", media_type="image/webp", name="WebP")
 
 
 class ListingFailed(RuntimeError):
@@ -639,13 +613,6 @@ def counted(many: int, noun: str) -> str:
 def sized(many: int) -> str:
     """How large a file is, in the unit a person reads it in, which below a kibibyte is bytes."""
     return counted(many, "byte") if many < 1024 else f"{many / 1024:.0f} KiB"
-
-
-def pictured(content: bytes) -> Format | None:
-    """Which of `FORMATS` a file is, by the bytes it opens with, or nothing where it is none of them."""
-    if content[:4] == b"RIFF" and content[8:12] == WEBP.signature:
-        return WEBP
-    return next((kind for kind in FORMATS if content.startswith(kind.signature)), None)
 
 
 def decoded(content: bytes) -> Text | None:
